@@ -61,14 +61,14 @@ class WorkflowTest < Minitest::Test
     refute wf.perform_was_called, "Expected #perform NOT to be called when internal_state[:persisted] is true"
   end
 
-   def test_initialization_skips_perform_when_skip_setup
+  def test_initialization_skips_perform_when_skip_setup
     wf = PerformCheckWorkflow.new(internal_state: { skip_setup: true })
     refute wf.perform_was_called, "Expected #perform NOT to be called when internal_state[:skip_setup] is true"
   end
 
   def test_initialization_with_internal_state_id
-     wf = MyTestWorkflow.new(internal_state: { id: "wf-test-id-123", skip_setup: true })
-     assert_equal "wf-test-id-123", wf.id
+    wf = MyTestWorkflow.new(internal_state: { id: "wf-test-id-123", skip_setup: true })
+    assert_equal "wf-test-id-123", wf.id
   end
 
   def test_base_perform_raises_not_implemented_error
@@ -163,20 +163,20 @@ class WorkflowTest < Minitest::Test
     assert_nil wf.find_job_by_ref("this_does_not_exist")
   end
 
-   def test_to_hash
-     args = ["arg1"]
-     kwargs = { k: "v" }
-     globals = { g: true }
-     wf = MyTestWorkflow.new(*args, **kwargs, globals: globals, internal_state: { id: "wf-hash-test", skip_setup: true })
+  def test_to_hash
+    args = ["arg1"]
+    kwargs = { k: "v" }
+    globals = { g: true }
+    wf = MyTestWorkflow.new(*args, **kwargs, globals: globals, internal_state: { id: "wf-hash-test", skip_setup: true })
 
-     hash = wf.to_hash
+    hash = wf.to_hash
 
-     assert_equal "wf-hash-test", hash[:id]
-     assert_equal "MyTestWorkflow", hash[:klass]
-     assert_equal args, hash[:arguments]
-     assert_equal kwargs, hash[:kwargs]
-     assert_equal globals, hash[:globals]
-     assert_equal :pending, hash[:state] # Assumes current_state returns :pending
-   end
+    assert_equal "wf-hash-test", hash[:id]
+    assert_equal "MyTestWorkflow", hash[:klass]
+    assert_equal args, hash[:arguments]
+    assert_equal kwargs, hash[:kwargs]
+    assert_equal globals, hash[:globals]
+    assert_equal :pending, hash[:state] # Assumes current_state returns :pending
+  end
 end
 
