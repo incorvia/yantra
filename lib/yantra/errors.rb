@@ -23,6 +23,9 @@ module Yantra
     # (though the StateMachine might handle transitions more specifically).
     class InvalidState < Yantra::Error; end
 
+    # Raised when attempting an invalid state transition
+    class InvalidStateTransition < Error; end # <<< ADD THIS CLASS
+
     # Optional: A generic error for persistence layer issues, potentially wrapping adapter-specific errors.
     # Alternatively, adapters could raise their own specific errors inheriting from Yantra::Error.
     # class PersistenceError < Yantra::Error; end
