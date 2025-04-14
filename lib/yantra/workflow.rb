@@ -46,7 +46,9 @@ module Yantra
       end
 
       # Run the user-defined DAG definition unless skipped (e.g., during reconstruction)
-      perform unless internal_state[:skip_setup] || internal_state[:persisted]
+      # perform unless internal_state[:skip_setup] || internal_state[:persisted]
+      perform(*@arguments, **@kwargs) unless internal_state[:skip_setup] || internal_state[:persisted]
+
     end
 
     # Entry point for defining the workflow DAG.

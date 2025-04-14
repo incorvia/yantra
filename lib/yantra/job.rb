@@ -1,6 +1,7 @@
 # lib/yantra/job.rb
 
 require 'securerandom'
+require 'time' # Ensure Time is available
 
 module Yantra
   # Base class for defining Yantra jobs (units of work).
@@ -10,6 +11,8 @@ module Yantra
     attr_reader :id, :workflow_id, :klass, :arguments, :state, :dsl_name
     attr_reader :created_at, :enqueued_at, :started_at, :finished_at
     attr_reader :output, :error, :retries
+    # Make is_terminal readable if needed externally
+    # attr_reader :is_terminal
 
     # Initializes a new job instance. Typically called internally by Workflow DSL.
     #
@@ -19,16 +22,20 @@ module Yantra
     # @param arguments [Hash] Parameters passed to the #perform method.
     # @param state [Symbol] Initial state (defaults to :pending).
     # @param dsl_name [String] The reference name used in the workflow DSL.
+    # @param is_terminal [Boolean] Flag indicating if this job is a terminal node in the graph.
     # @param internal_state [Hash] Used internally for reconstruction from persistence.
-    def initialize(id: SecureRandom.uuid, workflow_id:, klass:, arguments: {}, state: :pending, dsl_name: nil, internal_state: {})
+    def initialize(id: SecureRandom.uuid, workflow_id:, klass:, arguments: {}, state: :pending, dsl_name: nil, is_terminal: false, internal_state: {})
+      # Prioritize internal_state for rehydration if loading from persistence
       @id = internal_state.fetch(:id, id)
       @workflow_id = internal_state.fetch(:workflow_id, workflow_id)
       @klass = internal_state.fetch(:klass, klass)
       @arguments = internal_state.fetch(:arguments, arguments)
       @state = internal_state.fetch(:state, state).to_sym
       @dsl_name = internal_state.fetch(:dsl_name, dsl_name) # Store reference name
+      # Store terminal status, defaulting to false if not provided
+      @is_terminal = internal_state.fetch(:is_terminal, is_terminal)
 
-      # Timestamps and execution details usually populated by the system/repository
+      # Timestamps and execution details usually populated/updated by the system/repository
       @created_at = internal_state.fetch(:created_at, Time.now.utc)
       @enqueued_at = internal_state[:enqueued_at]
       @started_at = internal_state[:started_at]
@@ -41,17 +48,37 @@ module Yantra
     # The main execution method for the job.
     # Subclasses MUST implement this method.
     # Arguments passed via `params:` in the DSL's `run` method
-    # are available within this method.
-    def perform(*args, **kwargs)
-      # Note: How arguments from @arguments hash get passed here
-      # might need refinement (e.g., pass @arguments hash directly,
-      # or expect perform to access `arguments` reader).
-      # Let's assume for now subclasses access `arguments` reader.
+    # are available via the `arguments` reader hash.
+    def perform
+      # Example access: task_id = arguments[:task_id]
       raise NotImplementedError, "#{self.class.name} must implement the `perform` method."
     end
 
+    # --- Methods expected by Persistence Adapters & Core Logic ---
+
+    # Specifies the target queue for background workers.
+    # Subclasses can override this method to specify a different queue.
+    # @return [String] The name of the queue.
+    def queue_name
+      'default'
+    end
+
+    # Indicates if this job is a terminal node in the workflow graph
+    # (i.e., no other jobs depend on it). This status is typically determined
+    # during graph construction (by the Workflow DSL/builder) and passed
+    # to this job's initializer.
+    # @return [Boolean] True if terminal, false otherwise.
+    def terminal?
+      # Read from the instance variable set during initialization.
+      # Defaults to false if not explicitly set.
+      @is_terminal || false
+    end
+
+    # --- Helper Methods ---
+
     # Placeholder: Method to convert job instance to persistable hash.
-    # Used by the Repository.
+    # May be used by Repository adapters if they work with hashes,
+    # though often they access attributes directly.
     def to_hash
       {
         id: @id,
@@ -60,6 +87,8 @@ module Yantra
         arguments: @arguments,
         state: @state,
         dsl_name: @dsl_name,
+        queue: queue_name,        # Include queue from method
+        is_terminal: terminal?,   # Include terminal status from method
         created_at: @created_at,
         enqueued_at: @enqueued_at,
         started_at: @started_at,
@@ -67,11 +96,11 @@ module Yantra
         output: @output,
         error: @error,
         retries: @retries
-        # Add queue, etc. if needed
       }
     end
 
-    # Helper for logging/debugging
+    # Helper for logging/debugging, uses DSL name if available.
+    # @return [String] A representative name for the job.
     def name
       @dsl_name || @klass.to_s
     end

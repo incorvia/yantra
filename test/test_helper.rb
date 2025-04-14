@@ -80,16 +80,18 @@ if AR_LOADED
     # Automatically skip tests in this class if AR wasn't loaded
     # Run DatabaseCleaner before each test
     def setup
-      super # Ensure any parent setup runs
+      super
       skip "ActiveRecord/SQLite3/DatabaseCleaner not available" unless AR_LOADED
+      # puts "--- DB CLEANER START ---" # Add this
       DatabaseCleaner.start
     end
 
-    # Run DatabaseCleaner after each test
     def teardown
+      # puts "--- DB CLEANER END ---" # Add this
       DatabaseCleaner.clean
-      super # Ensure any parent teardown runs
+      super
     end
+
 
     # --- Optional: Transaction wrapping via around ---
     # If using DatabaseCleaner with :transaction, you generally don't need

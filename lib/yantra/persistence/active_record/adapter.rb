@@ -40,15 +40,21 @@ module Yantra
         # @return [Boolean] true if successful.
         # @raise [Yantra::Errors::PersistenceError] if persistence fails.
         def persist_workflow(workflow_instance)
+          # Extract attributes from the workflow instance and set initial state
+          # Note: kwargs are available on the instance but not persisted separately here.
           WorkflowRecord.create!(
             id: workflow_instance.id,
-            klass: workflow_instance.class.name,
+            klass: workflow_instance.klass.to_s, # Use the stored @klass attribute
             arguments: workflow_instance.arguments,
-            state: workflow_instance.state.to_s,
+            # kwargs: workflow_instance.kwargs, # Removed: No kwargs column in schema
+            state: 'pending', # Set initial state explicitly
             globals: workflow_instance.globals,
+            has_failures: false # Ensure default is set
+            # Timestamps (created_at, updated_at) handled by ActiveRecord
           )
-          true
+          true # Indicate success
         rescue ::ActiveRecord::RecordInvalid => e
+          # Wrap AR validation errors in a Yantra-specific error.
           raise Yantra::Errors::PersistenceError, "Failed to persist workflow: #{e.message}"
         end
 
@@ -64,6 +70,7 @@ module Yantra
           if expected_old_state && workflow.state != expected_old_state.to_s
             return false # State mismatch
           end
+          # Perform the update with the provided attributes.
           workflow.update(attributes_hash)
         end
 
@@ -96,14 +103,17 @@ module Yantra
         # @return [Boolean] true if successful.
         # @raise [Yantra::Errors::PersistenceError] if persistence fails.
         def persist_job(job_instance)
+          # Extract attributes from the job instance and set initial state
           JobRecord.create!(
             id: job_instance.id,
             workflow_id: job_instance.workflow_id,
-            klass: job_instance.class.name,
+            klass: job_instance.klass.to_s, # Use stored @klass
             arguments: job_instance.arguments,
-            state: job_instance.state.to_s,
-            queue: job_instance.queue_name,
-            is_terminal: job_instance.terminal? || false
+            state: 'pending', # Set initial state explicitly
+            queue: job_instance.queue_name, # Assumes method exists
+            is_terminal: job_instance.terminal? || false, # Assumes method exists
+            retries: 0 # Ensure default
+            # Timestamps handled by ActiveRecord.
           )
           true
         rescue ::ActiveRecord::RecordInvalid => e
@@ -122,6 +132,7 @@ module Yantra
           if expected_old_state && job.state != expected_old_state.to_s
             return false # State mismatch
           end
+          # Perform the update with the provided attributes.
           job.update(attributes_hash)
         end
 
@@ -193,12 +204,7 @@ module Yantra
         # @return [Boolean] true if successful (or if array was empty).
         # @raise [Yantra::Errors::PersistenceError] if bulk persistence fails (e.g., DB constraints).
         def add_job_dependencies_bulk(dependency_links_array)
-          # Return early if there's nothing to insert.
           return true if dependency_links_array.nil? || dependency_links_array.empty?
-
-          # Use insert_all for efficient bulk insertion.
-          # Note: insert_all typically bypasses ActiveRecord validations and callbacks.
-          # Relies on database constraints (like unique index) for integrity.
           begin
             # Assuming job_id and depends_on_job_id are the only columns needed
             # and timestamps are handled by DB defaults or aren't present.
@@ -236,7 +242,6 @@ module Yantra
         # @param workflow_id [String] The UUID of the workflow.
         # @return [Array<String>] An array of job UUIDs ready to be enqueued.
         def find_ready_jobs(workflow_id)
-          # Logic remains complex, potentially better suited for optimized SQL or Orchestrator coordination.
           ready_job_ids = []
           JobRecord.includes(:dependencies).where(workflow_id: workflow_id, state: 'pending').find_each do |job|
              next if job.dependencies.empty?
