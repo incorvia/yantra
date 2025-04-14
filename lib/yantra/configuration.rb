@@ -74,17 +74,19 @@ module Yantra
     end
 
     # --- Initialization ---
-
     def initialize
       # Set default values for all configuration options
-      @persistence_adapter = :redis
+      @persistence_adapter = :redis # Default adapter
       @redis_url = ENV['YANTRA_REDIS_URL'] || ENV['REDIS_URL'] || 'redis://localhost:6379'
-      @redis_options = {}
-      @sql_connection_details = ENV['YANTRA_DATABASE_URL'] || ENV['DATABASE_URL']
+      @redis_options = {} # Options passed to Redis.new
+      @redis_namespace = 'yantra' # Namespace for Redis keys
+
+      # ActiveRecord adapter uses Rails' connection by default, no separate config needed here.
+
       @logger = Logger.new(STDOUT)
       @logger.level = Logger::INFO # Default log level
-      @redis_namespace = 'yantra'
-      @notification_backend = default_notification_backend
+
+      @notification_backend = default_notification_backend # For Yantra events
     end
 
     private
