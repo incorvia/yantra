@@ -63,8 +63,8 @@ module Yantra
           job3_dependent = JobRecord.create!(id: SecureRandom.uuid, workflow_record: @workflow, klass: "Job3", state: "pending")
 
           # Setup dependencies: job2 -> job1, job3 -> job2
-          dep1 = JobDependencyRecord.create!(job: job2_main, dependency: job1_prereq)
-          dep2 = JobDependencyRecord.create!(job: job3_dependent, dependency: job2_main)
+          JobDependencyRecord.create!(job: job2_main, dependency: job1_prereq)
+          JobDependencyRecord.create!(job: job3_dependent, dependency: job2_main)
 
           # Assert: belongs_to :workflow_record
           assert_equal @workflow, job2_main.workflow_record

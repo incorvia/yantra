@@ -30,7 +30,7 @@ module Yantra
       def test_terminal_states_set_is_correct
         # Update expected set: :failed is no longer strictly terminal
         # to allow for retries (failed -> enqueued).
-        expected_terminal = Set[SUCCEEDED, CANCELLED] # <-- UPDATED HERE
+        expected_terminal = Set[SUCCEEDED, CANCELLED]
         assert_equal expected_terminal, StateMachine.terminal_states
       end
 
@@ -44,7 +44,7 @@ module Yantra
         refute StateMachine.terminal?(:running), ":running should not be terminal"
         refute StateMachine.terminal?("running"), "String 'running' should not be terminal"
         # Update assertion: :failed is not strictly terminal because it can be retried
-        refute StateMachine.terminal?(:failed), ":failed should NOT be strictly terminal (can be retried)" # <-- UPDATED HERE
+        refute StateMachine.terminal?(:failed), ":failed should NOT be strictly terminal (can be retried)"
         refute StateMachine.terminal?(:unknown_state), "Unknown state should not be terminal"
         refute StateMachine.terminal?(nil), "Nil should not be terminal"
       end
@@ -72,7 +72,6 @@ module Yantra
       def test_invalid_transitions_disallowed
         # From terminal states
         refute StateMachine.valid_transition?(:succeeded, :running), "succeeded -> running should be invalid"
-        # refute StateMachine.valid_transition?(:failed, :running), "failed -> running should be invalid" # This transition is now allowed (retry) - REMOVE? No, failed->running is invalid, failed->enqueued is valid. Keep.
         refute StateMachine.valid_transition?(:failed, :running), "failed -> running should be invalid"
         refute StateMachine.valid_transition?(:cancelled, :pending), "cancelled -> pending should be invalid"
 
@@ -105,25 +104,29 @@ module Yantra
         error = assert_raises(Yantra::Errors::InvalidStateTransition) do
           StateMachine.validate_transition!(:succeeded, :running)
         end
-        assert_match /Cannot transition from state :succeeded to :running/, error.message
+        # Wrap regex in parentheses to resolve parser ambiguity warning
+        assert_match(/Cannot transition from state :succeeded to :running/, error.message) # <-- UPDATED
 
         error = assert_raises(Yantra::Errors::InvalidStateTransition) do
           StateMachine.validate_transition!(:pending, :failed)
         end
-        assert_match /Cannot transition from state :pending to :failed/, error.message
+        assert_match(/Cannot transition from state :pending to :failed/, error.message) # <-- UPDATED
 
         # Check invalid state symbol
          error = assert_raises(Yantra::Errors::InvalidStateTransition) do
            StateMachine.validate_transition!(:pending, :invalid_state_symbol)
          end
-         assert_match /Cannot transition from state :pending to :invalid_state_symbol/, error.message
+         assert_match(/Cannot transition from state :pending to :invalid_state_symbol/, error.message) # <-- UPDATED
 
          # Check transition from terminal
          error = assert_raises(Yantra::Errors::InvalidStateTransition) do
            StateMachine.validate_transition!(:cancelled, :pending)
          end
-         assert_match /Cannot transition from state :cancelled to :pending/, error.message
+         assert_match(/Cannot transition from state :cancelled to :pending/, error.message) # <-- UPDATED
       end
+
+      # Need to also update the assert_match in JobDependencyRecordTest if that file exists
+      # (Assuming the user has applied the previous fix there manually)
 
     end
   end

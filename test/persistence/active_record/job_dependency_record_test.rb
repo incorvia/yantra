@@ -71,7 +71,7 @@ module Yantra
           # Assert
           refute record.valid?, "Self-dependency should be invalid"
           # Use assert_match for regex comparison against the error message string
-          assert_match /cannot be the same as job_id/, record.errors[:depends_on_job_id].join
+          assert_match(/cannot be the same as job_id/, record.errors[:depends_on_job_id].join)
         end
 
         # Test direct associations
