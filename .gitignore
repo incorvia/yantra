@@ -6,3 +6,28 @@
 /pkg/
 /spec/reports/
 /tmp/
+
+# Ignore Bundler config specific to the dummy app
+test/dummy/.bundle/
+
+# Ignore the dummy app's lock file (contributors should generate their own)
+test/dummy/Gemfile.lock
+
+# Ignore generated binstubs in the dummy app
+test/dummy/bin/
+
+# Ignore migrations copied into the dummy app (they come from the generator)
+test/dummy/db/migrate/
+
+# Ignore the generated schema file *within* the dummy app
+# The schema file copied to test/support/db/ should be committed.
+test/dummy/db/schema.rb
+
+# Ignore SQLite database files generated in the dummy app
+test/dummy/db/*.sqlite3
+
+# Ignore log files from the dummy app
+test/dummy/log/
+
+# Ignore temporary files from the dummy app
+test/dummy/tmp/

@@ -1,0 +1,10 @@
+# test/dummy/Gemfile
+source "https://rubygems.org"
+
+# Use the parent gem's definition
+# Assumes Gemfile is in test/dummy/ relative to yantra.gemspec
+gemspec path: '../../'
+
+# Ensure sqlite3 is explicitly mentioned if needed by database.yml,
+# though it should be brought in by the parent gemspec's dev dependencies.
+# gem "sqlite3", require: false
