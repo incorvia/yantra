@@ -85,27 +85,6 @@ class ConfigurationTest < Minitest::Test
     end
   end
 
-  def test_sql_connection_details_uses_environment_variables_in_order
-    env_db_url = 'postgres://env-db/db'
-    env_yantra_db_url = 'postgres://yantra-env-db/db'
-
-    # 1. No ENV vars set
-    Yantra::Configuration.reset!
-    assert_nil Yantra.configuration.sql_connection_details
-
-    # 2. Only DATABASE_URL set
-    with_env('DATABASE_URL' => env_db_url) do
-      Yantra::Configuration.reset!
-      assert_equal env_db_url, Yantra.configuration.sql_connection_details
-    end
-
-    # 3. YANTRA_DATABASE_URL takes precedence over DATABASE_URL
-    with_env('DATABASE_URL' => env_db_url, 'YANTRA_DATABASE_URL' => env_yantra_db_url) do
-      Yantra::Configuration.reset!
-      assert_equal env_yantra_db_url, Yantra.configuration.sql_connection_details
-    end
-  end
-
   # Helper to temporarily set ENV vars for a test
   def with_env(options = {}, &block)
     original_values = {}

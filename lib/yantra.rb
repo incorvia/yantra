@@ -9,13 +9,13 @@ require_relative "yantra/errors"
 require_relative "yantra/configuration" # Needed early for configuration access
 require_relative "yantra/job"           # Base class for user jobs
 require_relative "yantra/workflow"       # Base class for user workflows
-require_relative "yantra/client"         # Public API class
+# require_relative "yantra/client"         # Public API class
 
 # --- Require Core Interfaces and Logic ---
 # These are essential parts of the Yantra framework itself.
 require_relative "yantra/persistence/repository_interface" # Persistence contract
-require_relative "yantra/worker/adapter_interface"       # Worker contract
-require_relative "yantra/core/orchestrator"            # Core workflow logic
+# require_relative "yantra/worker/enqueuing_interface"       # Worker contract
+# require_relative "yantra/core/orchestrator"            # Core workflow logic
 # require_relative "yantra/core/state_machine"         # If defined separately
 # ... require other core components ...
 
