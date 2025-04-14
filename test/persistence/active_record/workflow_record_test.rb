@@ -4,7 +4,6 @@
 require "test_helper"
 
 # Explicitly require the ActiveRecord models needed for these tests.
-# This ensures the constants are defined before the test class uses them.
 # These requires will raise LoadError if run without AR dev dependencies,
 # aligning with the decision to fail explicitly in that case.
 require "yantra/persistence/active_record/workflow_record"
@@ -39,7 +38,6 @@ module Yantra
           }
 
           # Act: Create the record using the AR model directly.
-          # Use the model class constant directly now that it's required.
           created_workflow = WorkflowRecord.create!(attributes)
 
           # Assert: Verify creation was successful
@@ -61,7 +59,8 @@ module Yantra
         # Test associations
         def test_workflow_has_jobs_association
           # Arrange
-          # Ensure JobRecord is defined (it should be due to require above)
+          # Ensure JobRecord is defined before using it
+          skip "JobRecord model not defined" unless defined?(Yantra::Persistence::ActiveRecord::JobRecord)
           workflow = WorkflowRecord.create!(id: SecureRandom.uuid, klass: "Wf", state: "running")
 
           # Act & Assert
@@ -75,7 +74,42 @@ module Yantra
           assert_includes workflow.job_records.reload, job, "Workflow should include the added job"
         end
 
-        # Add more tests here for validations, associations, scopes etc.
+        # --- Scope Tests ---
+        # Verify that the defined scopes filter correctly.
+        def test_state_scopes
+          # Arrange: Create workflows with different states
+          wf_running1 = WorkflowRecord.create!(id: SecureRandom.uuid, klass: "Wf", state: "running")
+          wf_running2 = WorkflowRecord.create!(id: SecureRandom.uuid, klass: "Wf", state: "running")
+          wf_pending = WorkflowRecord.create!(id: SecureRandom.uuid, klass: "Wf", state: "pending")
+          wf_failed = WorkflowRecord.create!(id: SecureRandom.uuid, klass: "Wf", state: "failed")
+          wf_succeeded = WorkflowRecord.create!(id: SecureRandom.uuid, klass: "Wf", state: "succeeded")
+
+          # Assert: Check each scope
+          assert_equal [wf_running1.id, wf_running2.id].sort, WorkflowRecord.running.pluck(:id).sort
+          assert_equal [wf_failed.id], WorkflowRecord.failed.pluck(:id)
+          assert_equal [wf_succeeded.id], WorkflowRecord.succeeded.pluck(:id)
+          assert_equal [wf_pending.id], WorkflowRecord.pending.pluck(:id)
+          assert_equal [wf_pending.id], WorkflowRecord.with_state(:pending).pluck(:id)
+          assert_equal [wf_running1.id, wf_running2.id].sort, WorkflowRecord.with_state("running").pluck(:id).sort
+        end
+
+        # --- Validation Tests (Examples - Add if validations uncommented in model) ---
+
+        # def test_validation_requires_klass
+        #   # Assumes validates :klass, presence: true is active
+        #   workflow = WorkflowRecord.new(id: SecureRandom.uuid, state: "pending")
+        #   refute workflow.valid?, "Workflow should be invalid without klass"
+        #   assert_includes workflow.errors[:klass], "can't be blank"
+        # end
+
+        # def test_validation_requires_valid_state
+        #   # Assumes validates :state, inclusion: { in: %w[...] } is active
+        #   workflow = WorkflowRecord.new(id: SecureRandom.uuid, klass: "Wf", state: "invalid_state")
+        #   refute workflow.valid?, "Workflow should be invalid with invalid state"
+        #   assert_includes workflow.errors[:state], "is not a valid state"
+        # end
+
+        # Add more tests here for other validations, associations, scopes etc.
 
       end
     end

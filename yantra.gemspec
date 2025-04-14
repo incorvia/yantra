@@ -51,5 +51,7 @@ Yantra aims to be a robust, developer-friendly solution for managing background 
   spec.add_development_dependency "rails", ">= 6.0"
   spec.add_development_dependency "sqlite3", ">= 2.1"     # Or compatible version
   spec.add_development_dependency "minitest", "~> 5.0" 
+  spec.add_development_dependency "database_cleaner-active_record"
+
   # spec.add_development_dependency "database_cleaner-active_record" # If using DatabaseCleaner
 end

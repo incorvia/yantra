@@ -14,10 +14,11 @@ puts "INFO: Loading test helper..."
 AR_LOADED = begin
   require 'active_record'
   require 'sqlite3'
+  require 'database_cleaner/active_record' # Require DatabaseCleaner here too
   true # Indicates successful loading
 rescue LoadError => e
   # Output a warning if gems are missing (useful for contributors)
-  puts "\nWARN: ActiveRecord or sqlite3 gem not found. Skipping ActiveRecord adapter tests."
+  puts "\nWARN: ActiveRecord, sqlite3, or database_cleaner-active_record gem not found. Skipping ActiveRecord adapter tests."
   puts "      Install development dependencies (bundle install) to run them."
   # puts "      Error: #{e.message}" # Uncomment for more debug info
   false # Indicates gems are not available
@@ -35,7 +36,6 @@ if AR_LOADED
   ActiveRecord::Base.establish_connection(adapter: 'sqlite3', database: ':memory:')
 
   # Helper method to load the database schema from a schema.rb file.
-  # This is generally more reliable for test setups than running migrations programmatically.
   def load_yantra_schema
     # Define the path to your schema.rb file within the gem's test support.
     # *** IMPORTANT: You need to generate this file (e.g., via rake db:schema:dump in dummy app) ***
@@ -50,11 +50,8 @@ if AR_LOADED
 
     puts "INFO: Loading Yantra schema from #{schema_path}..."
     begin
-      # Capture stdout to suppress schema loading messages if desired
       original_stdout = $stdout.dup
       $stdout.reopen(IO::NULL)
-      # Load the schema file. This executes the Ruby code within schema.rb,
-      # creating tables using ActiveRecord::Schema.define
       load(schema_path)
     rescue => e
       $stdout.reopen(original_stdout) # Restore stdout on error
@@ -72,18 +69,33 @@ if AR_LOADED
   load_yantra_schema
   puts "INFO: Database schema setup complete."
 
+  # --- Configure Database Cleaner ---
+  # Configure the strategy ONCE
+  DatabaseCleaner.strategy = :transaction
+  puts "INFO: DatabaseCleaner strategy set to :transaction"
+
   # --- Base Test Class for ActiveRecord Tests ---
   # Inherit from this class for tests that require the AR setup and schema.
   class YantraActiveRecordTestCase < Minitest::Test
     # Automatically skip tests in this class if AR wasn't loaded
+    # Run DatabaseCleaner before each test
     def setup
       super # Ensure any parent setup runs
-      skip "ActiveRecord/SQLite3 not available" unless AR_LOADED
+      skip "ActiveRecord/SQLite3/DatabaseCleaner not available" unless AR_LOADED
+      DatabaseCleaner.start
     end
 
-    # Optional: Add DatabaseCleaner or transaction wrapping here if needed
-    # Example using transactions:
+    # Run DatabaseCleaner after each test
+    def teardown
+      DatabaseCleaner.clean
+      super # Ensure any parent teardown runs
+    end
+
+    # --- Optional: Transaction wrapping via around ---
+    # If using DatabaseCleaner with :transaction, you generally don't need
+    # this manual around hook as well. Use EITHER DC hooks OR the around hook.
     # def around(&block)
+    #   skip "ActiveRecord/SQLite3 not available" unless AR_LOADED
     #   ActiveRecord::Base.transaction do
     #     super(&block) # Runs the actual test method
     #     raise ActiveRecord::Rollback # Rollback transaction after each test
@@ -96,7 +108,7 @@ else
   class YantraActiveRecordTestCase < Minitest::Test
      def setup
        super
-       skip "ActiveRecord/SQLite3 not available"
+       skip "ActiveRecord/SQLite3/DatabaseCleaner not available"
      end
   end
 end

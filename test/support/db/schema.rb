@@ -51,4 +51,3 @@ ActiveRecord::Schema[7.2].define(version: 2025_04_14_181256) do
     t.index ["state"], name: "index_yantra_workflows_on_state"
   end
 end
-
