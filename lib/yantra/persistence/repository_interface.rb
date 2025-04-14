@@ -61,6 +61,14 @@ module Yantra
         raise NotImplementedError, "#{self.class.name}#persist_job is not implemented"
       end
 
+      # Persists multiple new job instances in bulk for efficiency.
+      # @param job_instances_array [Array<Yantra::Job>] An array of Yantra::Job subclass instances.
+      # @return [Boolean] true if successful.
+      # @raise [Yantra::Errors::PersistenceError] if bulk persistence fails.
+      def persist_jobs_bulk(job_instances_array)
+        raise NotImplementedError, "#{self.class.name}#persist_jobs_bulk is not implemented"
+      end
+
       # Finds a job by its ID.
       # @param job_id [String] The UUID of the job.
       # @return [Object, nil] A representation of the job (e.g., AR record, Struct, Hash) or nil if not found.

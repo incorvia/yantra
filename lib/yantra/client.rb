@@ -28,70 +28,51 @@ module Yantra
         raise ArgumentError, "#{workflow_klass} must be a Class inheriting from Yantra::Workflow"
       end
 
-      # 2. Instantiate Workflow & Build Graph
-      # This runs the user's `perform` method via `initialize`, populating
-      # the instance's @jobs and @dependencies attributes in memory.
+      # 2. Instantiate Workflow & Build Graph & Calculate Terminal Status
+      # The Workflow#initialize method now calls #perform and #calculate_terminal_status! internally
       puts "INFO: Instantiating workflow #{workflow_klass}..."
       wf_instance = workflow_klass.new(*args, **kwargs)
-      puts "INFO: Workflow instance created with #{wf_instance.jobs.count} jobs and #{wf_instance.dependencies.count} dependency links defined."
+      puts "INFO: Workflow instance created and processed with #{wf_instance.jobs.count} jobs and #{wf_instance.dependencies.keys.count} jobs having dependencies."
 
-      # Get the configured repository adapter instance
+      # 3. Get the configured repository adapter instance
       repo = Yantra.repository
 
       # --- Persistence ---
       # TODO: Consider wrapping these steps in a transaction for adapters that support it (like SQL).
-      # This would require adding a `transaction` method to the RepositoryInterface.
-      # repo.transaction do
-      #   ... persistence steps ...
-      # end
+      # repo.transaction do ... end
 
-      # 3. Persist the Workflow record itself
-      # Pass the workflow instance directly to the adapter's persist_workflow method.
-      # The adapter implementation knows how to extract the necessary attributes.
-      # It should also set the initial state to :pending internally or expect it.
+      # 4. Persist the Workflow record itself
       puts "INFO: Persisting workflow record (ID: #{wf_instance.id})..."
-      unless repo.persist_workflow(wf_instance) # Pass the instance, not an attributes hash
-         # persist_workflow should ideally raise on failure, but double-check interface contract
+      unless repo.persist_workflow(wf_instance) # Pass instance directly
          raise Yantra::Errors::PersistenceError, "Failed to persist workflow record for ID: #{wf_instance.id}"
       end
       puts "INFO: Workflow record persisted."
 
-      # 4. Persist the Jobs
+      # 5. Persist the Jobs (using bulk method)
       jobs_to_persist = wf_instance.jobs
       if jobs_to_persist.any?
-        puts "INFO: Persisting #{jobs_to_persist.count} job records..."
-        # --- Ideal: Bulk Persist Jobs ---
-        # TODO: Define `persist_jobs_bulk` in RepositoryInterface and implement in adapters using insert_all.
-        # if repo.respond_to?(:persist_jobs_bulk)
-        #   # Assuming persist_jobs_bulk takes an array of job instances
-        #   repo.persist_jobs_bulk(jobs_to_persist)
-        # else
-        # Fallback: Persist jobs individually (less efficient)
-        jobs_to_persist.each do |job|
-          # Assuming persist_job takes the job instance
-          unless repo.persist_job(job)
-             raise Yantra::Errors::PersistenceError, "Failed to persist job record for ID: #{job.id}"
-          end
+        puts "INFO: Persisting #{jobs_to_persist.count} job records via bulk..."
+        # Use the bulk persistence method defined in the interface/adapter
+        unless repo.persist_jobs_bulk(jobs_to_persist)
+          raise Yantra::Errors::PersistenceError, "Failed to bulk persist job records for workflow ID: #{wf_instance.id}"
         end
-        # end
         puts "INFO: Job records persisted."
       end
 
-      # 5. Persist the Dependencies
+      # 6. Persist the Dependencies (using bulk method)
       dependencies_hash = wf_instance.dependencies
       if dependencies_hash.any?
-        # Transform the { job_id => [dep_id1, ...] } hash into the array format needed by bulk insert.
         links_array = dependencies_hash.flat_map do |job_id, dep_ids|
           dep_ids.map { |dep_id| { job_id: job_id, depends_on_job_id: dep_id } }
         end
-        puts "INFO: Persisting #{links_array.count} dependency links..."
+        puts "INFO: Persisting #{links_array.count} dependency links via bulk..."
         unless repo.add_job_dependencies_bulk(links_array)
            raise Yantra::Errors::PersistenceError, "Failed to persist dependency links for workflow ID: #{wf_instance.id}"
         end
         puts "INFO: Dependency links persisted."
       end
 
-      # 6. Return the Workflow ID
+      # 7. Return the Workflow ID
       puts "INFO: Workflow #{wf_instance.id} created successfully."
       wf_instance.id
     end

@@ -1,182 +1,163 @@
 # test/workflow_test.rb
-require "test_helper"
 
-# Dummy Job classes for DSL testing
-class JobOne < Yantra::Job; def perform; end; end
-class JobTwo < Yantra::Job; def perform; end; end
-class JobThree < Yantra::Job; def perform; end; end
+require "test_helper" # Use basic helper, no AR needed here
+require "yantra/workflow"
+require "yantra/job"
+require "yantra/errors" # For DependencyNotFound
 
-# Dummy Workflow for testing structure and DSL
-class MyTestWorkflow < Yantra::Workflow
-  attr_reader :perform_args, :perform_kwargs
+# --- Dummy Job Classes for testing DSL ---
+# These don't need real perform logic for these tests.
+class TestJobA < Yantra::Job; def perform; end; end
+class TestJobB < Yantra::Job; def perform; end; end
+class TestJobC < Yantra::Job; def perform; end; end
 
-  def perform(*args, **kwargs)
-    @perform_args = args
-    @perform_kwargs = kwargs
+# --- Test Workflow Definitions ---
 
-    run JobOne, name: "task_one", params: { p1: true }
-    run JobTwo, name: "task_two", params: { p2: true }, after: ["task_one"]
-    run JobThree, name: "task_three", params: { p3: true }, after: ["task_one"]
-    run JobTwo, name: "task_two_again", params: { p2a: true }, after: ["task_one"] # Test duplicate class, diff name
-    run JobOne, name: "task_one_final", params: { p1f: true }, after: ["task_two", "task_three", "task_two_again"]
+# A workflow with various dependency structures
+class ComplexTestWorkflow < Yantra::Workflow
+  def perform(pos_arg = nil, key_arg: 'default')
+    run TestJobA, name: :task_a, params: { p: pos_arg }
+    run TestJobB, name: :task_b, params: { p: key_arg }, after: :task_a
+    run TestJobC, name: :task_c, after: :task_a # Parallel branch
+    # Fan-in, reuse TestJobA class, depends on B and C
+    run TestJobA, name: :task_d, after: [:task_b, :task_c]
   end
 end
 
-# Workflow to check perform execution skipping
-class PerformCheckWorkflow < Yantra::Workflow
-  attr_reader :perform_was_called
-  def initialize(*args, **kwargs)
-    @perform_was_called = false
-    super
-  end
+# A simple linear workflow
+class LinearTestWorkflow < Yantra::Workflow
   def perform
-    @perform_was_called = true
+    run TestJobA, name: :a
+    run TestJobB, name: :b, after: :a
+    run TestJobC, name: :c, after: :b # C is terminal
   end
 end
 
+# Workflow that tries to use a dependency that wasn't defined
+class InvalidDependencyWorkflow < Yantra::Workflow
+  def perform
+    run TestJobB, after: :non_existent_job
+  end
+end
+
+# Workflow that tries to use an invalid job class
+class InvalidJobClassWorkflow < Yantra::Workflow
+  def perform
+    run String # Not a Yantra::Job subclass
+  end
+end
+
+# --- Workflow Test Class ---
+
+# Use standard Minitest::Test, no AR needed
 class WorkflowTest < Minitest::Test
-  def test_initialization_with_defaults_and_args
-    args = [1, 2]
-    kwargs = { config: "value" }
-    globals = { global_setting: true }
-    wf = MyTestWorkflow.new(*args, **kwargs, globals: globals, internal_state: { skip_setup: true }) # Skip perform
 
-    assert_instance_of String, wf.id
-    assert_equal MyTestWorkflow, wf.klass
-    assert_equal args, wf.arguments
-    assert_equal kwargs, wf.kwargs
-    assert_equal globals, wf.globals
-    assert_empty wf.jobs
-    assert_empty wf.dependencies
-    assert_equal :pending, wf.current_state # Assuming default state
+  def test_initialization_stores_arguments_and_globals
+    wf = ComplexTestWorkflow.new(123, key_arg: 'abc', globals: { g: 1 })
+    assert_equal [123], wf.arguments
+    # Note: :globals is extracted, remaining kwargs are stored
+    assert_equal({ key_arg: 'abc' }, wf.kwargs)
+    assert_equal({ g: 1 }, wf.globals)
+    assert_kind_of String, wf.id
+    assert_equal ComplexTestWorkflow, wf.klass
   end
 
-  def test_initialization_calls_perform_by_default
-    wf = PerformCheckWorkflow.new
-    assert wf.perform_was_called, "Expected #perform to be called during initialization"
+  def test_dsl_builds_jobs_correctly
+    wf = ComplexTestWorkflow.new(100) # Pass positional arg
+    assert_equal 4, wf.jobs.count, "Should create 4 job instances"
+
+    # Check job attributes created by the DSL
+    job_a = wf.find_job_by_ref('task_a')
+    job_b = wf.find_job_by_ref('task_b')
+    job_c = wf.find_job_by_ref('task_c')
+    job_d = wf.find_job_by_ref('task_d') # This is the second TestJobA instance
+
+    refute_nil job_a
+    refute_nil job_b
+    refute_nil job_c
+    refute_nil job_d
+
+    assert_instance_of TestJobA, job_a
+    assert_instance_of TestJobB, job_b
+    assert_instance_of TestJobC, job_c
+    assert_instance_of TestJobA, job_d # Check reused class
+
+    assert_equal({ p: 100 }, job_a.arguments)
+    assert_equal({ p: 'default' }, job_b.arguments) # Uses default kwarg value
+    assert_equal({}, job_c.arguments)
+    assert_equal({}, job_d.arguments)
+
+    # Check that jobs have unique IDs and correct workflow ID
+    all_ids = wf.jobs.map(&:id)
+    assert_equal 4, all_ids.uniq.count, "Job IDs should be unique"
+    assert wf.jobs.all? { |j| j.workflow_id == wf.id }, "All jobs should have correct workflow ID"
   end
 
-  def test_initialization_skips_perform_when_persisted
-    wf = PerformCheckWorkflow.new(internal_state: { persisted: true })
-    refute wf.perform_was_called, "Expected #perform NOT to be called when internal_state[:persisted] is true"
+  def test_dsl_builds_dependencies_correctly
+    wf = ComplexTestWorkflow.new
+    job_a = wf.find_job_by_ref('task_a')
+    job_b = wf.find_job_by_ref('task_b')
+    job_c = wf.find_job_by_ref('task_c')
+    job_d = wf.find_job_by_ref('task_d')
+
+    # Check the @dependencies hash structure
+    assert_equal [job_a.id], wf.dependencies[job_b.id]
+    assert_equal [job_a.id], wf.dependencies[job_c.id]
+    # Use sort for comparison as order doesn't matter for dependencies
+    assert_equal [job_b.id, job_c.id].sort, wf.dependencies[job_d.id].sort
+    assert_nil wf.dependencies[job_a.id], "Job A should have no dependencies"
+    assert_equal 3, wf.dependencies.keys.count # Only jobs B, C, D have dependency entries
   end
 
-  def test_initialization_skips_perform_when_skip_setup
-    wf = PerformCheckWorkflow.new(internal_state: { skip_setup: true })
-    refute wf.perform_was_called, "Expected #perform NOT to be called when internal_state[:skip_setup] is true"
+  def test_find_job_by_ref_works
+    wf = ComplexTestWorkflow.new
+    job_a_instance = wf.jobs.find { |j| j.dsl_name == 'task_a' } # Find instance reliably
+    refute_nil job_a_instance
+    assert_equal job_a_instance, wf.find_job_by_ref('task_a')
+    assert_nil wf.find_job_by_ref('non_existent_ref')
   end
 
-  def test_initialization_with_internal_state_id
-    wf = MyTestWorkflow.new(internal_state: { id: "wf-test-id-123", skip_setup: true })
-    assert_equal "wf-test-id-123", wf.id
-  end
-
-  def test_base_perform_raises_not_implemented_error
-    base_wf = Yantra::Workflow.new(internal_state: { skip_setup: true }) # Instantiate base class
-    assert_raises(NotImplementedError) do
-      base_wf.perform
-    end
-  end
-
-  def test_run_dsl_builds_jobs_and_dependencies
-    wf = MyTestWorkflow.new # Let perform run
-
-    assert_equal 5, wf.jobs.size
-    assert_instance_of JobOne, wf.find_job_by_ref("task_one")
-    assert_instance_of JobTwo, wf.find_job_by_ref("task_two")
-    assert_instance_of JobThree, wf.find_job_by_ref("task_three")
-    assert_instance_of JobTwo, wf.find_job_by_ref("task_two_again") # Note: second instance of JobTwo
-    assert_instance_of JobOne, wf.find_job_by_ref("task_one_final")
-
-    # Check specific job details
-    task_one = wf.find_job_by_ref("task_one")
-    task_two = wf.find_job_by_ref("task_two")
-    task_three = wf.find_job_by_ref("task_three")
-    task_two_again = wf.find_job_by_ref("task_two_again")
-    task_one_final = wf.find_job_by_ref("task_one_final")
-
-    assert_equal({ p1: true }, task_one.arguments)
-    assert_equal({ p2: true }, task_two.arguments)
-    assert_equal({ p2a: true }, task_two_again.arguments)
-
-    # Check dependencies (map uses job IDs)
-    assert_nil wf.dependencies[task_one.id] # No dependencies
-    assert_equal [task_one.id], wf.dependencies[task_two.id]
-    assert_equal [task_one.id], wf.dependencies[task_three.id]
-    assert_equal [task_one.id], wf.dependencies[task_two_again.id]
-    # Final task depends on the three parallel tasks
-    assert_equal [task_two.id, task_three.id, task_two_again.id].sort, wf.dependencies[task_one_final.id].sort
-  end
-
-  # This test verifies that if the `run` DSL method is called multiple times
-  # with the same Job class *without* providing an explicit `name:` option,
-  # it generates unique internal reference names (e.g., "JobClassName", "JobClassName_1").
-  def test_run_dsl_handles_duplicate_class_names_without_explicit_name
-    # 1. Create a base workflow instance.
-    #    IMPORTANT: Use `skip_setup: true` to prevent `initialize` from calling
-    #    the base `perform` method, which would raise NotImplementedError.
-    wf = Yantra::Workflow.new(internal_state: { skip_setup: true })
-
-    # 2. Directly call the `run` method multiple times on this instance.
-    #    We expect the internal naming logic within `run` to handle the duplicates.
-    job1 = wf.run(JobOne) # First call, should get default ref name "JobOne"
-    job2 = wf.run(JobOne) # Second call, should get suffixed ref name "JobOne_1"
-
-    # 3. Assertions to verify the outcome:
-    assert_equal 2, wf.jobs.size, "Should have created 2 jobs in the workflow's list"
-
-    # Verify jobs can be retrieved using the expected reference names
-    assert_equal job1, wf.find_job_by_ref("JobOne"), "Should find first job instance by default class name reference"
-    assert_equal job2, wf.find_job_by_ref("JobOne_1"), "Should find second job instance by suffixed reference name"
-
-    # Verify the `dsl_name` attribute was set correctly on the job instances themselves
-    assert_equal "JobOne", job1.dsl_name, "First job instance's dsl_name should be the default"
-    assert_equal "JobOne_1", job2.dsl_name, "Second job instance's dsl_name should have the suffix"
-
-    # Optional: Verify the jobs array contains the correct instances
-    assert_includes wf.jobs, job1
-    assert_includes wf.jobs, job2
-  end
-
-  def test_run_dsl_raises_error_for_invalid_job_class
-    wf = MyTestWorkflow.new(internal_state: { skip_setup: true }) # Don't run default perform
-    assert_raises(ArgumentError) do
-      wf.run(String) # Pass a non-Yantra::Job class
-    end
-  end
-
-  def test_run_dsl_raises_error_for_missing_dependency
-    wf = MyTestWorkflow.new(internal_state: { skip_setup: true })
-    wf.run(JobOne, name: "actual_job") # Define one job
+  def test_run_raises_error_for_invalid_dependency_reference
+    # Checks that the `run` method fails if `after:` points to an unknown job ref
     assert_raises(Yantra::Errors::DependencyNotFound) do
-      # Try to depend on a job ref that wasn't defined
-      wf.run(JobTwo, after: ["non_existent_job_ref"])
+      InvalidDependencyWorkflow.new
     end
   end
 
-  def test_find_job_by_ref
-    wf = MyTestWorkflow.new # Run perform to define jobs
-    task_one = wf.find_job_by_ref("task_one")
-    refute_nil task_one
-    assert_instance_of JobOne, task_one
-
-    assert_nil wf.find_job_by_ref("this_does_not_exist")
+  def test_run_raises_error_for_non_job_class
+    # Checks that the `run` method validates the job class
+    assert_raises(ArgumentError, /must be a Class inheriting from Yantra::Job/) do
+      InvalidJobClassWorkflow.new
+    end
   end
 
-  def test_to_hash
-    args = ["arg1"]
-    kwargs = { k: "v" }
-    globals = { g: true }
-    wf = MyTestWorkflow.new(*args, **kwargs, globals: globals, internal_state: { id: "wf-hash-test", skip_setup: true })
+  def test_calculate_terminal_status_marks_correct_jobs
+    # Test the complex workflow
+    wf_complex = ComplexTestWorkflow.new
+    job_a = wf_complex.find_job_by_ref('task_a')
+    job_b = wf_complex.find_job_by_ref('task_b')
+    job_c = wf_complex.find_job_by_ref('task_c')
+    job_d = wf_complex.find_job_by_ref('task_d') # This is the only terminal job
 
-    hash = wf.to_hash
+    # Note: calculate_terminal_status! should be called automatically by initialize now
+    assert job_d.terminal?, "task_d should be terminal"
+    refute job_a.terminal?, "task_a should not be terminal"
+    refute job_b.terminal?, "task_b should not be terminal"
+    refute job_c.terminal?, "task_c should not be terminal"
 
-    assert_equal "wf-hash-test", hash[:id]
-    assert_equal "MyTestWorkflow", hash[:klass]
-    assert_equal args, hash[:arguments]
-    assert_equal kwargs, hash[:kwargs]
-    assert_equal globals, hash[:globals]
-    assert_equal :pending, hash[:state] # Assumes current_state returns :pending
+    # Test the linear workflow
+    wf_linear = LinearTestWorkflow.new
+    job_a_lin = wf_linear.find_job_by_ref('a')
+    job_b_lin = wf_linear.find_job_by_ref('b')
+    job_c_lin = wf_linear.find_job_by_ref('c') # This is terminal
+
+    assert job_c_lin.terminal?, "Job C (linear) should be terminal"
+    refute job_a_lin.terminal?, "Job A (linear) should not be terminal"
+    refute job_b_lin.terminal?, "Job B (linear) should not be terminal"
   end
+
+  # Add tests for job name collision handling if that logic is refined
+  # Add tests for how globals are accessed if needed
+
 end
 

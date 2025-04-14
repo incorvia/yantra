@@ -1,7 +1,8 @@
 # lib/yantra/workflow.rb
 
 require 'securerandom'
-require_relative 'job' # Assuming job.rb is in the same directory for now
+require 'set' # Needed for Set in calculate_terminal_status!
+require_relative 'job'
 require_relative 'errors'
 
 module Yantra
@@ -9,77 +10,70 @@ module Yantra
   # Subclasses should implement the #perform method to define the
   # Directed Acyclic Graph (DAG) of jobs using the `run` DSL method.
   class Workflow
+    # Attributes accessible after initialization
     attr_reader :id, :klass, :arguments, :kwargs, :globals, :jobs, :dependencies
+    # Add state reader if loading state during rehydration
+    attr_reader :state
 
     # Initializes a new workflow instance.
+    # If creating NEW: Runs the subclass's #perform method to build the job graph
+    #                  and then calculates terminal job statuses.
+    # If REHYDRATING (internal_state[:persisted] is true): Loads only core attributes,
+    #                  does NOT load jobs/dependencies, does NOT run perform/calculate.
     #
-    # @param args [Array] Positional arguments passed to the workflow perform method.
-    # @param kwargs [Hash] Keyword arguments passed to the workflow perform method.
-    # @param globals [Hash] Global configuration or data accessible to all jobs.
-    # @param internal_state [Hash] Used internally for reconstructing workflow state
-    #   from persistence. Avoid passing this manually. Expected keys:
-    #   :id [String] Existing workflow ID.
-    #   :persisted [Boolean] If the workflow is being loaded from storage.
-    #   :skip_setup [Boolean] If true, skips running the #perform method (used during reconstruction).
-    #   :jobs [Array<Yantra::Job>] Pre-loaded job instances.
-    #   :dependencies [Hash] Pre-loaded dependency map { job_id => [dep_job_id, ...] }.
+    # @param args [Array] Positional arguments passed to the workflow perform method (on create).
+    # @param kwargs [Hash] Keyword arguments passed to the workflow perform method (on create).
+    # @option kwargs [Hash] :globals Global configuration or data accessible to all jobs.
+    # @option kwargs [Hash] :internal_state Used internally for reconstruction. Avoid manual use.
+    #   Expected keys for rehydration: :id, :klass, :arguments, :kwargs, :globals, :state, :persisted=true
     def initialize(*args, **kwargs)
       internal_state = kwargs.delete(:internal_state) || {}
-      @globals = kwargs.delete(:globals) || {} # Separate globals explicitly
+      @globals = internal_state.fetch(:globals, kwargs.delete(:globals) || {}) # Load globals
 
       @id = internal_state.fetch(:id, SecureRandom.uuid)
-      @klass = self.class
-      @arguments = args
-      @kwargs = kwargs
+      @klass = internal_state.fetch(:klass, self.class)
+      @arguments = internal_state.fetch(:arguments, args) # Load positional args
+      @kwargs = internal_state.fetch(:kwargs, kwargs)  # Load keyword args
+      @state = internal_state.fetch(:state, :pending).to_sym # Load state, default pending
 
-      # Internal tracking during DAG definition
-      @jobs = [] # Holds Yantra::Job instances
-      @job_lookup = {} # Maps internal DSL name/ref to Yantra::Job instance
-      @dependencies = {} # Maps job.id => [dependency_job_id, ...]
+      # Jobs and Dependencies are NOT loaded by default during rehydration
+      # They remain empty unless explicitly loaded later via another method.
+      @jobs = [] # Holds Yantra::Job instances (only populated during initial creation)
+      @job_lookup = {} # Only populated during initial creation
+      @dependencies = {} # Only populated during initial creation
 
-      # Rehydrate state if loaded from persistence
-      if internal_state[:persisted]
-        @jobs = internal_state.fetch(:jobs, [])
-        @dependencies = internal_state.fetch(:dependencies, {})
-        # Rebuild lookup for potential internal use, though less critical after creation
-        @jobs.each { |job| @job_lookup[job.klass.to_s] ||= job } # Simplified lookup rebuild
+      # Run perform and calculate terminal status ONLY on initial creation,
+      # NOT during rehydration from persistence.
+      if !internal_state[:persisted] && !internal_state[:skip_setup]
+        # Call the subclass's perform method, passing through original args/kwargs
+        perform(*@arguments, **@kwargs)
+        # Calculate terminal status immediately after the graph is built
+        calculate_terminal_status!
+      elsif internal_state[:persisted]
+        # Optional: Could rebuild job_lookup if needed based on *persisted* job data
+        # fetched separately, but likely not needed for the base Workflow object.
+        puts "INFO: Rehydrated workflow #{@id} (State: #{@state}). Jobs/Deps not loaded into memory."
       end
-
-      # Run the user-defined DAG definition unless skipped (e.g., during reconstruction)
-      # perform unless internal_state[:skip_setup] || internal_state[:persisted]
-      perform(*@arguments, **@kwargs) unless internal_state[:skip_setup] || internal_state[:persisted]
-
     end
 
     # Entry point for defining the workflow DAG.
     # Subclasses MUST implement this method using the `run` DSL.
-    def perform
+    def perform(*args, **kwargs)
       raise NotImplementedError, "#{self.class.name} must implement the `perform` method."
     end
 
     # DSL method to define a job within the workflow.
-    #
-    # @param job_klass [Class] The Yantra::Job subclass to run.
-    # @param params [Hash] Arguments/payload to pass to the job's perform method.
-    # @param after [Array<String, Symbol, Class>] References to jobs that must complete before this one starts.
-    #   References can be the job class itself (if unique in the workflow) or a custom name/symbol.
-    # @param name [String, Symbol] An optional unique name/reference for this job within the workflow DSL.
-    #   Defaults to the job_klass.to_s if not provided. Useful if running the same job class multiple times.
-    # @return [Yantra::Job] The newly created job instance.
+    # (Code for `run` method remains the same as before)
     def run(job_klass, params: {}, after: [], name: nil)
       unless job_klass.is_a?(Class) && job_klass < Yantra::Job
-         raise ArgumentError, "#{job_klass} must be a Class inheriting from Yantra::Job"
+        raise ArgumentError, "#{job_klass} must be a Class inheriting from Yantra::Job"
       end
 
-      # Use provided name or default to class name for internal lookup during build
-      job_ref_name = (name || job_klass.to_s).to_s
+      base_ref_name = (name || job_klass.to_s).to_s
+      job_ref_name = base_ref_name
       if @job_lookup.key?(job_ref_name)
-        # Handle cases where the same job class/name is used multiple times
-        # Simple strategy: append a counter. More complex strategies could exist.
-        count = @jobs.count { |j| (j.dsl_name || j.klass.to_s) == job_ref_name }
-        job_ref_name = "#{job_ref_name}_#{count}"
-        # Alternatively, raise an error if unique names are required unless explicitly provided
-        # raise ArgumentError, "Job reference name '#{job_ref_name}' already used. Provide a unique `name:` option."
+        count = @jobs.count { |j| (j.dsl_name || j.klass.to_s) == base_ref_name }
+        job_ref_name = "#{base_ref_name}_#{count}"
       end
 
       job_id = SecureRandom.uuid
@@ -88,14 +82,13 @@ module Yantra
         workflow_id: @id,
         klass: job_klass,
         arguments: params,
-        dsl_name: job_ref_name # Store the name used in DSL for potential lookup
-        # Other attributes like queue, retries could be added here or configured globally
+        dsl_name: job_ref_name,
+        is_terminal: false # Default, calculated by calculate_terminal_status!
       )
 
       @jobs << job
       @job_lookup[job_ref_name] = job
 
-      # Resolve dependencies based on their DSL reference names
       dependency_ids = Array(after).map do |dep_ref|
         dep_job = find_job_by_ref(dep_ref.to_s)
         unless dep_job
@@ -106,21 +99,39 @@ module Yantra
 
       @dependencies[job.id] = dependency_ids unless dependency_ids.empty?
 
-      job # Return the job instance
+      job
     end
 
     # Finds a job instance within this workflow based on the reference
-    # name used in the DSL (`run` method's `name` option or class name).
-    # Used internally to resolve dependencies during DAG definition.
-    #
+    # name used in the DSL during initial creation.
+    # Note: This only works on newly created instances before persistence
+    # or if the lookup is rebuilt during rehydration (which it currently isn't by default).
     # @param ref_name [String] The reference name.
     # @return [Yantra::Job, nil] The found job instance or nil.
     def find_job_by_ref(ref_name)
       @job_lookup[ref_name]
     end
 
-    # Placeholder: Method to convert workflow definition to persistable hash
-    # This would be used by the Repository/Client before saving.
+    # Calculates which jobs in the workflow are terminal nodes (have no dependents)
+    # and updates the @is_terminal flag on the job instances.
+    # This is called automatically by initialize after perform completes during initial creation.
+    # Runs in O(N+E) time, where N is number of jobs, E is number of dependency edges.
+    def calculate_terminal_status!
+      return if @jobs.empty?
+
+      prerequisite_job_ids = Set.new
+      @dependencies.each_value do |dependency_id_array|
+        dependency_id_array.each { |dep_id| prerequisite_job_ids.add(dep_id) }
+      end
+
+      @jobs.each do |job|
+        is_terminal = !prerequisite_job_ids.include?(job.id)
+        job.instance_variable_set(:@is_terminal, is_terminal)
+      end
+    end
+
+    # Placeholder: Method to convert workflow definition to persistable hash.
+    # May not be needed if adapter takes the instance directly for core attributes.
     def to_hash
       {
         id: @id,
@@ -128,18 +139,12 @@ module Yantra
         arguments: @arguments,
         kwargs: @kwargs,
         globals: @globals,
-        # Note: Jobs and Dependencies are usually persisted separately by the repository
-        # based on the @jobs array and @dependencies hash built during initialization.
-        # We might only store core workflow metadata here.
-        state: current_state # Assuming state tracking exists
+        state: @state # Use the loaded/current state
       }
     end
 
-    # Placeholder for state retrieval
-    def current_state
-      # Logic to determine current state (e.g., from internal state or repo)
-      :pending # Default initial state perhaps
-    end
+    # Removed current_state method, using @state directly now.
+
   end
 end
 
