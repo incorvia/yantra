@@ -4,11 +4,9 @@ require "test_helper"
 
 # Explicitly require the ActiveRecord models needed for these tests.
 # This will raise LoadError if run without AR dev dependencies installed.
-if AR_LOADED # Only require if AR itself was loaded successfully
-  require "yantra/persistence/active_record/workflow_record"
-  require "yantra/persistence/active_record/job_record"
-  require "yantra/persistence/active_record/job_dependency_record"
-end
+require "yantra/persistence/active_record/workflow_record"
+require "yantra/persistence/active_record/job_record"
+require "yantra/persistence/active_record/job_dependency_record"
 
 # Define tests directly, assuming AR dependencies are present
 # when these tests are intended to run. Will error if constants aren't loaded.
