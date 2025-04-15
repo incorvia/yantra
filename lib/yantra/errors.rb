@@ -1,14 +1,13 @@
-# lib/yantra/errors.rb
+# --- lib/yantra/errors.rb ---
 
 module Yantra
   # Base error class for all Yantra specific errors.
-  # Allows users to rescue Yantra::Error to catch any error originating from this gem.
   class Error < StandardError; end
 
   # Module to namespace specific error types
   module Errors
     # Raised when a workflow cannot be found by its ID.
-    class WorkflowNotFound < Yantra::Error; end # Inherit from Yantra::Error
+    class WorkflowNotFound < Yantra::Error; end
 
     # Raised when a job cannot be found by its ID.
     class JobNotFound < Yantra::Error; end
@@ -24,14 +23,18 @@ module Yantra
     class InvalidState < Yantra::Error; end
 
     # Raised when attempting an invalid state transition
-    class InvalidStateTransition < Error; end # <<< ADD THIS CLASS
+    class InvalidStateTransition < Error; end
 
     # A generic error for persistence layer issues, potentially wrapping adapter-specific errors.
-    # Alternatively, adapters could raise their own specific errors inheriting from Yantra::Error.
     class PersistenceError < Yantra::Error; end
 
     # Optional: A generic error for worker adapter issues.
     class WorkerError < Yantra::Error; end
+
+    # --- ADD THIS ---
+    # Raised when a job class definition is invalid or cannot be loaded.
+    class JobDefinitionError < Yantra::Error; end
+    # --- END ADD ---
   end
 end
 
