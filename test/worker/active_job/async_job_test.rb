@@ -10,26 +10,21 @@ if AR_LOADED # Using AR_LOADED as proxy for full dev env
   require "yantra/errors"
   require "yantra/job" # Need base Yantra::Job
   require "minitest/mock"
+  # Require RetryHandler as it's now instantiated directly in AsyncJob's rescue block
+  require "yantra/worker/retry_handler"
 end
 
 # --- Dummy User Job Classes ---
 class AsyncSuccessJob < Yantra::Job
-  def perform(data:, multiplier: 1)
-    "Success output with #{data * multiplier}"
-  end
+  def perform(data:, multiplier: 1); "Success output with #{data * multiplier}"; end
 end
-
 class AsyncFailureJob < Yantra::Job
-  # NOTE: This perform only expects :data
-  def perform(data:)
-    # This will raise ArgumentError if called with :multiplier
-  end
+  def perform(data:); raise ArgumentError, "unknown keyword: :multiplier"; end # Simulate failure
 end
 
 module Yantra
   module Worker
     module ActiveJob
-      # Run tests only if ActiveJob components could be loaded/defined
       if defined?(YantraActiveRecordTestCase) && AR_LOADED && defined?(Yantra::Worker::ActiveJob::AsyncJob)
 
         class AsyncJobTest < YantraActiveRecordTestCase
@@ -42,15 +37,11 @@ module Yantra
             @job_id = SecureRandom.uuid
             @workflow_id = SecureRandom.uuid
             @job_klass_name = "AsyncSuccessJob"
-            @arguments = { data: 10, multiplier: 2 } # Note: multiplier will cause ArgumentError in AsyncFailureJob
+            @arguments = { data: 10, multiplier: 2 }
 
             @mock_job_record = OpenStruct.new(
-              id: @job_id,
-              workflow_id: @workflow_id,
-              klass: @job_klass_name,
-              state: :enqueued,
-              arguments: @arguments.transform_keys(&:to_s),
-              queue_name: 'default'
+              id: @job_id, workflow_id: @workflow_id, klass: @job_klass_name,
+              state: :enqueued, arguments: @arguments.transform_keys(&:to_s)
             )
 
             @async_job_instance = AsyncJob.new
@@ -72,7 +63,6 @@ module Yantra
              end
           end
 
-
           # --- Test Perform Method ---
 
           def test_perform_success_path
@@ -83,7 +73,8 @@ module Yantra
             run_perform_with_stubs do
               # Expectations
               @mock_orchestrator_instance.expect(:job_starting, true, [@job_id])
-              @mock_repo.expect(:find_job, @mock_job_record, [@job_id])
+              @mock_repo.expect(:find_job, @mock_job_record, [@job_id]) # Needed after job_starting
+              # Expect job_succeeded to be called on orchestrator
               @mock_orchestrator_instance.expect(:job_succeeded, nil, [@job_id, expected_output])
 
               # Act
@@ -102,19 +93,11 @@ module Yantra
               # Expectations
               @mock_orchestrator_instance.expect(:job_starting, true, [@job_id])
               @mock_repo.expect(:find_job, @mock_job_record, [@job_id])
-              # Expect job_failed to be called on orchestrator.
-              # The block should now re-raise the error it receives to simulate
-              # the RetryHandler allowing a retry.
-              @mock_orchestrator_instance.expect(:job_failed, nil) do |jid, err, exec_count|
-                 # Verify args first
-                 valid_args = ( jid == @job_id && err.is_a?(ArgumentError) && exec_count == 1 )
-                 # If args are valid, re-raise the error to simulate retry path
-                 raise err if valid_args
-                 # Return value of block indicates if args matched expectation
-                 valid_args
-              end
+              # Expect RetryHandler to be called, which then calls repo.increment_job_retries
+              @mock_repo.expect(:increment_job_retries, true, [@job_id])
+              # --> Expect NO call to orchestrator job_succeeded or job_finished
 
-              # Act & Assert: Expect the error to propagate because the mock re-raises it
+              # Act & Assert: Expect the original error (ArgumentError) to be re-raised by RetryHandler
               assert_raises(ArgumentError) do
                 @async_job_instance.perform(@job_id, @workflow_id, failing_job_klass_name)
               end
@@ -125,36 +108,35 @@ module Yantra
             # Arrange: Simulate final failure (attempt 3 >= max 3)
             failing_job_klass_name = "AsyncFailureJob"
             @mock_job_record.klass = failing_job_klass_name
-            # State should be :running if this is a retry attempt handled by backend
-            @mock_job_record.state = :running
-            @async_job_instance.executions = 3 # Set attempt number to max
+            @mock_job_record.state = :running # Assume it was running from previous attempt
+            @async_job_instance.executions = 3
 
             run_perform_with_stubs do
               # Expectations
               @mock_orchestrator_instance.expect(:job_starting, true, [@job_id])
               @mock_repo.expect(:find_job, @mock_job_record, [@job_id])
-              # Expect job_failed to be called on orchestrator.
-              # The block should NOT re-raise the error in this case, as the
-              # real RetryHandler would handle permanent failure internally.
-              @mock_orchestrator_instance.expect(:job_failed, nil) do |jid, err, exec_count|
-                 jid == @job_id && err.is_a?(ArgumentError) && exec_count == 3
-                 # Do not raise err here
+              # Expect RetryHandler to be called, which then calls repo methods for permanent failure
+              @mock_repo.expect(:update_job_attributes, true) do |jid, attrs, opts| # Update to :failed
+                 jid == @job_id && attrs[:state] == Yantra::Core::StateMachine::FAILED.to_s && opts == { expected_old_state: :running }
               end
+              @mock_repo.expect(:record_job_error, true) do |jid, err| # Record error
+                 jid == @job_id && err.is_a?(ArgumentError)
+              end
+              @mock_repo.expect(:set_workflow_has_failures_flag, true, [@workflow_id]) # Set flag
+              # Expect AsyncJob to call orchestrator.job_finished AFTER handler returns :failed
+              @mock_orchestrator_instance.expect(:job_finished, nil, [@job_id])
 
               # Act
               # Perform should NOT raise an error now, as RetryHandler handles final failure
               @async_job_instance.perform(@job_id, @workflow_id, failing_job_klass_name)
 
-            end # Stubs are removed here
-            # Verify mocks ensures job_failed was called correctly
+            end
           end
 
 
           def test_perform_does_nothing_if_job_is_terminal
              run_perform_with_stubs do
-               # Arrange: find_job returns job in a terminal state
-               @mock_job_record.state = :succeeded
-               # Expect job_starting to be called, and it should return false
+               # Arrange: job_starting returns false because state is terminal
                @mock_orchestrator_instance.expect(:job_starting, false, [@job_id])
                # --> Expect NO other calls
 
@@ -165,7 +147,7 @@ module Yantra
 
           def test_perform_does_nothing_if_job_not_found
              run_perform_with_stubs do
-               # Arrange: job_starting returns false because find_job returns nil
+               # Arrange: job_starting returns false because repo.find_job returns nil
                @mock_orchestrator_instance.expect(:job_starting, false, [@job_id])
 
                # Act

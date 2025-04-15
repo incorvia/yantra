@@ -1,10 +1,10 @@
 # lib/yantra/core/orchestrator.rb
 
 require 'set'
-require 'thread' # Keep for Queue if used, otherwise remove if Array used in find_all_descendants
+# require 'thread' # Only if using Queue for find_all_descendants
 require_relative 'state_machine'
 require_relative '../errors'
-require_relative '../worker/retry_handler' # Require the retry handler
+require_relative '../worker/retry_handler' # Required by job_failed
 
 module Yantra
   module Core
@@ -13,16 +13,23 @@ module Yantra
     class Orchestrator
       attr_reader :repository, :worker_adapter
 
+      # @param repository An object implementing Yantra::Persistence::RepositoryInterface.
+      # @param worker_adapter An object implementing Yantra::Worker::EnqueuingInterface.
       def initialize(repository: Yantra.repository, worker_adapter: Yantra.worker_adapter)
         unless repository && worker_adapter
             raise ArgumentError, "Repository and Worker Adapter must be provided."
         end
         @repository = repository
         @worker_adapter = worker_adapter
+        # @event_notifier = ActiveSupport::Notifications # Or your chosen notifier
       end
 
       # --- Workflow Lifecycle ---
 
+      # Starts a workflow if it's pending.
+      # Finds initial jobs and enqueues them.
+      # @param workflow_id [String]
+      # @return [Boolean] true if successfully started, false otherwise.
       def start_workflow(workflow_id)
         puts "INFO: [Orchestrator] Attempting to start workflow #{workflow_id}"
         workflow = repository.find_workflow(workflow_id)
@@ -35,7 +42,8 @@ module Yantra
            puts "WARN: [Orchestrator] Workflow #{workflow_id} cannot start; already in state :#{current_state}."
            return false
         end
-        StateMachine.validate_transition!(current_state, StateMachine::RUNNING) # Will raise if invalid
+
+        StateMachine.validate_transition!(current_state, StateMachine::RUNNING) # Let it raise
 
         attributes = { state: StateMachine::RUNNING.to_s, started_at: Time.current }
         unless repository.update_workflow_attributes(workflow_id, attributes, expected_old_state: current_state)
@@ -51,67 +59,68 @@ module Yantra
       rescue Errors::InvalidStateTransition => e
         puts "ERROR: [Orchestrator] Invalid initial state transition for workflow #{workflow_id}. #{e.message}"
         false
+      # TODO: Consider rescuing PersistenceError from find_workflow/update_workflow_attributes
       end
 
-      # --- Job Lifecycle Callbacks (Called by Worker Job) ---
+      # --- Job Lifecycle Callbacks (Called by Worker Job e.g., AsyncJob) ---
 
-      # Called by the worker just before executing user perform method.
+      # Called by the worker before executing user perform method.
       # Validates state and updates it to :running.
       # @param job_id [String]
       # @return [Boolean] true if okay to proceed with execution, false otherwise.
       def job_starting(job_id)
-         puts "DEBUG: [Orchestrator] job_starting called for #{job_id}"
+         puts "INFO: [Orchestrator] Starting job #{job_id}"
          job_record = repository.find_job(job_id)
          unless job_record
-           puts "ERROR: [Orchestrator] Job record #{job_id} not found when starting. Cannot execute."
+           puts "ERROR: [Orchestrator] Job record #{job_id} not found when starting."
            return false
          end
 
          current_state = job_record.state.to_sym
          target_state = StateMachine::RUNNING
 
-         # Allow starting if enqueued (first attempt) or already running (retry attempt)
+         # Allow if enqueued (first run) or already running (retry)
          unless [StateMachine::ENQUEUED, StateMachine::RUNNING].include?(current_state)
            puts "WARN: [Orchestrator] Job #{job_id} expected state :enqueued or :running to start but found :#{current_state}."
-           return false # Do not proceed
+           return false
          end
 
-         # Only update state if it was enqueued (first run)
+         # Only update state if moving from enqueued
          if current_state == StateMachine::ENQUEUED
-            begin
-              StateMachine.validate_transition!(current_state, target_state)
-            rescue Errors::InvalidStateTransition => e
-              puts "WARN: [Orchestrator] Cannot start job #{job_id}. #{e.message}"
-              return false
-            end
+           begin
+             StateMachine.validate_transition!(current_state, target_state)
+           rescue Errors::InvalidStateTransition => e
+             puts "WARN: [Orchestrator] Cannot start job #{job_id}. #{e.message}"
+             return false
+           end
 
-            update_attrs = { state: target_state.to_s, started_at: Time.current }
-            unless repository.update_job_attributes(job_id, update_attrs, expected_old_state: :enqueued)
-               puts "WARN: [Orchestrator] Failed to update job #{job_id} state to running (maybe already changed?). Aborting execution."
-               return false # Do not proceed
-            end
-            # TODO: Emit yantra.job.started event
+           update_attrs = { state: target_state.to_s, started_at: Time.current }
+           unless repository.update_job_attributes(job_id, update_attrs, expected_old_state: :enqueued)
+              puts "WARN: [Orchestrator] Failed to update job #{job_id} state to running (maybe already changed?). Aborting execution."
+              return false
+           end
+           # TODO: Emit yantra.job.started event
          end
-         true # Okay to proceed with execution
+         true # Okay to proceed
       end
 
       # Called by the worker after user perform method completes successfully.
+      # Updates state, records output, and triggers downstream checks.
       # @param job_id [String]
       # @param result [Object] The return value of the user's perform method.
       def job_succeeded(job_id, result)
-         puts "DEBUG: [Orchestrator] job_succeeded called for #{job_id}"
-         # Validate transition and update state
+         puts "INFO: [Orchestrator] Job #{job_id} succeeded."
+         # Update state to succeeded and record output
          final_attrs = {
            state: StateMachine::SUCCEEDED.to_s,
            finished_at: Time.current,
            output: result
          }
-         # Use expected_old_state :running for optimistic lock
          update_success = repository.update_job_attributes(job_id, final_attrs, expected_old_state: :running)
          # TODO: Emit yantra.job.succeeded event
 
          if update_success
-            # Trigger downstream logic only if state update was successful
+            # Trigger downstream logic now that final state is set
             job_finished(job_id)
          else
             puts "WARN: [Orchestrator] Failed to update job #{job_id} state to succeeded (maybe already changed?)."
@@ -120,150 +129,99 @@ module Yantra
 
       # Called by the worker after user perform method raises an error.
       # Delegates retry/failure logic to the RetryHandler.
+      # The RetryHandler will either re-raise (for backend retry) or call
+      # mark_job_failed_permanently if retries are exhausted.
       # @param job_id [String]
       # @param error [StandardError] The exception object raised.
-      def job_failed(job_id, error)
-         puts "ERROR: [Orchestrator] job_failed called for #{job_id}: #{error.class}"
-         # Fetch necessary data for the handler
+      # @param executions [Integer] The current execution attempt number.
+      def job_failed(job_id, error, executions)
+         puts "ERROR: [Orchestrator] Handling failure for job #{job_id} on attempt #{executions}."
          job_record = repository.find_job(job_id)
          unless job_record
-            puts "ERROR: [Orchestrator] Job record #{job_id} not found when handling failure."
-            return # Cannot proceed
+           puts "ERROR: [Orchestrator] Job record #{job_id} not found when handling failure."
+           return # Or raise? If job existed for job_starting, should exist now.
          end
-         # Need job klass name and execution count - where does worker get this?
-         # Worker needs to fetch these or receive them. Assume worker passes them.
-         # This indicates maybe the worker *should* instantiate the handler?
-         # Let's assume for now Orchestrator can get this info if needed, or handler adapts.
-         # Revisit: Maybe worker should pass executions count?
 
-         # TODO: How to get user_job_klass and executions reliably here?
-         # This suggests the RetryHandler might be better instantiated/called by the worker.
-         # Let's revert this part for now and keep retry logic in worker,
-         # but centralize the FINAL state update and job_finished call.
-
-         # --- REVISED PLAN for job_failed ---
-         # Worker calls RetryHandler. Handler decides :fail_permanently or :retry (re-raises).
-         # If Handler decides :fail_permanently, IT calls Orchestrator#job_permanently_failed
-         # If Handler re-raises, Orchestrator isn't called yet.
-
-         # New method called by RetryHandler ONLY on final failure
-         # @param job_id [String]
-         # @param error [StandardError]
-         # @param workflow_id [String]
-         # @param final_state [Symbol] Should be :failed
-         # @param finished_at [Time]
-         # (This method combines update + record + flag + notify) - maybe too much?
-
-         # Let's stick closer to the previous plan: RetryHandler updates state/error/flag, then calls job_finished.
-         # So Orchestrator doesn't need job_failed/job_succeeded methods directly called by worker.
-         # Worker calls repo to update state, then calls orchestrator.job_finished.
-         # This puts logic back in the worker... undoing the refactor goal.
-
-         # --- Let's try the Orchestrator-centric approach again ---
-         # Worker calls orchestrator.job_failed(id, error, executions, klass_name)
-
-         # Fetch user job klass
+         # Ensure klass is loaded for RetryHandler
          user_job_klass = Object.const_get(job_record.klass) rescue Yantra::Job
 
+         # Delegate decision to RetryHandler
+         # TODO: Make retry_handler_class configurable
          retry_handler_class = Yantra.configuration.try(:retry_handler_class) || Yantra::Worker::RetryHandler
          handler = retry_handler_class.new(
-            repository: repository,
-            orchestrator: self, # Pass self!
-            job_record: job_record,
-            error: error,
-            executions: job_record.retries + 1, # Use Yantra's counter? No, need AJ's. Worker must pass executions!
-            user_job_klass: user_job_klass
-          )
-          # Need to get execution count from worker... This design is flawed.
+           repository: repository,
+           orchestrator: self, # Pass self for callback on permanent failure
+           job_record: job_record,
+           error: error,
+           executions: executions,
+           user_job_klass: user_job_klass
+         )
 
-         # --- SIMPLER REFACTOR: Orchestrator handles FINAL state updates ---
-         # Worker: try { perform } rescue { re-raise or call orchestrator.job_permanently_failed } success { orchestrator.job_succeeded }
-         # Let's assume worker calls job_succeeded / job_permanently_failed
-
-         # This method called by worker on PERMANENT failure (after retries)
-         # Or called by RetryHandler in previous design
-         # Let's assume RetryHandler calls this.
-         mark_job_failed_permanently(job_id, error)
-         # After marking failed, trigger downstream checks
-         job_finished(job_id)
-
+         # handle_error! will either re-raise the error (for backend retry)
+         # or call self.mark_job_failed_permanently if max attempts reached.
+         handler.handle_error!
       end
 
-      # --- Core Logic (Called Internally or by Success/Failure Handlers) ---
+      # Called by RetryHandler ONLY when a job fails permanently after retries.
+      # Updates state, records error, sets flag, calls job_finished.
+      # @param job_id [String]
+      # @param error [StandardError]
+      def mark_job_failed_permanently(job_id, error)
+        puts "INFO: [Orchestrator] Marking job #{job_id} as failed permanently."
+        job_record = repository.find_job(job_id) # Fetch fresh record for workflow_id
+        return unless job_record
+
+        final_attrs = {
+          state: StateMachine::FAILED.to_s,
+          finished_at: Time.current
+        }
+        # Use expected_old_state :running for optimistic lock
+        update_success = repository.update_job_attributes(job_id, final_attrs, expected_old_state: :running)
+
+        if update_success
+           repository.record_job_error(job_id, error)
+           repository.set_workflow_has_failures_flag(job_record.workflow_id)
+           # TODO: Emit yantra.job.failed event (permanent)
+           job_finished(job_id) # Trigger downstream checks AFTER final failure is recorded
+        else
+           puts "WARN: [Orchestrator] Failed to update job #{job_id} state to failed (maybe already changed?)."
+        end
+      end
+
+
+      # --- Core Logic (Triggered after final state set via job_succeeded/mark_job_failed_permanently) ---
 
       # Central point called AFTER a job has reached a final state (succeeded, failed, cancelled).
       # Handles checking dependents and workflow completion.
+      # NOTE: This method assumes the job's final state is already persisted.
       # @param job_id [String] ID of the job that reached a final state.
       def job_finished(job_id)
         puts "INFO: [Orchestrator] Handling post-finish logic for job #{job_id}."
         finished_job = repository.find_job(job_id)
         unless finished_job
-          puts "ERROR: [Orchestrator] Job #{job_id} not found when handling finish."
+          puts "ERROR: [Orchestrator] Job #{job_id} not found when handling post-finish."
           return
         end
 
         workflow_id = finished_job.workflow_id
         finished_state = finished_job.state.to_sym
 
-        # If job succeeded, check dependents
+        # Trigger appropriate next steps based on the final state
         if finished_state == StateMachine::SUCCEEDED
           dependent_job_ids = repository.get_job_dependents(job_id)
           check_and_enqueue_dependents(dependent_job_ids)
         elsif finished_state == StateMachine::FAILED || finished_state == StateMachine::CANCELLED
-          # If job failed/cancelled *finally*, trigger downstream cancellation
-          # Note: This assumes the state was set by the worker/retry handler
+          # Job reached final failed/cancelled state, initiate downstream cancellation
           cancel_downstream_jobs(job_id)
         end
 
-        # Check workflow completion regardless of this job's outcome
+        # Always check workflow completion after a job reaches a final state
         check_workflow_completion(workflow_id)
       end
 
       private
 
-      # --- Helper methods for state updates (called by worker outcome handlers) ---
-      # These methods centralize the logic for updating state and notifying job_finished
-
-      def mark_job_succeeded(job_id, result)
-         puts "DEBUG: [Orchestrator] Setting job #{job_id} to succeeded."
-         final_attrs = {
-           state: StateMachine::SUCCEEDED.to_s,
-           finished_at: Time.current,
-           output: result
-         }
-         update_success = repository.update_job_attributes(job_id, final_attrs, expected_old_state: :running)
-         # TODO: Emit yantra.job.succeeded event
-         if update_success
-            job_finished(job_id) # Trigger downstream checks
-         else
-            puts "WARN: [Orchestrator] Failed to update job #{job_id} state to succeeded (maybe already changed?)."
-         end
-      end
-
-      def mark_job_failed_permanently(job_id, error)
-         # Assumes retries already checked by caller (e.g., RetryHandler)
-         puts "INFO: [Orchestrator] Marking job #{job_id} as failed permanently."
-         job_record = repository.find_job(job_id) # Need workflow ID
-         return unless job_record
-
-         final_attrs = {
-           state: StateMachine::FAILED.to_s,
-           finished_at: Time.current
-         }
-         update_success = repository.update_job_attributes(job_id, final_attrs, expected_old_state: :running)
-
-         if update_success
-            repository.record_job_error(job_id, error)
-            repository.set_workflow_has_failures_flag(job_record.workflow_id)
-            # TODO: Emit yantra.job.failed event
-            job_finished(job_id) # Trigger downstream checks
-         else
-            puts "WARN: [Orchestrator] Failed to update job #{job_id} state to failed (maybe already changed?)."
-         end
-      end
-
-
-      # --- Other private helpers ---
+      # --- Helper methods ---
 
       # (find_and_enqueue_ready_jobs remains the same)
       def find_and_enqueue_ready_jobs(workflow_id)
@@ -364,3 +322,4 @@ module Yantra
     end # class Orchestrator
   end # module Core
 end # module Yantra
+

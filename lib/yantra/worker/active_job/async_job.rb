@@ -8,57 +8,60 @@ rescue LoadError
 end
 
 # Require for deep_symbolize_keys. Add 'activesupport' as a dependency if not already present.
-begin
+AS_DEEP_SYMBOLIZE_LOADED = begin
   require 'active_support/core_ext/hash/keys'
+  true
 rescue LoadError
   # Define a simple fallback if ActiveSupport is not available
   unless Hash.method_defined?(:deep_symbolize_keys)
-    class ::Hash; def deep_symbolize_keys; each_with_object({}) { |(k, v), r| nk=k.to_sym rescue k; nv=v.is_a?(Hash) ? v.deep_symbolize_keys : v; r[nk]=nv }; end; end
-    puts "WARN: ActiveSupport not found. Using basic deep_symbolize_keys fallback."
-  end
+    puts "WARN: ActiveSupport not found. Defining basic deep_symbolize_keys fallback for Hash."
+    class ::Hash
+      def deep_symbolize_keys
+        each_with_object({}) do |(key, value), result| # Start block
+          new_key = key.to_sym rescue key
+          new_value = value.is_a?(Hash) ? value.deep_symbolize_keys : value
+          result[new_key] = new_value
+        end # End block <<< THIS WAS MISSING/IMPLIED BY COMMENT
+      end
+    end # End class ::Hash
+  end # End unless
+  false # Indicate AS version was not loaded
 end
 
 
 require_relative '../../job'
-require_relative '../../core/orchestrator' # Needs Orchestrator to report status
+require_relative '../../core/orchestrator'
+require_relative '../../core/state_machine'
 require_relative '../../errors'
-# No longer needs RetryHandler directly
+require_relative '../retry_handler'
 
 module Yantra
   module Worker
     module ActiveJob
       # This ActiveJob class is enqueued by ActiveJob::Adapter.
       # Its perform method executes the actual Yantra::Job logic asynchronously.
-      # It coordinates with the Orchestrator for state updates and error handling.
-      class AsyncJob < ::ActiveJob::Base
-        # Note: Configure ActiveJob retry *scheduling* via standard AJ/backend mechanisms.
-        # Yantra's Orchestrator (via RetryHandler) controls *final* failure state.
+      # It delegates error/retry handling to a RetryHandler class.
+      class AsyncJob < ::ActiveJob::Base # Inherit from the loaded ActiveJob::Base
 
         # Main execution logic called by ActiveJob backend.
         def perform(yantra_job_id, yantra_workflow_id, yantra_job_klass_name)
-          puts "INFO: [AJ::AsyncJob] Executing job: #{yantra_job_id} WF: #{yantra_workflow_id} Klass: #{yantra_job_klass_name} Attempt: #{self.executions}"
-
-          # Instantiate orchestrator to report status changes
-          # TODO: Consider dependency injection for Orchestrator instance
+          puts "INFO: [AJ::AsyncJob] Attempt ##{self.executions} for Yantra job: #{yantra_job_id} WF: #{yantra_workflow_id} Klass: #{yantra_job_klass_name}"
+          repo = Yantra.repository
           orchestrator = Yantra::Core::Orchestrator.new
-          job_record = nil # Define scope outside begin block
 
           # --- 1. Notify Orchestrator: Starting ---
-          # Orchestrator finds job, validates state, updates state to :running
-          # Returns true if okay to proceed, false otherwise.
           unless orchestrator.job_starting(yantra_job_id)
              puts "WARN: [AJ::AsyncJob] Orchestrator#job_starting indicated job #{yantra_job_id} should not proceed. Aborting."
-             return # Do not proceed if orchestrator says no (e.g., state mismatch)
+             return
           end
 
           # --- 2. Execute User Code ---
+          job_record = nil
+          user_job_klass = nil
           begin
-            # Fetch job record again to get arguments (Orchestrator#job_starting already found it once)
-            # TODO: Optimize - Orchestrator#job_starting could return needed data?
-            repo = Yantra.repository
+            # Fetch job record
             job_record = repo.find_job(yantra_job_id)
             unless job_record
-               # Should not happen if job_starting succeeded, but check defensively
                raise Yantra::Errors::PersistenceError, "Job record #{yantra_job_id} not found after starting."
             end
 
@@ -69,11 +72,11 @@ module Yantra
             end
 
             arguments_hash = job_record.arguments || {}
-            # Perform deep symbolization before passing to user code and perform
+            # Perform deep symbolization
             if arguments_hash.respond_to?(:deep_symbolize_keys)
               arguments_hash = arguments_hash.deep_symbolize_keys
             else
-              puts "WARN: [AJ::AsyncJob] deep_symbolize_keys not available!"
+              # Fallback if deep_symbolize_keys wasn't defined (e.g., no AS and fallback failed)
               arguments_hash = arguments_hash.transform_keys(&:to_sym) rescue arguments_hash
             end
 
@@ -83,24 +86,38 @@ module Yantra
             )
 
             # Execute User's Code
-            puts "INFO: [AJ::AsyncJob] Executing user perform for job #{yantra_job_id}"
             result = user_job_instance.perform(**arguments_hash)
-            puts "INFO: [AJ::AsyncJob] Job #{yantra_job_id} user perform finished successfully."
 
             # --- 3a. Notify Orchestrator: Success ---
             orchestrator.job_succeeded(yantra_job_id, result)
 
           rescue StandardError => e
-            # --- 3b. Notify Orchestrator: Failure ---
-            puts "ERROR: [AJ::AsyncJob] Job #{yantra_job_id} user perform failed on attempt #{self.executions}. Notifying orchestrator."
-            # Pass necessary info to the orchestrator to handle retries/failure
-            orchestrator.job_failed(
-              yantra_job_id,
-              e,
-              self.executions # Pass current attempt number
-              # user_job_klass is already loaded above
+            # --- 3b. Handle Failure via RetryHandler ---
+            puts "ERROR: [AJ::AsyncJob] Job #{yantra_job_id} failed on attempt #{self.executions}. Delegating to RetryHandler."
+            unless job_record # Should have been loaded in begin block
+              puts "FATAL: [AJ::AsyncJob] Cannot handle error for job #{yantra_job_id} - job_record not loaded."
+              raise e
+            end
+
+            retry_handler_class = Yantra.configuration.try(:retry_handler_class) || Yantra::Worker::RetryHandler
+            handler = retry_handler_class.new(
+              repository: repo,
+              job_record: job_record,
+              error: e,
+              executions: self.executions,
+              user_job_klass: user_job_klass || Yantra::Job
             )
-            # Orchestrator#job_failed will call RetryHandler which re-raises if needed
+
+            begin
+              outcome = handler.handle_error!
+              if outcome == :failed
+                puts "INFO: [AJ::AsyncJob] Notifying orchestrator job finished (failed permanently) for #{yantra_job_id}"
+                orchestrator.job_finished(yantra_job_id)
+              end
+            rescue => retry_error
+              puts "DEBUG: [AJ::AsyncJob] Re-raising error for ActiveJob retry: #{retry_error.class}"
+              raise retry_error
+            end
           end
         end # end perform
 
