@@ -16,16 +16,13 @@ module Yantra
     attr_reader :state
 
     # Initializes a new workflow instance.
-    # If creating NEW: Runs the subclass's #perform method to build the job graph
-    #                  and then calculates terminal job statuses.
-    # If REHYDRATING (internal_state[:persisted] is true): Loads only core attributes,
-    #                  does NOT load jobs/dependencies, does NOT run perform/calculate.
+    # Runs the subclass's #perform method to build the job graph and then
+    # calculates terminal job statuses.
     #
     # @param args [Array] Positional arguments passed to the workflow perform method (on create).
     # @param kwargs [Hash] Keyword arguments passed to the workflow perform method (on create).
     # @option kwargs [Hash] :globals Global configuration or data accessible to all jobs.
     # @option kwargs [Hash] :internal_state Used internally for reconstruction. Avoid manual use.
-    #   Expected keys for rehydration: :id, :klass, :arguments, :kwargs, :globals, :state, :persisted=true
     def initialize(*args, **kwargs)
       internal_state = kwargs.delete(:internal_state) || {}
       @globals = internal_state.fetch(:globals, kwargs.delete(:globals) || {}) # Load globals
@@ -37,21 +34,15 @@ module Yantra
       @state = internal_state.fetch(:state, :pending).to_sym # Load state, default pending
 
       # Jobs and Dependencies are NOT loaded by default during rehydration
-      # They remain empty unless explicitly loaded later via another method.
-      @jobs = [] # Holds Yantra::Job instances (only populated during initial creation)
-      @job_lookup = {} # Only populated during initial creation
-      @dependencies = {} # Only populated during initial creation
+      @jobs = []
+      @job_lookup = {}
+      @dependencies = {}
 
-      # Run perform and calculate terminal status ONLY on initial creation,
-      # NOT during rehydration from persistence.
+      # Run perform and calculate terminal status ONLY on initial creation
       if !internal_state[:persisted] && !internal_state[:skip_setup]
-        # Call the subclass's perform method, passing through original args/kwargs
         perform(*@arguments, **@kwargs)
-        # Calculate terminal status immediately after the graph is built
         calculate_terminal_status!
       elsif internal_state[:persisted]
-        # Optional: Could rebuild job_lookup if needed based on *persisted* job data
-        # fetched separately, but likely not needed for the base Workflow object.
         puts "INFO: Rehydrated workflow #{@id} (State: #{@state}). Jobs/Deps not loaded into memory."
       end
     end
@@ -63,12 +54,18 @@ module Yantra
     end
 
     # DSL method to define a job within the workflow.
-    # (Code for `run` method remains the same as before)
+    #
+    # @param job_klass [Class] The Yantra::Job subclass to run.
+    # @param params [Hash] Arguments/payload to pass to the job's perform method.
+    # @param after [Array<String, Symbol, Class>] References to jobs that must complete first.
+    # @param name [String, Symbol] An optional unique name/reference for this job within the workflow DSL.
+    # @return [Symbol] The unique reference symbol/name assigned to the job in the DSL.
     def run(job_klass, params: {}, after: [], name: nil)
       unless job_klass.is_a?(Class) && job_klass < Yantra::Job
         raise ArgumentError, "#{job_klass} must be a Class inheriting from Yantra::Job"
       end
 
+      # Determine unique reference name for DSL lookup
       base_ref_name = (name || job_klass.to_s).to_s
       job_ref_name = base_ref_name
       if @job_lookup.key?(job_ref_name)
@@ -83,13 +80,15 @@ module Yantra
         klass: job_klass,
         arguments: params,
         dsl_name: job_ref_name,
-        is_terminal: false # Default, calculated by calculate_terminal_status!
+        is_terminal: false # Default, calculated later by calculate_terminal_status!
       )
 
       @jobs << job
       @job_lookup[job_ref_name] = job
 
+      # Resolve dependencies based on their DSL reference names
       dependency_ids = Array(after).map do |dep_ref|
+        # Allow passing job reference symbols/strings or job objects directly
         dep_job = find_job_by_ref(dep_ref.to_s)
         unless dep_job
           raise Yantra::Errors::DependencyNotFound, "Dependency '#{dep_ref}' not found for job '#{job_ref_name}'."
@@ -99,23 +98,20 @@ module Yantra
 
       @dependencies[job.id] = dependency_ids unless dependency_ids.empty?
 
-      job
+      # --- UPDATED RETURN VALUE ---
+      # Return the reference name (as a symbol) so it can be collected and used in `after:`
+      job_ref_name.to_sym
     end
 
-    # Finds a job instance within this workflow based on the reference
-    # name used in the DSL during initial creation.
-    # Note: This only works on newly created instances before persistence
-    # or if the lookup is rebuilt during rehydration (which it currently isn't by default).
+    # Finds a job instance within this workflow based on the reference name used in the DSL.
     # @param ref_name [String] The reference name.
     # @return [Yantra::Job, nil] The found job instance or nil.
     def find_job_by_ref(ref_name)
       @job_lookup[ref_name]
     end
 
-    # Calculates which jobs in the workflow are terminal nodes (have no dependents)
-    # and updates the @is_terminal flag on the job instances.
-    # This is called automatically by initialize after perform completes during initial creation.
-    # Runs in O(N+E) time, where N is number of jobs, E is number of dependency edges.
+    # Calculates which jobs are terminal and updates their instance variable.
+    # Called automatically by initialize after perform completes.
     def calculate_terminal_status!
       return if @jobs.empty?
 
@@ -131,7 +127,6 @@ module Yantra
     end
 
     # Placeholder: Method to convert workflow definition to persistable hash.
-    # May not be needed if adapter takes the instance directly for core attributes.
     def to_hash
       {
         id: @id,
@@ -139,7 +134,7 @@ module Yantra
         arguments: @arguments,
         kwargs: @kwargs,
         globals: @globals,
-        state: @state # Use the loaded/current state
+        state: @state
       }
     end
 
