@@ -4,8 +4,7 @@ require 'securerandom'
 require_relative 'workflow'
 require_relative 'job'
 require_relative 'errors'
-# Note: We interact with the repository via Yantra.repository,
-# so no specific adapter require is needed here.
+require_relative 'core/orchestrator' # Require Orchestrator
 
 module Yantra
   # Public interface for interacting with the Yantra workflow system.
@@ -14,14 +13,7 @@ module Yantra
 
     # Creates and persists a new workflow instance along with its defined
     # jobs and their dependencies.
-    #
-    # @param workflow_klass [Class] The user-defined class inheriting from Yantra::Workflow.
-    # @param args [Array] Positional arguments to pass to the workflow's #initialize and #perform.
-    # @param kwargs [Hash] Keyword arguments to pass to the workflow's #initialize and #perform.
-    #   Note: :globals will be extracted if present and stored separately.
-    # @return [String] The UUID of the newly created workflow.
-    # @raise [ArgumentError] if workflow_klass is not a valid Yantra::Workflow subclass.
-    # @raise [Yantra::Errors::PersistenceError] if saving any part fails.
+    # (Implementation remains the same as before)
     def self.create_workflow(workflow_klass, *args, **kwargs)
       # 1. Validate Input
       unless workflow_klass.is_a?(Class) && workflow_klass < Yantra::Workflow
@@ -29,7 +21,6 @@ module Yantra
       end
 
       # 2. Instantiate Workflow & Build Graph & Calculate Terminal Status
-      # The Workflow#initialize method now calls #perform and #calculate_terminal_status! internally
       puts "INFO: Instantiating workflow #{workflow_klass}..."
       wf_instance = workflow_klass.new(*args, **kwargs)
       puts "INFO: Workflow instance created and processed with #{wf_instance.jobs.count} jobs and #{wf_instance.dependencies.keys.count} jobs having dependencies."
@@ -38,8 +29,7 @@ module Yantra
       repo = Yantra.repository
 
       # --- Persistence ---
-      # TODO: Consider wrapping these steps in a transaction for adapters that support it (like SQL).
-      # repo.transaction do ... end
+      # TODO: Consider wrapping these steps in a transaction
 
       # 4. Persist the Workflow record itself
       puts "INFO: Persisting workflow record (ID: #{wf_instance.id})..."
@@ -52,7 +42,6 @@ module Yantra
       jobs_to_persist = wf_instance.jobs
       if jobs_to_persist.any?
         puts "INFO: Persisting #{jobs_to_persist.count} job records via bulk..."
-        # Use the bulk persistence method defined in the interface/adapter
         unless repo.persist_jobs_bulk(jobs_to_persist)
           raise Yantra::Errors::PersistenceError, "Failed to bulk persist job records for workflow ID: #{wf_instance.id}"
         end
@@ -77,32 +66,67 @@ module Yantra
       wf_instance.id
     end
 
+    # --- Implemented Client Methods ---
+
+    # Starts a previously created workflow.
+    # This triggers the Orchestrator to find and enqueue initial jobs.
+    # @param workflow_id [String] The UUID of the workflow to start.
+    # @return [Boolean] true if the start process was initiated successfully, false otherwise.
+    def self.start_workflow(workflow_id)
+      puts "INFO: [Client] Requesting start for workflow #{workflow_id}..."
+      # Instantiate orchestrator (uses configured repo/worker adapters)
+      orchestrator = Core::Orchestrator.new
+      # Delegate to orchestrator's start method
+      orchestrator.start_workflow(workflow_id)
+    end
+
+    # Finds a workflow by its ID using the configured repository.
+    # @param workflow_id [String] The UUID of the workflow.
+    # @return [Object, nil] A representation of the workflow or nil if not found.
+    def self.find_workflow(workflow_id)
+      puts "INFO: [Client] Finding workflow #{workflow_id}..."
+      Yantra.repository.find_workflow(workflow_id)
+    end
+
+    # Finds a job by its ID using the configured repository.
+    # @param job_id [String] The UUID of the job.
+    # @return [Object, nil] A representation of the job or nil if not found.
+    def self.find_job(job_id)
+      puts "INFO: [Client] Finding job #{job_id}..."
+      Yantra.repository.find_job(job_id)
+    end
+
+    # Retrieves jobs associated with a workflow, optionally filtered by status.
+    # @param workflow_id [String] The UUID of the workflow.
+    # @param status [Symbol, String, nil] Filter jobs by this state if provided.
+    # @return [Array<Object>] An array of job representations.
+    def self.get_workflow_jobs(workflow_id, status: nil)
+      puts "INFO: [Client] Getting jobs for workflow #{workflow_id} (status: #{status})..."
+      Yantra.repository.get_workflow_jobs(workflow_id, status: status)
+    end
+
     # --- Placeholder for Other Client Methods ---
-    # These would be implemented based on Design Doc Section 6
 
-    # def self.start_workflow(workflow_id)
-    #   puts "INFO: Starting workflow #{workflow_id}..."
-    #   # orchestrator = Core::Orchestrator.new(Yantra.repository) # Get orchestrator instance
-    #   # orchestrator.start_workflow(workflow_id)
-    #   raise NotImplementedError, "#{self.class.name}.start_workflow is not implemented"
+    # def self.list_workflows(status: nil, limit: 50, offset: 0)
+    #   puts "INFO: [Client] Listing workflows..."
+    #   Yantra.repository.list_workflows(status: status, limit: limit, offset: offset)
     # end
 
-    # def self.find_workflow(workflow_id)
-    #   puts "INFO: Finding workflow #{workflow_id}..."
-    #   Yantra.repository.find_workflow(workflow_id)
+    # def self.cancel_workflow(workflow_id)
+    #   puts "INFO: [Client] Requesting cancellation for workflow #{workflow_id}..."
+    #   # orchestrator = Core::Orchestrator.new
+    #   # orchestrator.cancel_workflow(workflow_id) # Need cancel method on orchestrator
+    #   raise NotImplementedError
     # end
 
-    # def self.find_job(job_id)
-    #   puts "INFO: Finding job #{job_id}..."
-    #   Yantra.repository.find_job(job_id)
+    # def self.retry_failed_jobs(workflow_id)
+    #   puts "INFO: [Client] Requesting retry for failed jobs in workflow #{workflow_id}..."
+    #   # orchestrator = Core::Orchestrator.new
+    #   # orchestrator.retry_failed_jobs(workflow_id) # Need retry method on orchestrator
+    #   raise NotImplementedError
     # end
 
-    # def self.get_workflow_jobs(workflow_id, status: nil)
-    #   puts "INFO: Getting jobs for workflow #{workflow_id} (status: #{status})..."
-    #   Yantra.repository.get_workflow_jobs(workflow_id, status: status)
-    # end
-
-    # ... implement other methods like cancel, retry, recover, delete ...
+    # ... etc ...
 
   end
 end
