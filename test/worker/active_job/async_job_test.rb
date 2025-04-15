@@ -47,17 +47,21 @@ module Yantra
             @arguments = { data: 10, multiplier: 2 }
 
             # Mock object returned by repo.find_job
+            # Using OpenStruct for simplicity, could also be a Minitest::Mock
             @mock_job_record = OpenStruct.new(
               id: @job_id,
               workflow_id: @workflow_id,
               klass: @job_klass_name,
-              state: :enqueued, # Start as enqueued
+              state: :enqueued, # Start as enqueued by default
               arguments: @arguments.transform_keys(&:to_s), # Simulate string keys from JSON
               queue_name: 'default'
             )
 
             # Instantiate the actual job we are testing
             @async_job_instance = AsyncJob.new
+            # Mock ActiveJob's executions counter for retry tests
+            # Default to 1 unless overridden in test
+            @async_job_instance.executions = 1
           end
 
           def teardown
@@ -71,7 +75,7 @@ module Yantra
           def run_perform_with_stubs(&block)
              Yantra.stub(:repository, @mock_repo) do
                Yantra::Core::Orchestrator.stub(:new, @mock_orchestrator_instance) do
-                  yield
+                  yield # Run the test expectations and action
                end
              end
           end
@@ -81,7 +85,7 @@ module Yantra
 
           def test_perform_success_path
             # Arrange
-            expected_output = "Success output with 20" # 10 * 2
+            expected_output = "Success output with 20"
             @mock_job_record.state = :enqueued # Ensure starting state
 
             run_perform_with_stubs do
@@ -106,12 +110,16 @@ module Yantra
             end # Stubs are removed here
           end
 
-          def test_perform_user_job_failure_path
-            # Arrange
+          def test_perform_user_job_failure_path_allows_retry
+            # Arrange: Simulate first failure (attempt 1 < max 3)
             failing_job_klass_name = "AsyncFailureJob"
             @mock_job_record.klass = failing_job_klass_name
             @mock_job_record.state = :enqueued
-            # Note: @arguments still includes :multiplier which AsyncFailureJob doesn't accept
+            @async_job_instance.executions = 1 # Set attempt number
+
+            # Mock the user job class method for max attempts (example)
+            # Need a way to access user_job_klass within stub block, maybe pass it?
+            # Or mock Yantra.configuration.default_max_job_attempts = 3
 
             run_perform_with_stubs do
               # Expectations on Repository
@@ -120,18 +128,39 @@ module Yantra
               @mock_repo.expect(:update_job_attributes, true) do |jid, attrs, opts|
                  jid == @job_id && attrs[:state] == Yantra::Core::StateMachine::RUNNING.to_s && attrs[:started_at].is_a?(Time) && opts == { expected_old_state: :enqueued }
               end
+              # Expect Yantra's internal retry counter to be incremented
+              @mock_repo.expect(:increment_job_retries, true, [@job_id]) # <<< ADDED EXPECTATION
 
-              # --- Execution of user perform will raise ArgumentError ---
+              # --> Expect NO update to :failed state
+              # --> Expect NO call to record_job_error
+              # --> Expect NO call to set_workflow_has_failures_flag
+              # --> Expect NO call to orchestrator.job_finished
 
-              # Expect update to failed state (AFTER ArgumentError is caught)
+              # Act & Assert: Expect the original error to be re-raised for AJ backend
+              assert_raises(ArgumentError, /unknown keyword: :multiplier/) do
+                @async_job_instance.perform(@job_id, @workflow_id, failing_job_klass_name)
+              end
+            end # Stubs are removed here
+          end
+
+          def test_perform_user_job_failure_path_reaches_max_attempts
+            # Arrange: Simulate final failure (attempt 3 >= max 3)
+            failing_job_klass_name = "AsyncFailureJob"
+            @mock_job_record.klass = failing_job_klass_name
+            @mock_job_record.state = :running # Assume it was running from previous attempt
+            @async_job_instance.executions = 3 # Set attempt number to max (using default of 3)
+
+            run_perform_with_stubs do
+              # Expectations on Repository
+              @mock_repo.expect(:find_job, @mock_job_record, [@job_id])
+              # Expect NO update to running state (already running)
+              # Expect update to failed state (AFTER ArgumentError is caught and max attempts check)
               @mock_repo.expect(:update_job_attributes, true) do |jid, attrs, opts|
                  jid == @job_id && attrs[:state] == Yantra::Core::StateMachine::FAILED.to_s && attrs[:finished_at].is_a?(Time) && opts == { expected_old_state: :running }
               end
-              # Expect error details to be recorded - check for ArgumentError now
-              @mock_repo.expect(:record_job_error, true) do |jid, error| # <<< UPDATED EXPECTATION
-                 jid == @job_id &&
-                 error.is_a?(ArgumentError) && # <<< Check for ArgumentError
-                 error.message.include?("unknown keyword: :multiplier") # <<< Check specific message
+              # Expect error details to be recorded
+              @mock_repo.expect(:record_job_error, true) do |jid, error|
+                 jid == @job_id && error.is_a?(ArgumentError) && error.message.include?("unknown keyword: :multiplier")
               end
               # Expect workflow failure flag to be set
               @mock_repo.expect(:set_workflow_has_failures_flag, true, [@workflow_id])
@@ -144,20 +173,25 @@ module Yantra
             end # Stubs are removed here
           end
 
+
+          # --- Renamed and Fixed Test ---
+          def test_perform_does_nothing_if_job_is_terminal
+             run_perform_with_stubs do
+               # Arrange: find_job returns job in a terminal state
+               @mock_job_record.state = :succeeded # Set terminal state
+               @mock_repo.expect(:find_job, @mock_job_record, [@job_id])
+               # --> Expect NO other repo/orchestrator calls
+
+               # Act
+               @async_job_instance.perform(@job_id, @workflow_id, @job_klass_name)
+             end
+             # Assertions handled by mock verification
+          end
+
           def test_perform_does_nothing_if_job_not_found
              run_perform_with_stubs do
                # Arrange: find_job returns nil
                @mock_repo.expect(:find_job, nil, [@job_id])
-               # Act
-               @async_job_instance.perform(@job_id, @workflow_id, @job_klass_name)
-             end
-          end
-
-          def test_perform_does_nothing_if_job_not_enqueued
-             run_perform_with_stubs do
-               # Arrange: find_job returns job in wrong state
-               @mock_job_record.state = :running
-               @mock_repo.expect(:find_job, @mock_job_record, [@job_id])
                # Act
                @async_job_instance.perform(@job_id, @workflow_id, @job_klass_name)
              end
@@ -176,9 +210,9 @@ module Yantra
              end
           end
 
-          # TODO: Add test for NameError when user job class cannot be found
-          # TODO: Add test for ArgumentError when user perform has wrong signature (covered slightly by failure test now)
-          # TODO: Add tests for retry logic once implemented
+          # TODO: Add test for NameError when user job class cannot be found (JobDefinitionError)
+          # TODO: Add test for ArgumentError when user perform has wrong signature (covered by failure test now)
+          # TODO: Add tests for retry logic with different max_attempts config
 
         end
 
