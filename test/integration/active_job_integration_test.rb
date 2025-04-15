@@ -1,5 +1,5 @@
 # --- test/integration/active_job_integration_test.rb ---
-# (Comment out unreliable retry count, queue size, and enqueued_with assertions in Assert 2)
+# (Added assertions for workflow completion in success test for Phase 6 TDD)
 
 require "test_helper"
 
@@ -124,18 +124,23 @@ module Yantra
 
       # --- Test Cases ---
 
+      # --- UPDATED FOR PHASE 6 TDD ---
       def test_linear_workflow_success_end_to_end
          # Arrange
          workflow_id = Client.create_workflow(LinearSuccessWorkflow)
+
          # Act 1: Start
          Client.start_workflow(workflow_id)
+
          # Assert 1: Job A enqueued
          assert_equal 1, enqueued_jobs.size
          job_a_record = Persistence::ActiveRecord::JobRecord.find_by!(workflow_id: workflow_id, klass: "IntegrationJobA")
          assert_enqueued_with(job: Worker::ActiveJob::AsyncJob, args: [job_a_record.id, workflow_id, "IntegrationJobA"])
          assert_equal "enqueued", job_a_record.reload.state
+
          # Act 2: Perform Job A
          perform_enqueued_jobs
+
          # Assert 2: Job A succeeded, Job B enqueued
          job_a_record.reload
          assert_equal "succeeded", job_a_record.state
@@ -144,18 +149,28 @@ module Yantra
          job_b_record = Persistence::ActiveRecord::JobRecord.find_by!(workflow_id: workflow_id, klass: "IntegrationJobB")
          assert_enqueued_with(job: Worker::ActiveJob::AsyncJob, args: [job_b_record.id, workflow_id, "IntegrationJobB"])
          assert_equal "enqueued", job_b_record.reload.state
+
          # Act 3: Perform Job B
          perform_enqueued_jobs
-         # Assert 3: Job B succeeded, Workflow succeeded
+
+         # Assert 3: Job B succeeded, Queue empty
          job_b_record.reload
          assert_equal "succeeded", job_b_record.state
          assert_equal({ "output_b" => "A_OUT_WORLD" }, job_b_record.output)
          assert_equal 0, enqueued_jobs.size
+
+         # --- PHASE 6 TDD ASSERTIONS ---
+         # Now, assert that the Orchestrator correctly marked the workflow as succeeded
+         # These assertions will FAIL until Orchestrator#job_finished implements
+         # the workflow completion check logic.
          wf_record = Persistence::ActiveRecord::WorkflowRecord.find(workflow_id)
-         assert_equal "succeeded", wf_record.state
-         refute wf_record.has_failures
-         refute_nil wf_record.finished_at
+         assert_equal "succeeded", wf_record.state, "Workflow state should be 'succeeded' after last job finishes"
+         refute wf_record.has_failures, "Workflow should not have failures flag set"
+         refute_nil wf_record.finished_at, "Workflow finished_at should be set"
+         # --- END PHASE 6 TDD ASSERTIONS ---
       end
+      # --- END UPDATED TEST ---
+
 
       def test_linear_workflow_failure_end_to_end
          # Arrange
@@ -180,6 +195,7 @@ module Yantra
          assert_equal "cancelled", job_a_record.reload.state
          refute_nil job_a_record.finished_at
          # Assert 3: Workflow failed
+         # NOTE: This assertion ALREADY tests part of Phase 6 (workflow failure state)
          assert_equal 0, enqueued_jobs.size
          wf_record = Persistence::ActiveRecord::WorkflowRecord.find(workflow_id)
          assert_equal "failed", wf_record.state
@@ -233,9 +249,12 @@ module Yantra
         # Output check depends on how inputs are passed; assuming direct hash for now
         # assert_equal({"output_d"=>"A_OUT_B-c"}, job_d_record.output) # Check output based on dummy job logic
         assert_equal 0, enqueued_jobs.size
+        # --- PHASE 6 TDD ASSERTIONS (Complex Graph) ---
         wf_record = Persistence::ActiveRecord::WorkflowRecord.find(workflow_id)
-        assert_equal "succeeded", wf_record.state
+        assert_equal "succeeded", wf_record.state, "Complex workflow state should be 'succeeded'"
         refute wf_record.has_failures
+        refute_nil wf_record.finished_at
+        # --- END PHASE 6 TDD ASSERTIONS ---
       end
 
 
@@ -255,46 +274,25 @@ module Yantra
          assert_equal "enqueued", job_r_record.reload.state
 
          # Act 2: Perform Job R (Attempt 1 - Fails)
-         # perform_enqueued_jobs will run the job, it will raise, RetryHandler re-raises, AJ catches and reschedules
          assert_raises(StandardError, /Integration job failed on attempt 1/) do
             perform_enqueued_jobs
          end
 
-         # Assert 2: Job R still running in Yantra state, job re-enqueued by AJ
+         # Assert 2: Verify job state after failed attempt
          job_r_record.reload
-         assert_equal "running", job_r_record.state # State remains running during backend retry
-         # --- COMMENTED OUT / REMOVED UNRELIABLE ASSERTION ---
-         # assert_equal 1, job_r_record.retries
-         # --- END COMMENT OUT ---
-         # --- COMMENTED OUT / REMOVED UNRELIABLE ASSERTION ---
-         # assert_equal 1, enqueued_jobs.size
-         # --- END COMMENT OUT ---
-         # --- COMMENTED OUT / REMOVED UNRELIABLE ASSERTION ---
-         # We can't reliably assert *that* it was enqueued immediately after the exception
-         # using the test helper's state.
-         # assert_enqueued_with(job: Worker::ActiveJob::AsyncJob, args: [job_r_record.id, workflow_id, "IntegrationJobRetry"])
-         # --- END COMMENT OUT ---
-
+         assert_equal "running", job_r_record.state
+         # Assertions for retries count, queue state etc removed due to unreliability
 
          # Act 3: Perform Job R (Attempt 2 - Succeeds)
-         # We need to ensure the job *is* actually in the queue for the test adapter to run.
-         # Since assert_enqueued_with was unreliable, let's clear and manually re-enqueue
-         # for the purpose of this test step, simulating what the AJ backend would do.
-         # NOTE: This makes the test slightly less pure, but necessary due to test helper limitations.
          clear_enqueued_jobs
          Worker::ActiveJob::AsyncJob.set(queue: job_r_record.queue || 'default').perform_later(job_r_record.id, workflow_id, "IntegrationJobRetry")
-         # Now perform the job we just put in the queue
-         perform_enqueued_jobs # Runs the re-enqueued job
+         perform_enqueued_jobs # Runs the re-enqueued job (Attempt 2)
 
          # Assert 3: Job R succeeded, Job A enqueued
          job_r_record.reload
          assert_equal "succeeded", job_r_record.state
-         assert_equal({"output_retry"=>"Success on attempt 2"}, job_r_record.output) # Check output
-         # --- COMMENTED OUT / REMOVED UNRELIABLE ASSERTION ---
-         # assert_equal 1, job_r_record.retries
-         # --- END COMMENT OUT ---
-         # After success, the *next* job should be enqueued
-         assert_equal 1, enqueued_jobs.size # Job A should be enqueued now
+         assert_equal({"output_retry"=>"Success on attempt 2"}, job_r_record.output)
+         assert_equal 1, enqueued_jobs.size # Check Job A is now in the queue
          job_a_record = Persistence::ActiveRecord::JobRecord.find_by!(workflow_id: workflow_id, klass: "IntegrationJobA")
          assert_enqueued_with(job: Worker::ActiveJob::AsyncJob, args: [job_a_record.id, workflow_id, "IntegrationJobA"])
 
@@ -303,9 +301,12 @@ module Yantra
 
          # Assert 4: Workflow succeeds
          assert_equal 0, enqueued_jobs.size
+         # --- PHASE 6 TDD ASSERTIONS (Retry Workflow) ---
          wf_record = Persistence::ActiveRecord::WorkflowRecord.find(workflow_id)
-         assert_equal "succeeded", wf_record.state
+         assert_equal "succeeded", wf_record.state, "Retry workflow state should be 'succeeded'"
          refute wf_record.has_failures
+         refute_nil wf_record.finished_at
+         # --- END PHASE 6 TDD ASSERTIONS ---
       end
 
       # TODO: Add tests for workflows with retries that ultimately fail
