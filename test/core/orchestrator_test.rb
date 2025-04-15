@@ -246,11 +246,6 @@ module Yantra
            @orchestrator.start_workflow(@workflow_id)
         end
       end
-
-      # TODO: Add test for job cancellation cancelling dependents (If needed, covered by failure?)
-      # TODO: Add test for error handling in job_finished (e.g., repo methods return false/raise errors)
-      # TODO: Add test for error handling in cancel_downstream_jobs
-
     end
   end
 end
