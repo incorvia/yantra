@@ -31,7 +31,7 @@ module Yantra
     class PersistenceError < Yantra::Error; end
 
     # Optional: A generic error for worker adapter issues.
-    # class WorkerError < Yantra::Error; end
+    class WorkerError < Yantra::Error; end
   end
 end
 

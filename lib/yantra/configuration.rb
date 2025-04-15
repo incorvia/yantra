@@ -1,128 +1,121 @@
 # lib/yantra/configuration.rb
 
+require 'singleton'
 require 'logger'
-require 'singleton' # Using stdlib Singleton for simplicity
+# Attempt to load ActiveSupport::Notifications for default notifier, but don't fail if not present
+begin
+  require 'active_support/notifications'
+rescue LoadError
+  # ActiveSupport not available
+end
 
 module Yantra
-  # Manages Yantra configuration options.
-  # Provides a singleton instance accessible via `Yantra.configuration`.
-  # Configuration is typically done via an initializer using `Yantra.configure`.
+  # Handles configuration settings for the Yantra gem.
+  # Access the singleton instance via `Yantra.configuration` or `Yantra::Configuration.instance`.
   #
-  # Example:
+  # @example
   #   Yantra.configure do |config|
-  #     config.persistence_adapter = :sql
-  #     config.sql_connection_details = ENV['DATABASE_URL']
-  #     config.redis_namespace = 'my_app_flow'
+  #     config.persistence_adapter = :redis # Override default
+  #     config.worker_adapter = :sidekiq # Override default
+  #     config.redis_url = "redis://my-redis:6379/2"
   #     config.logger.level = Logger::DEBUG
   #   end
   class Configuration
-    include Singleton # Ensures only one instance of configuration exists
+    include Singleton # Use Singleton pattern for easy global access
 
-    # --- Available Configuration Options ---
+    # --- Persistence Configuration ---
 
-    # Specifies the persistence adapter to use. The core library will
-    # attempt to load and instantiate the corresponding adapter class
-    # from Yantra::Persistence (e.g., :redis loads RedisAdapter).
-    # @return [Symbol] The adapter type (e.g., :redis, :sql).
-    # Default: :redis
+    # Symbol identifying the chosen persistence adapter (:redis, :active_record).
+    # Adapters must implement Yantra::Persistence::RepositoryInterface.
+    # Default: `:active_record`
     attr_accessor :persistence_adapter
 
-    # URL string for connecting to the Redis server.
-    # Used by the RedisAdapter if `persistence_adapter` is :redis.
-    # Defaults check common environment variables.
-    # @return [String] Redis connection URL.
-    # Default: ENV['YANTRA_REDIS_URL'] || ENV['REDIS_URL'] || 'redis://localhost:6379'
+    # Connection URL for the Redis adapter. Used if `persistence_adapter` is `:redis`.
+    # Reads from ENV['YANTRA_REDIS_URL'] then ENV['REDIS_URL'] as fallbacks.
+    # Default: `'redis://localhost:6379/0'`
     attr_accessor :redis_url
 
-    # A hash of additional options to pass to the underlying Redis client
-    # during initialization (e.g., { ssl_params: { ca_file: '...' } }).
-    # @return [Hash] Additional Redis client options.
-    # Default: {}
+    # Additional options hash passed directly to `Redis.new`.
+    # See Redis gem documentation for available options (e.g., :ssl_params, :timeout).
+    # Default: `{}`
     attr_accessor :redis_options
 
-    # Connection details for SQL databases (e.g., PostgreSQL, MySQL).
-    # Used by the SqlAdapter if `persistence_adapter` is :sql.
-    # Can be a connection string URL or potentially a hash of options
-    # depending on the underlying ORM/library used by the adapter.
-    # Defaults check common environment variables.
-    # @return [String, Hash, nil] SQL connection details.
-    # Default: ENV['YANTRA_DATABASE_URL'] || ENV['DATABASE_URL']
-    attr_accessor :sql_connection_details
-
-    # The logger instance Yantra should use for internal logging.
-    # Must respond to standard logger methods like :info, :warn, :error, :debug.
-    # @return [Logger] Logger instance.
-    # Default: Logger.new(STDOUT, level: Logger::INFO)
-    attr_accessor :logger
-
-    # The backend responsible for publishing Yantra lifecycle events.
-    # Must respond to `publish(event_name, payload)`.
-    # If ActiveSupport::Notifications is available, it's used by default.
-    # Otherwise, a simple null notifier is used.
-    # @return [Object] The notification backend.
-    attr_accessor :notification_backend
-
-    # A namespace prefix added to all Redis keys used by Yantra.
-    # Helps avoid key collisions if the Redis instance is shared.
-    # @return [String] The namespace string.
-    # Default: "yantra"
+    # Namespace prefix for all Redis keys used by Yantra.
+    # Default: `'yantra'`
     attr_accessor :redis_namespace
 
-    def self.reset!
-      Singleton.__init__(self) # Re-initialize the singleton state
-      instance.send(:initialize) # Re-run initialize to set defaults
+    # Note: ActiveRecord connection details are NOT configured here.
+    # The ActiveRecord adapter assumes connection management via the host
+    # application's setup (e.g., Rails' database.yml and connection pools).
+
+    # --- Worker Configuration ---
+
+    # Symbol identifying the chosen background worker adapter (:sidekiq, :resque, :active_job).
+    # Adapters must implement Yantra::Worker::EnqueuingInterface.
+    # Default: `:active_job`
+    attr_accessor :worker_adapter
+
+    # TODO: Add configuration options specific to worker adapters if needed,
+    # e.g., default Sidekiq options hash.
+
+    # --- General Configuration ---
+
+    # Logger instance used by Yantra components. Must adhere to Ruby Logger interface.
+    # Default: `Logger.new($stdout, level: Logger::INFO)`
+    attr_accessor :logger
+
+    # Backend used for emitting lifecycle events (e.g., `yantra.workflow.started`).
+    # Must respond to `instrument(event_name, payload = {})`.
+    # Default: `ActiveSupport::Notifications` if available, otherwise `nil`.
+    attr_accessor :notification_backend
+
+    # Internal: Initialize with default values.
+    def initialize
+      set_defaults
     end
 
-    # --- Initialization ---
-    def initialize
-      # Set default values for all configuration options
-      @persistence_adapter = :redis # Default adapter
-      @redis_url = ENV['YANTRA_REDIS_URL'] || ENV['REDIS_URL'] || 'redis://localhost:6379'
-      @redis_options = {} # Options passed to Redis.new
-      @redis_namespace = 'yantra' # Namespace for Redis keys
-
-      # ActiveRecord adapter uses Rails' connection by default, no separate config needed here.
-
-      @logger = Logger.new(STDOUT)
-      @logger.level = Logger::INFO # Default log level
-
-      @notification_backend = default_notification_backend # For Yantra events
+    # Resets configuration to defaults. Primarily useful for testing.
+    def self.reset!
+      instance.send(:set_defaults) # Call private method on the singleton instance
     end
 
     private
 
-    # Provides a default notification backend. Prefers ActiveSupport::Notifications
-    # if it's loaded, otherwise provides a simple null object that does nothing.
+    # Sets the default values for all configuration options.
+    def set_defaults
+      # Persistence Defaults
+      @persistence_adapter = :active_record # <<< UPDATED DEFAULT
+      @redis_url = ENV['YANTRA_REDIS_URL'] || ENV['REDIS_URL'] || 'redis://localhost:6379/0'
+      @redis_options = {}
+      @redis_namespace = 'yantra'
+
+      # Worker Defaults
+      @worker_adapter = :active_job # <<< UPDATED DEFAULT
+
+      # General Defaults
+      @logger = Logger.new($stdout) # Default logger to standard output
+      @logger.level = Logger::INFO  # Default log level
+      @notification_backend = default_notification_backend
+    end
+
+    # Detects a suitable default notification backend.
+    # @return [Object, nil] ActiveSupport::Notifications or nil.
     def default_notification_backend
-      if defined?(ActiveSupport::Notifications)
-        ActiveSupport::Notifications
-      else
-        # Simple fallback notifier (Null Object pattern)
-        Object.new.tap do |notifier|
-          def notifier.publish(_event_name, _payload)
-            # No-op
-          end
-        end
-      end
+      defined?(ActiveSupport::Notifications) ? ActiveSupport::Notifications : nil
     end
   end
 
   # --- Convenience Accessors ---
+  # These methods are typically defined in the main gem file (e.g., lib/yantra.rb)
+  # but are shown here for context on how the Configuration singleton is accessed.
+  #
+  # def self.configuration
+  #   Configuration.instance
+  # end
+  #
+  # def self.configure
+  #   yield(configuration)
+  # end
 
-  # Provides global access to the singleton configuration instance.
-  # @return [Yantra::Configuration]
-  def self.configuration
-    Configuration.instance
-  end
-
-  # Allows configuration settings to be modified via a block.
-  # Typically used in an initializer file (e.g., config/initializers/yantra.rb).
-  #   Yantra.configure do |config|
-  #     config.persistence_adapter = :sql
-  #     # ... other settings
-  #   end
-  def self.configure
-    yield(configuration)
-  end
 end
 

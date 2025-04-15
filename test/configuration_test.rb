@@ -30,10 +30,9 @@ class ConfigurationTest < Minitest::Test
   def test_default_configuration_values
     config = Yantra.configuration
 
-    assert_equal :redis, config.persistence_adapter
-    assert_equal 'redis://localhost:6379', config.redis_url # Assuming no relevant ENV vars set
+    assert_equal :active_record, config.persistence_adapter
+    assert_equal 'redis://localhost:6379/0', config.redis_url # Assuming no relevant ENV vars set
     assert_equal({}, config.redis_options)
-    assert_nil config.sql_connection_details # Assuming no relevant ENV vars set
     assert_instance_of Logger, config.logger
     assert_equal Logger::INFO, config.logger.level
     assert_equal 'yantra', config.redis_namespace
@@ -48,7 +47,6 @@ class ConfigurationTest < Minitest::Test
       config.redis_namespace = 'my_test_app'
       config.logger.level = Logger::DEBUG
       config.redis_options = { timeout: 5 }
-      config.sql_connection_details = 'postgresql://localhost/test_db'
     end
 
     config = Yantra.configuration
@@ -57,14 +55,13 @@ class ConfigurationTest < Minitest::Test
     assert_equal 'my_test_app', config.redis_namespace
     assert_equal Logger::DEBUG, config.logger.level
     assert_equal({ timeout: 5 }, config.redis_options)
-    assert_equal 'postgresql://localhost/test_db', config.sql_connection_details
 
     # Check a default value wasn't accidentally changed
-    assert_equal 'redis://localhost:6379', config.redis_url
+    assert_equal 'redis://localhost:6379/0', config.redis_url
   end
 
   def test_redis_url_uses_environment_variables_in_order
-    default_url = 'redis://localhost:6379'
+    default_url = 'redis://localhost:6379/0'
     env_redis_url = 'redis://env-redis:1111'
     env_yantra_redis_url = 'redis://yantra-env-redis:2222'
 
