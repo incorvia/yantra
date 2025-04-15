@@ -47,6 +47,19 @@ class InvalidJobClassWorkflow < Yantra::Workflow
   end
 end
 
+# Workflow for testing dynamic dependencies
+class DynamicDepWorkflow < Yantra::Workflow
+  def perform(count: 3)
+    job_a_refs = (1..count).map do |i|
+      # Run job without explicit name, collect returned reference symbol
+      run TestJobA, params: { index: i }
+    end
+    # This job should depend on all JobA instances created above
+    run TestJobB, name: :final_job, after: job_a_refs
+  end
+end
+
+
 # --- Workflow Test Class ---
 
 # Use standard Minitest::Test, no AR needed
@@ -55,22 +68,51 @@ class WorkflowTest < Minitest::Test
   def test_initialization_stores_arguments_and_globals
     wf = ComplexTestWorkflow.new(123, key_arg: 'abc', globals: { g: 1 })
     assert_equal [123], wf.arguments
-    # Note: :globals is extracted, remaining kwargs are stored
     assert_equal({ key_arg: 'abc' }, wf.kwargs)
     assert_equal({ g: 1 }, wf.globals)
     assert_kind_of String, wf.id
     assert_equal ComplexTestWorkflow, wf.klass
   end
 
+  def test_dsl_run_method_returns_reference_symbol # <<< NEW TEST (or assertion)
+    wf = ComplexTestWorkflow.new(100)
+    # Manually run one step to check return value
+    # Need to call perform first to initialize internal state used by run
+    # wf.perform(100) # Or just instantiate, as initialize calls perform
+
+    # Re-instantiate to test within perform context implicitly called by initialize
+    wf_instance = Class.new(Yantra::Workflow) do
+      attr_reader :return_value_test
+      def perform
+        @return_value_test = run TestJobA, name: :first_job
+        run TestJobB, after: :first_job
+      end
+    end.new
+
+    assert_equal :first_job, wf_instance.return_value_test, "run method should return the reference symbol"
+
+    # Test generated name return value
+    wf_instance_gen = Class.new(Yantra::Workflow) do
+       attr_reader :return_value_gen1, :return_value_gen2
+       def perform
+         @return_value_gen1 = run TestJobA # Returns :TestJobA
+         @return_value_gen2 = run TestJobA # Returns :TestJobA_1
+       end
+    end.new
+    assert_equal :TestJobA, wf_instance_gen.return_value_gen1
+    assert_equal :TestJobA_1, wf_instance_gen.return_value_gen2
+
+  end
+
+
   def test_dsl_builds_jobs_correctly
     wf = ComplexTestWorkflow.new(100) # Pass positional arg
     assert_equal 4, wf.jobs.count, "Should create 4 job instances"
 
-    # Check job attributes created by the DSL
     job_a = wf.find_job_by_ref('task_a')
     job_b = wf.find_job_by_ref('task_b')
     job_c = wf.find_job_by_ref('task_c')
-    job_d = wf.find_job_by_ref('task_d') # This is the second TestJobA instance
+    job_d = wf.find_job_by_ref('task_d')
 
     refute_nil job_a
     refute_nil job_b
@@ -80,14 +122,13 @@ class WorkflowTest < Minitest::Test
     assert_instance_of TestJobA, job_a
     assert_instance_of TestJobB, job_b
     assert_instance_of TestJobC, job_c
-    assert_instance_of TestJobA, job_d # Check reused class
+    assert_instance_of TestJobA, job_d
 
     assert_equal({ p: 100 }, job_a.arguments)
-    assert_equal({ p: 'default' }, job_b.arguments) # Uses default kwarg value
+    assert_equal({ p: 'default' }, job_b.arguments)
     assert_equal({}, job_c.arguments)
     assert_equal({}, job_d.arguments)
 
-    # Check that jobs have unique IDs and correct workflow ID
     all_ids = wf.jobs.map(&:id)
     assert_equal 4, all_ids.uniq.count, "Job IDs should be unique"
     assert wf.jobs.all? { |j| j.workflow_id == wf.id }, "All jobs should have correct workflow ID"
@@ -100,64 +141,68 @@ class WorkflowTest < Minitest::Test
     job_c = wf.find_job_by_ref('task_c')
     job_d = wf.find_job_by_ref('task_d')
 
-    # Check the @dependencies hash structure
     assert_equal [job_a.id], wf.dependencies[job_b.id]
     assert_equal [job_a.id], wf.dependencies[job_c.id]
-    # Use sort for comparison as order doesn't matter for dependencies
     assert_equal [job_b.id, job_c.id].sort, wf.dependencies[job_d.id].sort
-    assert_nil wf.dependencies[job_a.id], "Job A should have no dependencies"
-    assert_equal 3, wf.dependencies.keys.count # Only jobs B, C, D have dependency entries
+    assert_nil wf.dependencies[job_a.id]
+    assert_equal 3, wf.dependencies.keys.count
   end
 
   def test_find_job_by_ref_works
     wf = ComplexTestWorkflow.new
-    job_a_instance = wf.jobs.find { |j| j.dsl_name == 'task_a' } # Find instance reliably
+    job_a_instance = wf.jobs.find { |j| j.dsl_name == 'task_a' }
     refute_nil job_a_instance
     assert_equal job_a_instance, wf.find_job_by_ref('task_a')
     assert_nil wf.find_job_by_ref('non_existent_ref')
   end
 
   def test_run_raises_error_for_invalid_dependency_reference
-    # Checks that the `run` method fails if `after:` points to an unknown job ref
     assert_raises(Yantra::Errors::DependencyNotFound) do
       InvalidDependencyWorkflow.new
     end
   end
 
   def test_run_raises_error_for_non_job_class
-    # Checks that the `run` method validates the job class
     assert_raises(ArgumentError, /must be a Class inheriting from Yantra::Job/) do
       InvalidJobClassWorkflow.new
     end
   end
 
-  def test_calculate_terminal_status_marks_correct_jobs
-    # Test the complex workflow
+  def test_calculate_terminal_status_correctly_identifies_terminal_jobs
     wf_complex = ComplexTestWorkflow.new
+    job_d = wf_complex.find_job_by_ref('task_d')
     job_a = wf_complex.find_job_by_ref('task_a')
     job_b = wf_complex.find_job_by_ref('task_b')
     job_c = wf_complex.find_job_by_ref('task_c')
-    job_d = wf_complex.find_job_by_ref('task_d') # This is the only terminal job
 
-    # Note: calculate_terminal_status! should be called automatically by initialize now
     assert job_d.terminal?, "task_d should be terminal"
     refute job_a.terminal?, "task_a should not be terminal"
     refute job_b.terminal?, "task_b should not be terminal"
     refute job_c.terminal?, "task_c should not be terminal"
 
-    # Test the linear workflow
     wf_linear = LinearTestWorkflow.new
-    job_a_lin = wf_linear.find_job_by_ref('a')
-    job_b_lin = wf_linear.find_job_by_ref('b')
-    job_c_lin = wf_linear.find_job_by_ref('c') # This is terminal
-
-    assert job_c_lin.terminal?, "Job C (linear) should be terminal"
-    refute job_a_lin.terminal?, "Job A (linear) should not be terminal"
-    refute job_b_lin.terminal?, "Job B (linear) should not be terminal"
+    job_c_linear = wf_linear.find_job_by_ref('c')
+    job_b_linear = wf_linear.find_job_by_ref('b')
+    assert job_c_linear.terminal?, "Job C (linear) should be terminal"
+    refute job_b_linear.terminal?, "Job B (linear) should not be terminal"
   end
 
-  # Add tests for job name collision handling if that logic is refined
-  # Add tests for how globals are accessed if needed
+  def test_dynamic_dependencies_from_loop # <<< NEW TEST
+    # Arrange: Define workflow that creates jobs in a loop
+    wf = DynamicDepWorkflow.new(count: 3)
+
+    # Assert: Check jobs created
+    assert_equal 4, wf.jobs.count # 3 JobA, 1 JobB
+    job_a_instances = wf.jobs.select { |j| j.klass == TestJobA }
+    job_b_instance = wf.jobs.find { |j| j.klass == TestJobB }
+    assert_equal 3, job_a_instances.count
+    refute_nil job_b_instance
+
+    # Assert: Check dependencies for the final job
+    expected_dep_ids = job_a_instances.map(&:id).sort
+    actual_dep_ids = wf.dependencies[job_b_instance.id].sort
+    assert_equal expected_dep_ids, actual_dep_ids, "Final job should depend on all jobs created in loop"
+  end
 
 end
 

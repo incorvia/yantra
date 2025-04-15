@@ -33,17 +33,25 @@ module Yantra
       @kwargs = internal_state.fetch(:kwargs, kwargs)  # Load keyword args
       @state = internal_state.fetch(:state, :pending).to_sym # Load state, default pending
 
-      # Jobs and Dependencies are NOT loaded by default during rehydration
-      @jobs = []
-      @job_lookup = {}
-      @dependencies = {}
+      # Internal tracking during DAG definition
+      @jobs = [] # Holds Yantra::Job instances created by `run`
+      @job_lookup = {} # Maps internal DSL name/ref to Yantra::Job instance
+      @dependencies = {} # Maps job.id => [dependency_job_id, ...]
+      @job_name_counts = Hash.new(0) # <<< ADDED: Track counts for base names
 
-      # Run perform and calculate terminal status ONLY on initial creation
-      if !internal_state[:persisted] && !internal_state[:skip_setup]
-        perform(*@arguments, **@kwargs)
-        calculate_terminal_status!
-      elsif internal_state[:persisted]
+      # Rehydrate state if loaded from persistence
+      if internal_state[:persisted]
+        # Note: Jobs/Deps are NOT loaded by default anymore
         puts "INFO: Rehydrated workflow #{@id} (State: #{@state}). Jobs/Deps not loaded into memory."
+      end
+
+      # Run perform and calculate terminal status ONLY on initial creation,
+      # NOT during rehydration from persistence.
+      if !internal_state[:persisted] && !internal_state[:skip_setup]
+        # Call the subclass's perform method, passing through original args/kwargs
+        perform(*@arguments, **@kwargs)
+        # Calculate terminal status immediately after the graph is built
+        calculate_terminal_status!
       end
     end
 
@@ -65,13 +73,26 @@ module Yantra
         raise ArgumentError, "#{job_klass} must be a Class inheriting from Yantra::Job"
       end
 
-      # Determine unique reference name for DSL lookup
+      # --- UPDATED Name Collision Logic ---
       base_ref_name = (name || job_klass.to_s).to_s
       job_ref_name = base_ref_name
-      if @job_lookup.key?(job_ref_name)
-        count = @jobs.count { |j| (j.dsl_name || j.klass.to_s) == base_ref_name }
-        job_ref_name = "#{base_ref_name}_#{count}"
+      current_count = @job_name_counts[base_ref_name]
+
+      if current_count > 0 # Base name has been used before
+         job_ref_name = "#{base_ref_name}_#{current_count}"
       end
+      # Ensure generated name is also unique if user provides explicit conflicting name
+      # e.g. run JobA; run JobB, name: "JobA_1" <- could conflict
+      while @job_lookup.key?(job_ref_name)
+          current_count += 1
+          job_ref_name = "#{base_ref_name}_#{current_count}"
+          # Safety break, should not happen with incrementing count unless > MAX_INT jobs
+          break if current_count > 1_000_000
+      end
+      # Increment count for the base name for the *next* time it's used
+      @job_name_counts[base_ref_name] += 1
+      # --- END UPDATED Name Collision Logic ---
+
 
       job_id = SecureRandom.uuid
       job = job_klass.new(
@@ -79,16 +100,15 @@ module Yantra
         workflow_id: @id,
         klass: job_klass,
         arguments: params,
-        dsl_name: job_ref_name,
+        dsl_name: job_ref_name, # Store the potentially modified, unique name
         is_terminal: false # Default, calculated later by calculate_terminal_status!
       )
 
       @jobs << job
-      @job_lookup[job_ref_name] = job
+      @job_lookup[job_ref_name] = job # Store using the unique name
 
       # Resolve dependencies based on their DSL reference names
       dependency_ids = Array(after).map do |dep_ref|
-        # Allow passing job reference symbols/strings or job objects directly
         dep_job = find_job_by_ref(dep_ref.to_s)
         unless dep_job
           raise Yantra::Errors::DependencyNotFound, "Dependency '#{dep_ref}' not found for job '#{job_ref_name}'."
@@ -98,8 +118,7 @@ module Yantra
 
       @dependencies[job.id] = dependency_ids unless dependency_ids.empty?
 
-      # --- UPDATED RETURN VALUE ---
-      # Return the reference name (as a symbol) so it can be collected and used in `after:`
+      # Return the unique reference name (as a symbol)
       job_ref_name.to_sym
     end
 
