@@ -130,7 +130,30 @@ module Yantra
           job.update(attributes_hash)
         end
 
-        # ... (rest of the adapter methods: running_job_count, get_workflow_jobs, dependency methods, etc. remain the same) ...
+        # Updates multiple jobs to the 'cancelled' state efficiently using update_all.
+        # Only cancels jobs in cancellable states.
+        # @param job_ids [Array<String>] An array of job UUIDs to cancel.
+        # @return [Integer] The number of jobs actually updated/cancelled.
+        def cancel_jobs_bulk(job_ids)
+           return 0 if job_ids.nil? || job_ids.empty?
+
+           cancellable_states = [
+             Yantra::Core::StateMachine::PENDING.to_s,
+             Yantra::Core::StateMachine::ENQUEUED.to_s,
+             Yantra::Core::StateMachine::RUNNING.to_s
+           ]
+
+           # Use update_all to efficiently update matching jobs
+           updated_count = JobRecord.where(id: job_ids, state: cancellable_states).update_all(
+             state: Yantra::Core::StateMachine::CANCELLED.to_s,
+             finished_at: Time.current # Set finished time on cancellation
+             # updated_at is usually handled automatically by update_all if table has it
+           )
+           updated_count # Return the number of rows affected
+        rescue ::ActiveRecord::StatementInvalid, ::ActiveRecord::ActiveRecordError => e
+           # Catch potential DB or AR errors during bulk update.
+           raise Yantra::Errors::PersistenceError, "Bulk job cancellation failed: #{e.message}"
+        end
 
         def running_job_count(workflow_id)
           JobRecord.where(workflow_id: workflow_id, state: 'running').count
