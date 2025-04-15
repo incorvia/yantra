@@ -48,6 +48,7 @@ gem 'yantra'
 # gem 'redis'
 # gem 'pg' or gem 'sqlite3'
 # gem 'sidekiq' or gem 'resque'
+# gem 'activejob' (usually included with Rails)
 ```
 
 And then execute:
@@ -62,11 +63,11 @@ Configure Yantra in an initializer (e.g., `config/initializers/yantra.rb`):
 
 ```ruby
 Yantra.configure do |config|
-  # Choose your persistence backend adapter
-  config.persistence_adapter = :active_record # or :redis
+  # --- Persistence Adapter ---
+  # Choose your persistence backend (:active_record, :redis)
+  config.persistence_adapter = :active_record # Default
 
-  # --- Configure adapter-specific settings ---
-  # Example for Redis:
+  # Example for Redis (only needed if using :redis adapter):
   # config.redis_url = ENV['YANTRA_REDIS_URL'] || 'redis://localhost:6379/1'
   # config.redis_namespace = 'yantra_myapp'
   # config.redis_options = { ssl_params: { verify_mode: OpenSSL::SSL::VERIFY_NONE } }
@@ -75,15 +76,22 @@ Yantra.configure do |config|
   # No specific config needed by default if using Rails' connection management.
   # Yantra models will use the connection configured via database.yml / connects_to.
 
-  # --- Choose your background worker adapter ---
-  config.worker_adapter = :sidekiq # or :resque, :active_job, etc.
+  # --- Worker Adapter ---
+  # Choose your background worker integration (:active_job, :sidekiq, :resque)
+  config.worker_adapter = :active_job # Default
   # TODO: Add worker-specific config examples if needed
 
-  # --- Configure logging (optional) ---
+  # --- Retry Behavior ---
+  # Sets the default maximum number of attempts for jobs (including the first run).
+  # Can be overridden per job class by defining `self.yantra_max_attempts`.
+  config.default_max_job_attempts = 3 # Default is 3
+
+  # --- General Settings ---
+  # Configure logging (optional)
   # config.logger = Rails.logger # Or your custom logger
   # config.logger.level = Logger::DEBUG
 
-  # --- Configure event notification backend (optional) ---
+  # Configure event notification backend (optional)
   # Defaults to ActiveSupport::Notifications if available
   # config.notification_backend = MyCustomNotifier
 end
@@ -96,8 +104,13 @@ end
 ```ruby
 # app/workflows/jobs/fetch_user_data_job.rb
 class FetchUserDataJob < Yantra::Job
+  # Optional: Override max attempts for this specific job type
+  # def self.yantra_max_attempts; 5; end
+
   def perform(user_id:)
     puts "Fetching data for user #{user_id}"
+    # Simulate potential transient error
+    # raise Net::TimeoutError if rand(3) == 0
     # ... fetch logic ...
     { user_name: "User #{user_id}", fetched_at: Time.now } # Return output hash
   end
@@ -124,14 +137,12 @@ class UserReportWorkflow < Yantra::Workflow
   # Arguments passed to Client.create_workflow are received here
   def perform(user_id:, format: 'pdf', priority: 'low')
     # Use the run DSL to define jobs and dependencies
-    fetch_job = run FetchUserDataJob, name: :fetch, params: { user_id: user_id }
+    fetch_job_ref = run FetchUserDataJob, name: :fetch, params: { user_id: user_id }
 
     # GenerateReportJob runs after fetch_job completes.
     # TODO: Define how job outputs are accessed by dependents.
-    # Example assuming output is accessible via job instance (requires enhancement):
-    # run GenerateReportJob, name: :generate, params: { user_data: fetch_job.output, report_format: format }, after: :fetch
     # Alternative: Pass initial args if output passing isn't implemented
-    run GenerateReportJob, name: :generate, params: { user_id: user_id, report_format: format }, after: :fetch
+    run GenerateReportJob, name: :generate, params: { user_id: user_id, report_format: format }, after: fetch_job_ref
   end
 end
 ```
@@ -188,18 +199,14 @@ If using the `:active_record` persistence adapter in a Rails application:
 
 3.  **For ActiveRecord Tests:**
 
-    * Ensure necessary development gems are installed (`rails`, `activerecord`, `sqlite3`).
-
+    * Ensure necessary development gems are installed (`rails`, `activerecord`, `sqlite3`, `database_cleaner-active_record`).
     * Set up the dummy Rails app located in `test/dummy/`:
-
         ```bash
         cd test/dummy
         bundle install --binstubs
         cd ../..
         ```
-
     * Generate the test schema using the dummy app:
-
         ```bash
         cd test/dummy
         bin/rails generate yantra:install
@@ -207,9 +214,7 @@ If using the `:active_record` persistence adapter in a Rails application:
         bin/rake db:schema:dump RAILS_ENV=test
         cd ../..
         ```
-
     * Copy the generated schema to the test support directory (adjust path if needed):
-
         ```bash
         mkdir -p test/support/db
         cp test/dummy/db/schema.rb test/support/db/schema.rb
@@ -228,4 +233,5 @@ If using the `:active_record` persistence adapter in a Rails application:
 ## License
 
 The gem is available as open source under the terms of the [MIT License](https://opensource.org/licenses/MIT).
+
 
