@@ -27,27 +27,27 @@ module Yantra
 
       # --- Job Methods ---
 
-      def persist_job(job_instance)
+      def persist_step(step_instance)
         raise NotImplementedError # Keep single persist
       end
 
-      def persist_jobs_bulk(job_instances_array)
+      def persist_steps_bulk(step_instances_array)
         raise NotImplementedError # Keep bulk persist
       end
 
-      def find_job(job_id)
+      def find_step(step_id)
         raise NotImplementedError
       end
 
-      def update_job_attributes(job_id, attributes_hash, expected_old_state: nil)
+      def update_step_attributes(step_id, attributes_hash, expected_old_state: nil)
         raise NotImplementedError
       end
 
-      def cancel_jobs_bulk(job_ids)
+      def cancel_jobs_bulk(step_ids)
         raise NotImplementedError, "#{self.class.name}#cancel_jobs_bulk is not implemented"
       end
 
-      def running_job_count(workflow_id)
+      def running_step_count(workflow_id)
         raise NotImplementedError
       end
 
@@ -55,43 +55,43 @@ module Yantra
       # Counts jobs currently in the 'enqueued' state for a workflow.
       # @param workflow_id [String] The UUID of the workflow.
       # @return [Integer] The number of enqueued jobs.
-      def enqueued_job_count(workflow_id)
-        raise NotImplementedError, "#{self.class.name}#enqueued_job_count is not implemented"
+      def enqueued_step_count(workflow_id)
+        raise NotImplementedError, "#{self.class.name}#enqueued_step_count is not implemented"
       end
       # --- END NEW METHOD ---
 
-      def get_workflow_jobs(workflow_id, status: nil)
+      def get_workflow_steps(workflow_id, status: nil)
         raise NotImplementedError
       end
 
-      def increment_job_retries(job_id)
+      def increment_step_retries(step_id)
         raise NotImplementedError
       end
 
-      def record_job_output(job_id, output)
+      def record_step_output(step_id, output)
         raise NotImplementedError
       end
 
-      def record_job_error(job_id, error)
+      def record_step_error(step_id, error)
         raise NotImplementedError
       end
 
       # --- Dependency Methods ---
-      # ... (add_job_dependency, add_job_dependencies_bulk, get_job_dependencies, get_job_dependents remain the same) ...
+      # ... (add_step_dependency, add_step_dependencies_bulk, get_step_dependencies, get_step_dependents remain the same) ...
 
-      def add_job_dependency(job_id, dependency_job_id)
+      def add_step_dependency(step_id, dependency_step_id)
         raise NotImplementedError
       end
 
-      def add_job_dependencies_bulk(dependency_links_array)
+      def add_step_dependencies_bulk(dependency_links_array)
          raise NotImplementedError
       end
 
-      def get_job_dependencies(job_id)
+      def get_step_dependencies(step_id)
         raise NotImplementedError
       end
 
-      def get_job_dependents(job_id)
+      def get_step_dependents(step_id)
         raise NotImplementedError
       end
 

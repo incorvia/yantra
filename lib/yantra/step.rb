@@ -1,4 +1,4 @@
-# lib/yantra/job.rb
+# lib/yantra/step.rb
 
 require 'securerandom'
 require 'time' # Ensure Time is available
@@ -6,7 +6,7 @@ require 'time' # Ensure Time is available
 module Yantra
   # Base class for defining Yantra jobs (units of work).
   # Subclasses MUST implement the #perform method.
-  class Job
+  class Step
     # Attributes accessible for each job instance
     attr_reader :id, :workflow_id, :klass, :arguments, :state, :dsl_name
     attr_reader :created_at, :enqueued_at, :started_at, :finished_at

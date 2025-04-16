@@ -53,21 +53,21 @@ module Yantra
       end
 
       # --- Job Lifecycle Callbacks ---
-      def job_starting(job_id)
+      def step_starting(step_id)
         # ... (remains the same) ...
-         puts "INFO: [Orchestrator] Starting job #{job_id}"
-         job_record = repository.find_job(job_id)
-         unless job_record
-           puts "ERROR: [Orchestrator] Job record #{job_id} not found when starting."
+         puts "INFO: [Orchestrator] Starting job #{step_id}"
+         step_record = repository.find_step(step_id)
+         unless step_record
+           puts "ERROR: [Orchestrator] Job record #{step_id} not found when starting."
            return false
          end
 
-         current_state = job_record.state.to_sym
+         current_state = step_record.state.to_sym
          target_state = StateMachine::RUNNING
 
          # Allow if enqueued (first run) or already running (retry)
          unless [StateMachine::ENQUEUED, StateMachine::RUNNING].include?(current_state)
-           puts "WARN: [Orchestrator] Job #{job_id} expected state :enqueued or :running to start but found :#{current_state}."
+           puts "WARN: [Orchestrator] Job #{step_id} expected state :enqueued or :running to start but found :#{current_state}."
            return false
          end
 
@@ -76,13 +76,13 @@ module Yantra
            begin
              StateMachine.validate_transition!(current_state, target_state)
            rescue Errors::InvalidStateTransition => e
-             puts "WARN: [Orchestrator] Cannot start job #{job_id}. #{e.message}"
+             puts "WARN: [Orchestrator] Cannot start job #{step_id}. #{e.message}"
              return false
            end
 
            update_attrs = { state: target_state.to_s, started_at: Time.current }
-           unless repository.update_job_attributes(job_id, update_attrs, expected_old_state: :enqueued)
-              puts "WARN: [Orchestrator] Failed to update job #{job_id} state to running (maybe already changed?). Aborting execution."
+           unless repository.update_step_attributes(step_id, update_attrs, expected_old_state: :enqueued)
+              puts "WARN: [Orchestrator] Failed to update job #{step_id} state to running (maybe already changed?). Aborting execution."
               return false
            end
            # TODO: Emit yantra.job.started event
@@ -90,31 +90,31 @@ module Yantra
          true # Okay to proceed
       end
 
-      def job_succeeded(job_id, result)
+      def step_succeeded(step_id, result)
         # ... (remains the same) ...
-         puts "INFO: [Orchestrator] Job #{job_id} succeeded."
+         puts "INFO: [Orchestrator] Job #{step_id} succeeded."
          final_attrs = {
            state: StateMachine::SUCCEEDED.to_s,
            finished_at: Time.current,
            output: result
          }
-         update_success = repository.update_job_attributes(job_id, final_attrs, expected_old_state: :running)
+         update_success = repository.update_step_attributes(step_id, final_attrs, expected_old_state: :running)
          # TODO: Emit yantra.job.succeeded event
 
          if update_success
-            job_finished(job_id)
+            step_finished(step_id)
          else
-            puts "WARN: [Orchestrator] Failed to update job #{job_id} state to succeeded (maybe already changed?)."
+            puts "WARN: [Orchestrator] Failed to update job #{step_id} state to succeeded (maybe already changed?)."
          end
       end
 
-      # --- MODIFIED: job_finished ---
-      def job_finished(job_id)
+      # --- MODIFIED: step_finished ---
+      def step_finished(step_id)
         # ... (check for finished_job remains the same) ...
-        puts "INFO: [Orchestrator] Handling post-finish logic for job #{job_id}."
-        finished_job = repository.find_job(job_id)
+        puts "INFO: [Orchestrator] Handling post-finish logic for job #{step_id}."
+        finished_job = repository.find_step(step_id)
         unless finished_job
-          puts "ERROR: [Orchestrator] Job #{job_id} not found when handling post-finish."
+          puts "ERROR: [Orchestrator] Job #{step_id} not found when handling post-finish."
           return
         end
 
@@ -124,25 +124,25 @@ module Yantra
         # --- Check if workflow is already cancelled ---
         workflow = repository.find_workflow(workflow_id)
         if workflow && workflow.state.to_sym == StateMachine::CANCELLED
-          puts "INFO: [Orchestrator] Workflow #{workflow_id} is cancelled. Halting further processing for job #{job_id}."
+          puts "INFO: [Orchestrator] Workflow #{workflow_id} is cancelled. Halting further processing for job #{step_id}."
           return
         end
         # --- End Check ---
 
         # ... (logic for handling success/failure/cancellation and dependents remains the same) ...
         if finished_state == StateMachine::SUCCEEDED
-          dependent_job_ids = repository.get_job_dependents(job_id)
-          check_and_enqueue_dependents(dependent_job_ids)
+          dependent_step_ids = repository.get_step_dependents(step_id)
+          check_and_enqueue_dependents(dependent_step_ids)
         elsif finished_state == StateMachine::FAILED
-          cancel_downstream_jobs(job_id)
+          cancel_downstream_jobs(step_id)
         elsif finished_state == StateMachine::CANCELLED
-          cancel_downstream_jobs(job_id)
+          cancel_downstream_jobs(step_id)
         end
 
         # Check workflow completion AFTER handling dependents
         check_workflow_completion(workflow_id)
       end
-      # --- END MODIFIED: job_finished ---
+      # --- END MODIFIED: step_finished ---
 
 
       # --- Private methods ---
@@ -151,49 +151,49 @@ module Yantra
 
       def find_and_enqueue_ready_jobs(workflow_id)
         # ... (implementation remains the same) ...
-        ready_job_ids = repository.find_ready_jobs(workflow_id)
-        puts "INFO: [Orchestrator] Found ready jobs for workflow #{workflow_id}: #{ready_job_ids}" unless ready_job_ids.empty?
-        ready_job_ids.each { |id| enqueue_job(id) }
+        ready_step_ids = repository.find_ready_jobs(workflow_id)
+        puts "INFO: [Orchestrator] Found ready jobs for workflow #{workflow_id}: #{ready_step_ids}" unless ready_step_ids.empty?
+        ready_step_ids.each { |id| enqueue_job(id) }
       end
 
-      def check_and_enqueue_dependents(dependent_job_ids)
+      def check_and_enqueue_dependents(dependent_step_ids)
         # ... (implementation remains the same) ...
-        dependent_job_ids.each do |dep_job_id|
-          dep_job = repository.find_job(dep_job_id)
+        dependent_step_ids.each do |dep_step_id|
+          dep_job = repository.find_step(dep_step_id)
           next unless dep_job && dep_job.state.to_sym == StateMachine::PENDING
-          prerequisite_ids = repository.get_job_dependencies(dep_job_id)
+          prerequisite_ids = repository.get_step_dependencies(dep_step_id)
           all_deps_succeeded = prerequisite_ids.all? do |prereq_id|
-            prereq_job = repository.find_job(prereq_id)
+            prereq_job = repository.find_step(prereq_id)
             prereq_job && prereq_job.state.to_sym == StateMachine::SUCCEEDED
           end
-          enqueue_job(dep_job_id) if all_deps_succeeded
+          enqueue_job(dep_step_id) if all_deps_succeeded
         end
       end
 
-      def enqueue_job(job_id)
+      def enqueue_job(step_id)
         # ... (implementation remains the same) ...
-        job = repository.find_job(job_id)
+        job = repository.find_step(step_id)
         return unless job
         current_state = job.state.to_sym
         target_state = StateMachine::ENQUEUED
         begin
           StateMachine.validate_transition!(current_state, target_state)
         rescue Errors::InvalidStateTransition => e
-           puts "WARN: [Orchestrator] Cannot enqueue job #{job_id}. #{e.message}"
+           puts "WARN: [Orchestrator] Cannot enqueue job #{step_id}. #{e.message}"
            return
         end
         attributes = { state: target_state.to_s, enqueued_at: Time.current }
-        if repository.update_job_attributes(job_id, attributes, expected_old_state: current_state)
+        if repository.update_step_attributes(step_id, attributes, expected_old_state: current_state)
           queue_to_use = job.queue || 'default'
-          worker_adapter.enqueue(job_id, job.workflow_id, job.klass, queue_to_use)
+          worker_adapter.enqueue(step_id, job.workflow_id, job.klass, queue_to_use)
         else
-           puts "WARN: [Orchestrator] Failed to update job #{job_id} state to #{target_state} before enqueuing."
+           puts "WARN: [Orchestrator] Failed to update job #{step_id} state to #{target_state} before enqueuing."
         end
       end
 
-      def cancel_downstream_jobs(failed_or_cancelled_job_id)
+      def cancel_downstream_jobs(failed_or_cancelled_step_id)
         # ... (implementation remains the same) ...
-        descendant_ids_set = find_all_descendants(failed_or_cancelled_job_id)
+        descendant_ids_set = find_all_descendants(failed_or_cancelled_step_id)
         return if descendant_ids_set.empty?
         descendant_ids = descendant_ids_set.to_a
         puts "INFO: [Orchestrator] Attempting to bulk cancel #{descendant_ids.size} downstream jobs: #{descendant_ids}."
@@ -205,19 +205,19 @@ module Yantra
         end
       end
 
-      def find_all_descendants(start_job_id)
+      def find_all_descendants(start_step_id)
         # ... (implementation remains the same) ...
-         puts "DEBUG: [Orchestrator] Finding all descendants for job #{start_job_id}"
+         puts "DEBUG: [Orchestrator] Finding all descendants for job #{start_step_id}"
          descendants = Set.new
-         queue = repository.get_job_dependents(start_job_id).uniq
+         queue = repository.get_step_dependents(start_step_id).uniq
          queue.each { |id| descendants.add(id) }
          head = 0
          while head < queue.length
-           current_job_id = queue[head]; head += 1
-           next_dependents = repository.get_job_dependents(current_job_id)
+           current_step_id = queue[head]; head += 1
+           next_dependents = repository.get_step_dependents(current_step_id)
            next_dependents.each { |next_dep_id| queue << next_dep_id if descendants.add?(next_dep_id) }
          end
-         puts "DEBUG: [Orchestrator] Found descendants for job #{start_job_id}: #{descendants.to_a}"
+         puts "DEBUG: [Orchestrator] Found descendants for job #{start_step_id}: #{descendants.to_a}"
          descendants
       end
 
@@ -227,8 +227,8 @@ module Yantra
       # A workflow is complete if no jobs are running AND no jobs are enqueued.
       def check_workflow_completion(workflow_id)
         # Fetch counts for running and enqueued jobs
-        running_count = repository.running_job_count(workflow_id)
-        enqueued_count = repository.enqueued_job_count(workflow_id) # <<< Use new repo method
+        running_count = repository.running_step_count(workflow_id)
+        enqueued_count = repository.enqueued_step_count(workflow_id) # <<< Use new repo method
 
         puts "DEBUG: [Orchestrator] Checking workflow completion for #{workflow_id}. Running: #{running_count}, Enqueued: #{enqueued_count}"
 

@@ -1,8 +1,8 @@
 Description:
     Copies Yantra ActiveRecord database migrations into your application's
     db/migrate directory. After running this generator, run 'rails db:migrate'
-    to create the necessary tables (yantra_workflows, yantra_jobs,
-    yantra_job_dependencies).
+    to create the necessary tables (yantra_workflows, yantra_steps,
+    yantra_step_dependencies).
 
 Example:
     rails generate yantra:install

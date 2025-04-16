@@ -1,4 +1,4 @@
-# lib/yantra/persistence/active_record/job_record.rb
+# lib/yantra/persistence/active_record/step_record.rb
 
 # Ensure ActiveRecord is loaded, typically done via Bundler/environment setup.
 # require 'active_record'
@@ -7,13 +7,13 @@ module Yantra
   module Persistence
     # Namespace for the ActiveRecord persistence adapter implementation.
     module ActiveRecord
-      # Represents a row in the 'yantra_jobs' table using ActiveRecord.
+      # Represents a row in the 'yantra_steps' table using ActiveRecord.
       # This class is an internal implementation detail of the ActiveRecordAdapter
       # and is not directly used by the core Yantra logic.
-      class JobRecord < ::ActiveRecord::Base
+      class StepRecord < ::ActiveRecord::Base
         # Explicitly set the table name if it doesn't follow Rails conventions
         # or for clarity.
-        self.table_name = 'yantra_jobs'
+        self.table_name = 'yantra_steps'
 
         # --- Associations ---
 
@@ -21,50 +21,50 @@ module Yantra
         belongs_to :workflow_record,
                    # Specify the class name with full namespace.
                    class_name: "Yantra::Persistence::ActiveRecord::WorkflowRecord",
-                   # Specify the foreign key column in the 'yantra_jobs' table.
+                   # Specify the foreign key column in the 'yantra_steps' table.
                    foreign_key: :workflow_id,
                    # Define the corresponding association name in WorkflowRecord
                    # for bi-directional association optimization.
-                   inverse_of: :job_records
+                   inverse_of: :step_records
 
         # --- Dependencies Association ---
         # Defines the jobs that must complete *before* this job can start.
-        # This uses the 'yantra_job_dependencies' join table, represented by
-        # the JobDependencyRecord model.
+        # This uses the 'yantra_step_dependencies' join table, represented by
+        # the StepDependencyRecord model.
 
-        # Defines the link to the join model where this job's ID is in the 'job_id' column.
+        # Defines the link to the join model where this job's ID is in the 'step_id' column.
         has_many :dependency_links,
-                 class_name: "Yantra::Persistence::ActiveRecord::JobDependencyRecord",
-                 foreign_key: :job_id,
-                 inverse_of: :job, # Assumes JobDependencyRecord has `belongs_to :job`
+                 class_name: "Yantra::Persistence::ActiveRecord::StepDependencyRecord",
+                 foreign_key: :step_id,
+                 inverse_of: :step, # Assumes StepDependencyRecord has `belongs_to :step`
                  dependent: :destroy # If this job is deleted, remove its dependency links.
 
-        # Defines the association to the actual prerequisite JobRecord models
+        # Defines the association to the actual prerequisite StepRecord models
         # through the dependency_links join records.
         has_many :dependencies,
                  through: :dependency_links,
-                 # Specifies which association on JobDependencyRecord points to the prerequisite job.
-                 # Assumes JobDependencyRecord has `belongs_to :dependency, class_name: 'JobRecord'`
+                 # Specifies which association on StepDependencyRecord points to the prerequisite job.
+                 # Assumes StepDependencyRecord has `belongs_to :dependency, class_name: 'StepRecord'`
                  source: :dependency
 
         # --- Dependents Association ---
         # Defines the jobs that depend on *this* job completing successfully.
-        # This also uses the 'yantra_job_dependencies' join table.
+        # This also uses the 'yantra_step_dependencies' join table.
 
-        # Defines the link to the join model where this job's ID is in the 'depends_on_job_id' column.
+        # Defines the link to the join model where this job's ID is in the 'depends_on_step_id' column.
         has_many :dependent_links,
-                 class_name: "Yantra::Persistence::ActiveRecord::JobDependencyRecord",
-                 foreign_key: :depends_on_job_id,
-                 inverse_of: :dependency, # Assumes JobDependencyRecord has `belongs_to :dependency`
+                 class_name: "Yantra::Persistence::ActiveRecord::StepDependencyRecord",
+                 foreign_key: :depends_on_step_id,
+                 inverse_of: :dependency, # Assumes StepDependencyRecord has `belongs_to :dependency`
                  dependent: :destroy # If this job is deleted, remove links where other jobs depended on it.
 
-        # Defines the association to the actual dependent JobRecord models
+        # Defines the association to the actual dependent StepRecord models
         # through the dependent_links join records.
         has_many :dependents,
                  through: :dependent_links,
-                 # Specifies which association on JobDependencyRecord points back to the dependent job.
-                 # Assumes JobDependencyRecord has `belongs_to :job, class_name: 'JobRecord'`
-                 source: :job
+                 # Specifies which association on StepDependencyRecord points back to the dependent job.
+                 # Assumes StepDependencyRecord has `belongs_to :step, class_name: 'StepRecord'`
+                 source: :step
 
         # --- Scopes (Examples) ---
         # Provide convenient ways to query jobs by state.
@@ -96,7 +96,7 @@ module Yantra
         # --- Instance Methods (Optional Helpers) ---
 
         # Example helper to convert AR record to a simple Job Status Object/DTO
-        # This might be used by the ActiveRecordAdapter when implementing `find_job`
+        # This might be used by the ActiveRecordAdapter when implementing `find_step`
         # if returning a full AR object isn't desired for the public API.
         # def to_status_object
         #   {

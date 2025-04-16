@@ -24,9 +24,9 @@ module Yantra
 
         # Common IDs used in tests
         @workflow_id = SecureRandom.uuid
-        @job_a_id = SecureRandom.uuid
-        @job_b_id = SecureRandom.uuid
-        @job_c_id = SecureRandom.uuid
+        @step_a_id = SecureRandom.uuid
+        @step_b_id = SecureRandom.uuid
+        @step_c_id = SecureRandom.uuid
       end
 
       def teardown
@@ -40,13 +40,13 @@ module Yantra
       def test_start_workflow_enqueues_initial_jobs
         # Arrange
         workflow = MockWorkflow.new(@workflow_id, :pending)
-        initial_job = MockJob.new(@job_a_id, @workflow_id, "JobA", :pending, "default")
+        initial_job = MockJob.new(@step_a_id, @workflow_id, "StepA", :pending, "default")
         @mock_repo.expect(:find_workflow, workflow, [@workflow_id])
         @mock_repo.expect(:update_workflow_attributes, true) { |*args| true }
-        @mock_repo.expect(:find_ready_jobs, [@job_a_id], [@workflow_id])
-        @mock_repo.expect(:find_job, initial_job, [@job_a_id])
-        @mock_repo.expect(:update_job_attributes, true) { |*args| true }
-        @mock_worker.expect(:enqueue, nil, [@job_a_id, @workflow_id, "JobA", "default"])
+        @mock_repo.expect(:find_ready_jobs, [@step_a_id], [@workflow_id])
+        @mock_repo.expect(:find_step, initial_job, [@step_a_id])
+        @mock_repo.expect(:update_step_attributes, true) { |*args| true }
+        @mock_worker.expect(:enqueue, nil, [@step_a_id, @workflow_id, "StepA", "default"])
         # Act
         result = @orchestrator.start_workflow(@workflow_id)
         # Assert
@@ -56,18 +56,18 @@ module Yantra
       def test_start_workflow_enqueues_multiple_initial_jobs
          # Arrange
          workflow = MockWorkflow.new(@workflow_id, :pending)
-         initial_job_a = MockJob.new(@job_a_id, @workflow_id, "JobA", :pending, "q1")
-         initial_job_b = MockJob.new(@job_b_id, @workflow_id, "JobB", :pending, "q2")
+         initial_step_a = MockJob.new(@step_a_id, @workflow_id, "StepA", :pending, "q1")
+         initial_step_b = MockJob.new(@step_b_id, @workflow_id, "StepB", :pending, "q2")
          # Expectations
          @mock_repo.expect(:find_workflow, workflow, [@workflow_id])
          @mock_repo.expect(:update_workflow_attributes, true) { |*args| true }
-         @mock_repo.expect(:find_ready_jobs, [@job_a_id, @job_b_id], [@workflow_id])
-         @mock_repo.expect(:find_job, initial_job_a, [@job_a_id])
-         @mock_repo.expect(:update_job_attributes, true) { |*args| true }
-         @mock_worker.expect(:enqueue, nil, [@job_a_id, @workflow_id, "JobA", "q1"])
-         @mock_repo.expect(:find_job, initial_job_b, [@job_b_id])
-         @mock_repo.expect(:update_job_attributes, true) { |*args| true }
-         @mock_worker.expect(:enqueue, nil, [@job_b_id, @workflow_id, "JobB", "q2"])
+         @mock_repo.expect(:find_ready_jobs, [@step_a_id, @step_b_id], [@workflow_id])
+         @mock_repo.expect(:find_step, initial_step_a, [@step_a_id])
+         @mock_repo.expect(:update_step_attributes, true) { |*args| true }
+         @mock_worker.expect(:enqueue, nil, [@step_a_id, @workflow_id, "StepA", "q1"])
+         @mock_repo.expect(:find_step, initial_step_b, [@step_b_id])
+         @mock_repo.expect(:update_step_attributes, true) { |*args| true }
+         @mock_worker.expect(:enqueue, nil, [@step_b_id, @workflow_id, "StepB", "q2"])
          # Act
          result = @orchestrator.start_workflow(@workflow_id)
          # Assert
@@ -82,113 +82,113 @@ module Yantra
       end
 
 
-      # --- Test job_finished (Success Path) ---
+      # --- Test step_finished (Success Path) ---
       # ... (these tests remain the same) ...
-      def test_job_finished_success_enqueues_ready_dependent
+      def test_step_finished_success_enqueues_ready_dependent
         # Arrange
-        job_a = MockJob.new(@job_a_id, @workflow_id, "JobA", :succeeded, "default")
-        job_b = MockJob.new(@job_b_id, @workflow_id, "JobB", :pending, "default")
+        step_a = MockJob.new(@step_a_id, @workflow_id, "StepA", :succeeded, "default")
+        step_b = MockJob.new(@step_b_id, @workflow_id, "StepB", :pending, "default")
         workflow = MockWorkflow.new(@workflow_id, :running)
         # Expectations
-        @mock_repo.expect(:find_job, job_a, [@job_a_id])
+        @mock_repo.expect(:find_step, step_a, [@step_a_id])
         @mock_repo.expect(:find_workflow, workflow, [@workflow_id])
-        @mock_repo.expect(:get_job_dependents, [@job_b_id], [@job_a_id])
-        @mock_repo.expect(:find_job, job_b, [@job_b_id])
-        @mock_repo.expect(:get_job_dependencies, [@job_a_id], [@job_b_id])
-        @mock_repo.expect(:find_job, job_a, [@job_a_id])
-        @mock_repo.expect(:find_job, job_b, [@job_b_id])
-        @mock_repo.expect(:update_job_attributes, true) { |*args| true }
-        @mock_worker.expect(:enqueue, nil, [@job_b_id, @workflow_id, "JobB", "default"])
-        @mock_repo.expect(:running_job_count, 0, [@workflow_id])
-        @mock_repo.expect(:enqueued_job_count, 1, [@workflow_id])
+        @mock_repo.expect(:get_step_dependents, [@step_b_id], [@step_a_id])
+        @mock_repo.expect(:find_step, step_b, [@step_b_id])
+        @mock_repo.expect(:get_step_dependencies, [@step_a_id], [@step_b_id])
+        @mock_repo.expect(:find_step, step_a, [@step_a_id])
+        @mock_repo.expect(:find_step, step_b, [@step_b_id])
+        @mock_repo.expect(:update_step_attributes, true) { |*args| true }
+        @mock_worker.expect(:enqueue, nil, [@step_b_id, @workflow_id, "StepB", "default"])
+        @mock_repo.expect(:running_step_count, 0, [@workflow_id])
+        @mock_repo.expect(:enqueued_step_count, 1, [@workflow_id])
         # Act
-        @orchestrator.job_finished(@job_a_id)
+        @orchestrator.step_finished(@step_a_id)
       end
 
-      def test_job_finished_success_does_not_enqueue_if_deps_not_met
+      def test_step_finished_success_does_not_enqueue_if_deps_not_met
         # Arrange
-        job_a = MockJob.new(@job_a_id, @workflow_id, "JobA", :succeeded, "default")
-        job_b = MockJob.new(@job_b_id, @workflow_id, "JobB", :pending, "default")
-        job_c = MockJob.new(@job_c_id, @workflow_id, "JobC", :pending, "default")
+        step_a = MockJob.new(@step_a_id, @workflow_id, "StepA", :succeeded, "default")
+        step_b = MockJob.new(@step_b_id, @workflow_id, "StepB", :pending, "default")
+        step_c = MockJob.new(@step_c_id, @workflow_id, "StepC", :pending, "default")
         workflow = MockWorkflow.new(@workflow_id, :running)
         # Expectations
-        @mock_repo.expect(:find_job, job_a, [@job_a_id])
+        @mock_repo.expect(:find_step, step_a, [@step_a_id])
         @mock_repo.expect(:find_workflow, workflow, [@workflow_id])
-        @mock_repo.expect(:get_job_dependents, [@job_c_id], [@job_a_id])
-        @mock_repo.expect(:find_job, job_c, [@job_c_id])
-        @mock_repo.expect(:get_job_dependencies, [@job_a_id, @job_b_id], [@job_c_id])
-        @mock_repo.expect(:find_job, job_a, [@job_a_id])
-        @mock_repo.expect(:find_job, job_b, [@job_b_id])
-        @mock_repo.expect(:running_job_count, 0, [@workflow_id])
-        @mock_repo.expect(:enqueued_job_count, 0, [@workflow_id])
+        @mock_repo.expect(:get_step_dependents, [@step_c_id], [@step_a_id])
+        @mock_repo.expect(:find_step, step_c, [@step_c_id])
+        @mock_repo.expect(:get_step_dependencies, [@step_a_id, @step_b_id], [@step_c_id])
+        @mock_repo.expect(:find_step, step_a, [@step_a_id])
+        @mock_repo.expect(:find_step, step_b, [@step_b_id])
+        @mock_repo.expect(:running_step_count, 0, [@workflow_id])
+        @mock_repo.expect(:enqueued_step_count, 0, [@workflow_id])
         @mock_repo.expect(:find_workflow, workflow, [@workflow_id])
         @mock_repo.expect(:workflow_has_failures?, false, [@workflow_id])
         @mock_repo.expect(:update_workflow_attributes, true) { |*args| true }
         # Act
-        @orchestrator.job_finished(@job_a_id)
+        @orchestrator.step_finished(@step_a_id)
       end
 
-      def test_job_finished_success_completes_workflow_if_last_job
+      def test_step_finished_success_completes_workflow_if_last_job
         # Arrange
-        job_a = MockJob.new(@job_a_id, @workflow_id, "JobA", :succeeded, "default")
+        step_a = MockJob.new(@step_a_id, @workflow_id, "StepA", :succeeded, "default")
         workflow = MockWorkflow.new(@workflow_id, :running)
         # Expectations
-        @mock_repo.expect(:find_job, job_a, [@job_a_id])
+        @mock_repo.expect(:find_step, step_a, [@step_a_id])
         @mock_repo.expect(:find_workflow, workflow, [@workflow_id])
-        @mock_repo.expect(:get_job_dependents, [], [@job_a_id])
-        @mock_repo.expect(:running_job_count, 0, [@workflow_id])
-        @mock_repo.expect(:enqueued_job_count, 0, [@workflow_id])
+        @mock_repo.expect(:get_step_dependents, [], [@step_a_id])
+        @mock_repo.expect(:running_step_count, 0, [@workflow_id])
+        @mock_repo.expect(:enqueued_step_count, 0, [@workflow_id])
         @mock_repo.expect(:find_workflow, workflow, [@workflow_id])
         @mock_repo.expect(:workflow_has_failures?, false, [@workflow_id])
         @mock_repo.expect(:update_workflow_attributes, true) do |wf_id, attrs, opts|
             wf_id == @workflow_id && attrs[:state] == StateMachine::SUCCEEDED.to_s && attrs[:finished_at].is_a?(Time) && opts == { expected_old_state: :running }
         end
         # Act
-        @orchestrator.job_finished(@job_a_id)
+        @orchestrator.step_finished(@step_a_id)
       end
 
-      def test_job_finished_failure_completes_workflow_if_last_job
+      def test_step_finished_failure_completes_workflow_if_last_job
         # Arrange
-        job_a = MockJob.new(@job_a_id, @workflow_id, "JobA", :failed, "default")
+        step_a = MockJob.new(@step_a_id, @workflow_id, "StepA", :failed, "default")
         workflow = MockWorkflow.new(@workflow_id, :running)
         # Expectations
-        @mock_repo.expect(:find_job, job_a, [@job_a_id])
+        @mock_repo.expect(:find_step, step_a, [@step_a_id])
         @mock_repo.expect(:find_workflow, workflow, [@workflow_id])
-        @mock_repo.expect(:get_job_dependents, [], [@job_a_id])
-        @mock_repo.expect(:running_job_count, 0, [@workflow_id])
-        @mock_repo.expect(:enqueued_job_count, 0, [@workflow_id])
+        @mock_repo.expect(:get_step_dependents, [], [@step_a_id])
+        @mock_repo.expect(:running_step_count, 0, [@workflow_id])
+        @mock_repo.expect(:enqueued_step_count, 0, [@workflow_id])
         @mock_repo.expect(:find_workflow, workflow, [@workflow_id])
         @mock_repo.expect(:workflow_has_failures?, true, [@workflow_id])
         @mock_repo.expect(:update_workflow_attributes, true) do |wf_id, attrs, opts|
             wf_id == @workflow_id && attrs[:state] == StateMachine::FAILED.to_s && attrs[:finished_at].is_a?(Time) && opts == { expected_old_state: :running }
         end
         # Act
-        @orchestrator.job_finished(@job_a_id)
+        @orchestrator.step_finished(@step_a_id)
       end
 
-      # --- Test job_finished (Failure Path) ---
-      def test_job_finished_failure_cancels_dependents_recursively
+      # --- Test step_finished (Failure Path) ---
+      def test_step_finished_failure_cancels_dependents_recursively
         # Arrange
-        job_a = MockJob.new(@job_a_id, @workflow_id, "JobA", :failed, "default")
-        job_b = MockJob.new(@job_b_id, @workflow_id, "JobB", :pending, "default")
-        job_c = MockJob.new(@job_c_id, @workflow_id, "JobC", :pending, "default")
+        step_a = MockJob.new(@step_a_id, @workflow_id, "StepA", :failed, "default")
+        step_b = MockJob.new(@step_b_id, @workflow_id, "StepB", :pending, "default")
+        step_c = MockJob.new(@step_c_id, @workflow_id, "StepC", :pending, "default")
         workflow = MockWorkflow.new(@workflow_id, :running)
         # Expectations
-        @mock_repo.expect(:find_job, job_a, [@job_a_id])
+        @mock_repo.expect(:find_step, step_a, [@step_a_id])
         @mock_repo.expect(:find_workflow, workflow, [@workflow_id])
-        @mock_repo.expect(:get_job_dependents, [@job_b_id], [@job_a_id])
-        @mock_repo.expect(:get_job_dependents, [@job_c_id], [@job_b_id])
-        @mock_repo.expect(:get_job_dependents, [], [@job_c_id])
-        @mock_repo.expect(:cancel_jobs_bulk, 2) { |job_ids| Set.new(job_ids) == Set[@job_b_id, @job_c_id] }
-        @mock_repo.expect(:running_job_count, 0, [@workflow_id])
-        @mock_repo.expect(:enqueued_job_count, 0, [@workflow_id])
+        @mock_repo.expect(:get_step_dependents, [@step_b_id], [@step_a_id])
+        @mock_repo.expect(:get_step_dependents, [@step_c_id], [@step_b_id])
+        @mock_repo.expect(:get_step_dependents, [], [@step_c_id])
+        @mock_repo.expect(:cancel_jobs_bulk, 2) { |step_ids| Set.new(step_ids) == Set[@step_b_id, @step_c_id] }
+        @mock_repo.expect(:running_step_count, 0, [@workflow_id])
+        @mock_repo.expect(:enqueued_step_count, 0, [@workflow_id])
         @mock_repo.expect(:find_workflow, workflow, [@workflow_id])
         @mock_repo.expect(:workflow_has_failures?, true, [@workflow_id])
         @mock_repo.expect(:update_workflow_attributes, true) do |wf_id, attrs, opts|
             wf_id == @workflow_id && attrs[:state] == StateMachine::FAILED.to_s && attrs[:finished_at].is_a?(Time) && opts == { expected_old_state: :running }
         end
         # Act
-        @orchestrator.job_finished(@job_a_id)
+        @orchestrator.step_finished(@step_a_id)
       end
 
 
@@ -213,30 +213,30 @@ module Yantra
         refute result
       end
 
-      def test_job_finished_handles_find_job_error
+      def test_step_finished_handles_find_step_error
         # Arrange
-        @mock_repo.expect(:find_job, nil) { |_id| raise Yantra::Errors::PersistenceError, "DB down" }
+        @mock_repo.expect(:find_step, nil) { |_id| raise Yantra::Errors::PersistenceError, "DB down" }
         # Act & Assert
         error = assert_raises(Yantra::Errors::PersistenceError, (/DB down/)) do
-           @orchestrator.job_finished(@job_a_id)
+           @orchestrator.step_finished(@step_a_id)
         end
         assert_match(/DB down/, error.message)
       end
 
       # --- UPDATED: Corrected mock syntax ---
-      def test_enqueue_job_handles_update_failure
+      def test_enqueue_step_handles_update_failure
         # Arrange
         workflow = MockWorkflow.new(@workflow_id, :pending)
-        initial_job = MockJob.new(@job_a_id, @workflow_id, "JobA", :pending, "default")
+        initial_job = MockJob.new(@step_a_id, @workflow_id, "StepA", :pending, "default")
         @mock_repo.expect(:find_workflow, workflow, [@workflow_id])
         @mock_repo.expect(:update_workflow_attributes, true) { |*args| true } # Workflow update succeeds
-        @mock_repo.expect(:find_ready_jobs, [@job_a_id], [@workflow_id])
-        @mock_repo.expect(:find_job, initial_job, [@job_a_id])
+        @mock_repo.expect(:find_ready_jobs, [@step_a_id], [@workflow_id])
+        @mock_repo.expect(:find_step, initial_job, [@step_a_id])
         # Mock job update to fail
         # Expect update call, return false, use block ONLY for validation
-        @mock_repo.expect(:update_job_attributes, false) do |job_id, attrs, opts|
+        @mock_repo.expect(:update_step_attributes, false) do |step_id, attrs, opts|
             # Block validates arguments and must return true if they match
-            match = (job_id == @job_a_id && attrs[:state] == StateMachine::ENQUEUED.to_s && opts == { expected_old_state: :pending })
+            match = (step_id == @step_a_id && attrs[:state] == StateMachine::ENQUEUED.to_s && opts == { expected_old_state: :pending })
             match # Return true/false based on argument match
         end
         # --> Expect NO call to worker.enqueue
@@ -246,15 +246,15 @@ module Yantra
         # Assert: No error raised, but enqueue didn't happen (verified by mock teardown)
       end
 
-      def test_enqueue_job_handles_worker_error
+      def test_enqueue_step_handles_worker_error
         # Arrange
         workflow = MockWorkflow.new(@workflow_id, :pending)
-        initial_job = MockJob.new(@job_a_id, @workflow_id, "JobA", :pending, "default")
+        initial_job = MockJob.new(@step_a_id, @workflow_id, "StepA", :pending, "default")
         @mock_repo.expect(:find_workflow, workflow, [@workflow_id])
         @mock_repo.expect(:update_workflow_attributes, true) { |*args| true }
-        @mock_repo.expect(:find_ready_jobs, [@job_a_id], [@workflow_id])
-        @mock_repo.expect(:find_job, initial_job, [@job_a_id])
-        @mock_repo.expect(:update_job_attributes, true) { |*args| true } # Job update succeeds
+        @mock_repo.expect(:find_ready_jobs, [@step_a_id], [@workflow_id])
+        @mock_repo.expect(:find_step, initial_job, [@step_a_id])
+        @mock_repo.expect(:update_step_attributes, true) { |*args| true } # Job update succeeds
         @mock_worker.expect(:enqueue, nil) { |*args| raise StandardError, "Queue unavailable" }
         # Act & Assert
         error = assert_raises(StandardError, (/Queue unavailable/)) do

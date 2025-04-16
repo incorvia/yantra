@@ -18,13 +18,13 @@ module Yantra
         # --- Associations ---
 
         # A workflow typically has many associated jobs.
-        has_many :job_records,
+        has_many :step_records,
                  # Specify the class name with full namespace.
-                 class_name: "Yantra::Persistence::ActiveRecord::JobRecord",
-                 # Specify the foreign key column in the 'yantra_jobs' table
+                 class_name: "Yantra::Persistence::ActiveRecord::StepRecord",
+                 # Specify the foreign key column in the 'yantra_steps' table
                  # that references this workflow's ID.
                  foreign_key: :workflow_id,
-                 # Define the corresponding association name in JobRecord
+                 # Define the corresponding association name in StepRecord
                  # for bi-directional association optimization.
                  inverse_of: :workflow_record,
                  # If a workflow record is deleted from the database,

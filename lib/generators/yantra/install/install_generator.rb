@@ -25,8 +25,8 @@ module Yantra
         # Use migration_template to copy each migration file.
         # Rails handles timestamping and conflict checking (by class name).
         migration_template "create_yantra_workflows.rb",         "db/migrate/create_yantra_workflows.rb"
-        migration_template "create_yantra_jobs.rb",              "db/migrate/create_yantra_jobs.rb"
-        migration_template "create_yantra_job_dependencies.rb",  "db/migrate/create_yantra_job_dependencies.rb"
+        migration_template "create_yantra_steps.rb",              "db/migrate/create_yantra_steps.rb"
+        migration_template "create_yantra_step_dependencies.rb",  "db/migrate/create_yantra_step_dependencies.rb"
 
         puts "Yantra migrations copied. Please run 'rails db:migrate'."
       end

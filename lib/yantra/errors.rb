@@ -10,7 +10,7 @@ module Yantra
     class WorkflowNotFound < Yantra::Error; end
 
     # Raised when a job cannot be found by its ID.
-    class JobNotFound < Yantra::Error; end
+    class StepNotFound < Yantra::Error; end
 
     # Raised during workflow definition when a specified dependency cannot be found.
     class DependencyNotFound < Yantra::Error; end
@@ -33,7 +33,7 @@ module Yantra
 
     # --- ADD THIS ---
     # Raised when a job class definition is invalid or cannot be loaded.
-    class JobDefinitionError < Yantra::Error; end
+    class StepDefinitionError < Yantra::Error; end
     # --- END ADD ---
   end
 end

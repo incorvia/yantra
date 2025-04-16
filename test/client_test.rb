@@ -6,19 +6,19 @@ require "test_helper"
 if AR_LOADED # Only require if AR itself was loaded successfully
   require "yantra/client"
   require "yantra/workflow"
-  require "yantra/job"
+  require "yantra/step"
   require "yantra/persistence/active_record/workflow_record"
-  require "yantra/persistence/active_record/job_record"
-  require "yantra/persistence/active_record/job_dependency_record"
+  require "yantra/persistence/active_record/step_record"
+  require "yantra/persistence/active_record/step_dependency_record"
 end
 
 # --- Define Dummy Classes for Testing ---
 
 # A simple job for testing workflow structure persistence
-class ClientTestJob < Yantra::Job # Renamed to avoid potential collision
+class ClientTestStep < Yantra::Step # Renamed to avoid potential collision
   def perform(data: nil)
     # Test jobs don't need complex logic, just need to exist
-    # puts "MyTestJob performing with #{data}" # Keep puts commented unless debugging
+    # puts "MyTestStep performing with #{data}" # Keep puts commented unless debugging
   end
 end
 
@@ -31,9 +31,9 @@ class ClientTestWorkflow < Yantra::Workflow # <<< RENAMED HERE
 
     # Define some jobs and dependencies using the DSL
     # Use the job class defined above
-    run ClientTestJob, name: :fetch_data, params: { data: user_id }
-    run ClientTestJob, name: :process_data, params: { data: report_type }, after: :fetch_data
-    run ClientTestJob, name: :final_step, after: :process_data
+    run ClientTestStep, name: :fetch_data, params: { data: user_id }
+    run ClientTestStep, name: :process_data, params: { data: report_type }, after: :fetch_data
+    run ClientTestStep, name: :final_step, after: :process_data
   end
 end
 
@@ -58,7 +58,7 @@ module Yantra
       end
 
       # Test successful creation and persistence of all components
-      def test_create_workflow_persists_workflow_jobs_and_dependencies
+      def test_create_workflow_persists_workflow_steps_and_dependencies
         # Arrange
         user_id_arg = 123
         report_type_kwarg = 'summary'
@@ -89,21 +89,21 @@ module Yantra
         refute wf_record.has_failures # Should initially be false
 
         # Assert: Job Records were created correctly
-        job_records = Persistence::ActiveRecord::JobRecord.where(workflow_id: workflow_id).order(:created_at) # Order matters if checking sequence
+        step_records = Persistence::ActiveRecord::StepRecord.where(workflow_id: workflow_id).order(:created_at) # Order matters if checking sequence
 
         # This assertion should now pass (Expected 3)
-        assert_equal 3, job_records.count, "Should create 3 JobRecords"
+        assert_equal 3, step_records.count, "Should create 3 StepRecords"
 
         # Find jobs based on expected arguments set in ClientTestWorkflow#perform
         # Ensure we check for the correct job class name now
-        fetch_job = job_records.find { |j| j.klass == "ClientTestJob" && j.arguments == {"data" => user_id_arg} }
-        process_job = job_records.find { |j| j.klass == "ClientTestJob" && j.arguments == {"data" => report_type_kwarg} }
-        final_job = job_records.find { |j| j.klass == "ClientTestJob" && j.arguments == {} }
+        fetch_job = step_records.find { |j| j.klass == "ClientTestStep" && j.arguments == {"data" => user_id_arg} }
+        process_job = step_records.find { |j| j.klass == "ClientTestStep" && j.arguments == {"data" => report_type_kwarg} }
+        final_job = step_records.find { |j| j.klass == "ClientTestStep" && j.arguments == {} }
 
         refute_nil fetch_job, "Fetch Data job record should exist"
         refute_nil process_job, "Process Data job record should exist"
         refute_nil final_job, "Final Step job record should exist"
-        assert job_records.all? { |j| j.state == "pending" }, "All jobs should start in pending state"
+        assert step_records.all? { |j| j.state == "pending" }, "All jobs should start in pending state"
         # Check is_terminal flag persistence
         # Note: This assertion will likely fail until the logic to determine/set is_terminal is added
         # assert final_job.is_terminal, "Final job should be marked terminal"
@@ -113,17 +113,17 @@ module Yantra
 
         # Assert: Dependency Records were created correctly
         # Query dependencies based on the job IDs we found
-        dependencies = Persistence::ActiveRecord::JobDependencyRecord.where(
-          job_id: [fetch_job&.id, process_job&.id, final_job&.id].compact
+        dependencies = Persistence::ActiveRecord::StepDependencyRecord.where(
+          step_id: [fetch_job&.id, process_job&.id, final_job&.id].compact
         )
         # The workflow defines 2 dependencies
-        assert_equal 2, dependencies.count, "Should create 2 JobDependencyRecords"
+        assert_equal 2, dependencies.count, "Should create 2 StepDependencyRecords"
 
-        dep1 = dependencies.find { |d| d.job_id == process_job&.id }
-        assert_equal fetch_job&.id, dep1&.depends_on_job_id, "Process Data should depend on Fetch Data"
+        dep1 = dependencies.find { |d| d.step_id == process_job&.id }
+        assert_equal fetch_job&.id, dep1&.depends_on_step_id, "Process Data should depend on Fetch Data"
 
-        dep2 = dependencies.find { |d| d.job_id == final_job&.id }
-        assert_equal process_job&.id, dep2&.depends_on_job_id, "Final Step should depend on Process Data"
+        dep2 = dependencies.find { |d| d.step_id == final_job&.id }
+        assert_equal process_job&.id, dep2&.depends_on_step_id, "Final Step should depend on Process Data"
       end
 
       # Test input validation

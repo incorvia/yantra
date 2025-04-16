@@ -2,7 +2,7 @@
 
 require 'securerandom'
 require 'set' # Needed for Set in calculate_terminal_status!
-require_relative 'job'
+require_relative 'step'
 require_relative 'errors'
 
 module Yantra
@@ -11,7 +11,7 @@ module Yantra
   # Directed Acyclic Graph (DAG) of jobs using the `run` DSL method.
   class Workflow
     # Attributes accessible after initialization
-    attr_reader :id, :klass, :arguments, :kwargs, :globals, :jobs, :dependencies
+    attr_reader :id, :klass, :arguments, :kwargs, :globals, :steps, :dependencies
     # Add state reader if loading state during rehydration
     attr_reader :state
 
@@ -34,10 +34,10 @@ module Yantra
       @state = internal_state.fetch(:state, :pending).to_sym # Load state, default pending
 
       # Internal tracking during DAG definition
-      @jobs = [] # Holds Yantra::Job instances created by `run`
-      @job_lookup = {} # Maps internal DSL name/ref to Yantra::Job instance
-      @dependencies = {} # Maps job.id => [dependency_job_id, ...]
-      @job_name_counts = Hash.new(0) # <<< ADDED: Track counts for base names
+      @steps = [] # Holds Yantra::Step instances created by `run`
+      @step_lookup = {} # Maps internal DSL name/ref to Yantra::Step instance
+      @dependencies = {} # Maps job.id => [dependency_step_id, ...]
+      @step_name_counts = Hash.new(0) # <<< ADDED: Track counts for base names
 
       # Rehydrate state if loaded from persistence
       if internal_state[:persisted]
@@ -63,55 +63,55 @@ module Yantra
 
     # DSL method to define a job within the workflow.
     #
-    # @param job_klass [Class] The Yantra::Job subclass to run.
+    # @param step_klass [Class] The Yantra::Step subclass to run.
     # @param params [Hash] Arguments/payload to pass to the job's perform method.
     # @param after [Array<String, Symbol, Class>] References to jobs that must complete first.
     # @param name [String, Symbol] An optional unique name/reference for this job within the workflow DSL.
     # @return [Symbol] The unique reference symbol/name assigned to the job in the DSL.
-    def run(job_klass, params: {}, after: [], name: nil)
-      unless job_klass.is_a?(Class) && job_klass < Yantra::Job
-        raise ArgumentError, "#{job_klass} must be a Class inheriting from Yantra::Job"
+    def run(step_klass, params: {}, after: [], name: nil)
+      unless step_klass.is_a?(Class) && step_klass < Yantra::Step
+        raise ArgumentError, "#{step_klass} must be a Class inheriting from Yantra::Step"
       end
 
       # --- UPDATED Name Collision Logic ---
-      base_ref_name = (name || job_klass.to_s).to_s
-      job_ref_name = base_ref_name
-      current_count = @job_name_counts[base_ref_name]
+      base_ref_name = (name || step_klass.to_s).to_s
+      step_ref_name = base_ref_name
+      current_count = @step_name_counts[base_ref_name]
 
       if current_count > 0 # Base name has been used before
-         job_ref_name = "#{base_ref_name}_#{current_count}"
+         step_ref_name = "#{base_ref_name}_#{current_count}"
       end
       # Ensure generated name is also unique if user provides explicit conflicting name
-      # e.g. run JobA; run JobB, name: "JobA_1" <- could conflict
-      while @job_lookup.key?(job_ref_name)
+      # e.g. run StepA; run StepB, name: "StepA_1" <- could conflict
+      while @step_lookup.key?(step_ref_name)
           current_count += 1
-          job_ref_name = "#{base_ref_name}_#{current_count}"
+          step_ref_name = "#{base_ref_name}_#{current_count}"
           # Safety break, should not happen with incrementing count unless > MAX_INT jobs
           break if current_count > 1_000_000
       end
       # Increment count for the base name for the *next* time it's used
-      @job_name_counts[base_ref_name] += 1
+      @step_name_counts[base_ref_name] += 1
       # --- END UPDATED Name Collision Logic ---
 
 
-      job_id = SecureRandom.uuid
-      job = job_klass.new(
-        id: job_id,
+      step_id = SecureRandom.uuid
+      job = step_klass.new(
+        id: step_id,
         workflow_id: @id,
-        klass: job_klass,
+        klass: step_klass,
         arguments: params,
-        dsl_name: job_ref_name, # Store the potentially modified, unique name
+        dsl_name: step_ref_name, # Store the potentially modified, unique name
         is_terminal: false # Default, calculated later by calculate_terminal_status!
       )
 
-      @jobs << job
-      @job_lookup[job_ref_name] = job # Store using the unique name
+      @steps << job
+      @step_lookup[step_ref_name] = job # Store using the unique name
 
       # Resolve dependencies based on their DSL reference names
       dependency_ids = Array(after).map do |dep_ref|
-        dep_job = find_job_by_ref(dep_ref.to_s)
+        dep_job = find_step_by_ref(dep_ref.to_s)
         unless dep_job
-          raise Yantra::Errors::DependencyNotFound, "Dependency '#{dep_ref}' not found for job '#{job_ref_name}'."
+          raise Yantra::Errors::DependencyNotFound, "Dependency '#{dep_ref}' not found for job '#{step_ref_name}'."
         end
         dep_job.id
       end
@@ -119,28 +119,28 @@ module Yantra
       @dependencies[job.id] = dependency_ids unless dependency_ids.empty?
 
       # Return the unique reference name (as a symbol)
-      job_ref_name.to_sym
+      step_ref_name.to_sym
     end
 
     # Finds a job instance within this workflow based on the reference name used in the DSL.
     # @param ref_name [String] The reference name.
-    # @return [Yantra::Job, nil] The found job instance or nil.
-    def find_job_by_ref(ref_name)
-      @job_lookup[ref_name]
+    # @return [Yantra::Step, nil] The found job instance or nil.
+    def find_step_by_ref(ref_name)
+      @step_lookup[ref_name]
     end
 
     # Calculates which jobs are terminal and updates their instance variable.
     # Called automatically by initialize after perform completes.
     def calculate_terminal_status!
-      return if @jobs.empty?
+      return if @steps.empty?
 
-      prerequisite_job_ids = Set.new
+      prerequisite_step_ids = Set.new
       @dependencies.each_value do |dependency_id_array|
-        dependency_id_array.each { |dep_id| prerequisite_job_ids.add(dep_id) }
+        dependency_id_array.each { |dep_id| prerequisite_step_ids.add(dep_id) }
       end
 
-      @jobs.each do |job|
-        is_terminal = !prerequisite_job_ids.include?(job.id)
+      @steps.each do |job|
+        is_terminal = !prerequisite_step_ids.include?(job.id)
         job.instance_variable_set(:@is_terminal, is_terminal)
       end
     end

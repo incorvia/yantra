@@ -2,9 +2,9 @@
 
 # Migration template copied from the Yantra gem.
 # Creates the table for storing individual job state within workflows.
-class CreateYantraJobs < ActiveRecord::Migration[7.0] # Adjust [7.0] to your target Rails version
+class CreateYantraSteps < ActiveRecord::Migration[7.0] # Adjust [7.0] to your target Rails version
   def change
-    create_table :yantra_jobs, id: false do |t| # Use id: false
+    create_table :yantra_steps, id: false do |t| # Use id: false
       # Explicitly define the UUID primary key as a string
       t.string :id, limit: 36, primary_key: true, null: false
 
@@ -30,13 +30,13 @@ class CreateYantraJobs < ActiveRecord::Migration[7.0] # Adjust [7.0] to your tar
     # Foreign Key constraint - Commented out for SQLite compatibility during schema load
     # SQLite doesn't enforce FKs by default anyway. Associations rely on AR logic.
     # Remove `type: :uuid` as PK is now string
-    # add_foreign_key :yantra_jobs, :yantra_workflows, column: :workflow_id, primary_key: :id, on_delete: :cascade
+    # add_foreign_key :yantra_steps, :yantra_workflows, column: :workflow_id, primary_key: :id, on_delete: :cascade
 
     # --- Indexes ---
-    add_index :yantra_jobs, [:workflow_id, :state] # Critical index
-    add_index :yantra_jobs, :state
+    add_index :yantra_steps, [:workflow_id, :state] # Critical index
+    add_index :yantra_steps, :state
     # Add index for the foreign key column itself
-    add_index :yantra_jobs, :workflow_id
+    add_index :yantra_steps, :workflow_id
   end
 end
 

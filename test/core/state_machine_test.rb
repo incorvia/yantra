@@ -125,7 +125,7 @@ module Yantra
          assert_match(/Cannot transition from state :cancelled to :pending/, error.message) # <-- UPDATED
       end
 
-      # Need to also update the assert_match in JobDependencyRecordTest if that file exists
+      # Need to also update the assert_match in StepDependencyRecordTest if that file exists
       # (Assuming the user has applied the previous fix there manually)
 
     end

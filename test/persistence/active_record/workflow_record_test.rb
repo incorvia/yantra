@@ -7,8 +7,8 @@ require "test_helper"
 # These requires will raise LoadError if run without AR dev dependencies,
 # aligning with the decision to fail explicitly in that case.
 require "yantra/persistence/active_record/workflow_record"
-require "yantra/persistence/active_record/job_record"
-# require "yantra/persistence/active_record/job_dependency_record" # Add if needed by tests in this file
+require "yantra/persistence/active_record/step_record"
+# require "yantra/persistence/active_record/step_dependency_record" # Add if needed by tests in this file
 
 module Yantra
   module Persistence
@@ -59,19 +59,19 @@ module Yantra
         # Test associations
         def test_workflow_has_jobs_association
           # Arrange
-          # Ensure JobRecord is defined before using it
-          skip "JobRecord model not defined" unless defined?(Yantra::Persistence::ActiveRecord::JobRecord)
+          # Ensure StepRecord is defined before using it
+          skip "StepRecord model not defined" unless defined?(Yantra::Persistence::ActiveRecord::StepRecord)
           workflow = WorkflowRecord.create!(id: SecureRandom.uuid, klass: "Wf", state: "running")
 
           # Act & Assert
-          assert_respond_to workflow, :job_records, "WorkflowRecord should respond to job_records"
-          assert_empty workflow.job_records, "A new workflow should have no jobs initially"
+          assert_respond_to workflow, :step_records, "WorkflowRecord should respond to step_records"
+          assert_empty workflow.step_records, "A new workflow should have no jobs initially"
 
           # Arrange: Add a job
-          job = JobRecord.create!(id: SecureRandom.uuid, workflow_record: workflow, klass: "Job", state: "pending")
+          job = StepRecord.create!(id: SecureRandom.uuid, workflow_record: workflow, klass: "Job", state: "pending")
 
           # Assert: Association works (use reload to ensure data is fresh from DB)
-          assert_includes workflow.job_records.reload, job, "Workflow should include the added job"
+          assert_includes workflow.step_records.reload, job, "Workflow should include the added job"
         end
 
         # --- Scope Tests ---

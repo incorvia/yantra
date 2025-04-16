@@ -16,7 +16,7 @@ It aims to address limitations found in previous systems by providing:
 ## Core Concepts
 
 * **Workflow:** A Directed Acyclic Graph (DAG) defined by inheriting `Yantra::Workflow`. Contains jobs and their dependencies.
-* **Job:** A unit of work defined by inheriting `Yantra::Job` and implementing `perform`. Belongs to a Workflow.
+* **Job:** A unit of work defined by inheriting `Yantra::Step` and implementing `perform`. Belongs to a Workflow.
 * **Dependency:** An edge in the DAG; Job B runs only after Job A succeeds.
 * **State Machine:** Workflows and Jobs have well-defined states (`pending`, `enqueued`, `running`, `succeeded`, `failed`, `cancelled`) with enforced transitions, managed internally by `Yantra::Core::StateMachine`.
 * **Repository:** An abstraction (`Yantra::Persistence::RepositoryInterface`) hiding persistence details. Implemented by Adapters.
@@ -84,7 +84,7 @@ Yantra.configure do |config|
   # --- Retry Behavior ---
   # Sets the default maximum number of attempts for jobs (including the first run).
   # Can be overridden per job class by defining `self.yantra_max_attempts`.
-  config.default_max_job_attempts = 3 # Default is 3
+  config.default_max_step_attempts = 3 # Default is 3
 
   # --- General Settings ---
   # Configure logging (optional)
@@ -103,7 +103,7 @@ end
 
 ```ruby
 # app/workflows/jobs/fetch_user_data_job.rb
-class FetchUserDataJob < Yantra::Job
+class FetchUserDataJob < Yantra::Step
   # Optional: Override max attempts for this specific job type
   # def self.yantra_max_attempts; 5; end
 
@@ -117,7 +117,7 @@ class FetchUserDataJob < Yantra::Job
 end
 
 # app/workflows/jobs/generate_report_job.rb
-class GenerateReportJob < Yantra::Job
+class GenerateReportJob < Yantra::Step
   # Override default queue if needed
   # def queue_name; :reports; end # Use instance method
 
@@ -137,12 +137,12 @@ class UserReportWorkflow < Yantra::Workflow
   # Arguments passed to Client.create_workflow are received here
   def perform(user_id:, format: 'pdf', priority: 'low')
     # Use the run DSL to define jobs and dependencies
-    fetch_job_ref = run FetchUserDataJob, name: :fetch, params: { user_id: user_id }
+    fetch_step_ref = run FetchUserDataJob, name: :fetch, params: { user_id: user_id }
 
     # GenerateReportJob runs after fetch_job completes.
     # TODO: Define how job outputs are accessed by dependents.
     # Alternative: Pass initial args if output passing isn't implemented
-    run GenerateReportJob, name: :generate, params: { user_id: user_id, report_format: format }, after: fetch_job_ref
+    run GenerateReportJob, name: :generate, params: { user_id: user_id, report_format: format }, after: fetch_step_ref
   end
 end
 ```
@@ -189,7 +189,7 @@ If using the `:active_record` persistence adapter in a Rails application:
     rake db:migrate
     ```
 
-    This will create the `yantra_workflows`, `yantra_jobs`, and `yantra_job_dependencies` tables.
+    This will create the `yantra_workflows`, `yantra_steps`, and `yantra_step_dependencies` tables.
 
 ## Development & Testing
 

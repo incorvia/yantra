@@ -7,7 +7,7 @@
 require_relative "yantra/version"
 require_relative "yantra/errors"
 require_relative "yantra/configuration" # Needed early for configuration access
-require_relative "yantra/job"           # Base class for user jobs
+require_relative "yantra/step"           # Base class for user jobs
 require_relative "yantra/workflow"       # Base class for user workflows
 require_relative "yantra/client"         # Public API class
 

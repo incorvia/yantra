@@ -2,16 +2,16 @@
 require "test_helper"
 
 # Dummy Job class for testing instantiation context
-class MyTestJob < Yantra::Job
+class MyTestStep < Yantra::Step
   # No need to implement perform for these tests
 end
 
-class JobTest < Minitest::Test
+class StepTest < Minitest::Test
   def setup
     @workflow_id = SecureRandom.uuid
-    @klass = MyTestJob
+    @klass = MyTestStep
     @arguments = { sample: "data", count: 1 }
-    @dsl_name = "test_job_instance"
+    @dsl_name = "test_step_instance"
   end
 
   def test_initialization_with_defaults
@@ -115,16 +115,16 @@ class JobTest < Minitest::Test
   end
 
   def test_name_helper
-    job_no_dsl = @klass.new(workflow_id: @workflow_id, klass: @klass)
-    job_with_dsl = @klass.new(workflow_id: @workflow_id, klass: @klass, dsl_name: "MySpecificJobName")
+    step_no_dsl = @klass.new(workflow_id: @workflow_id, klass: @klass)
+    step_with_dsl = @klass.new(workflow_id: @workflow_id, klass: @klass, dsl_name: "MySpecificJobName")
 
-    assert_equal "MyTestJob", job_no_dsl.name
-    assert_equal "MySpecificJobName", job_with_dsl.name
+    assert_equal "MyTestStep", step_no_dsl.name
+    assert_equal "MySpecificJobName", step_with_dsl.name
   end
 
   def test_base_perform_raises_not_implemented_error
     # Instantiate the base class directly
-    base_job = Yantra::Job.new(workflow_id: @workflow_id, klass: Yantra::Job)
+    base_job = Yantra::Step.new(workflow_id: @workflow_id, klass: Yantra::Step)
     assert_raises(NotImplementedError) do
       base_job.perform
     end

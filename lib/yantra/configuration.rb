@@ -29,7 +29,7 @@ module Yantra
     # Default maximum number of times a job will be attempted (including first run).
     # Can be overridden per job class by defining `self.yantra_max_attempts`.
     # Default: 3
-    attr_accessor :default_max_job_attempts # <<< NEW CONFIGURATION
+    attr_accessor :default_max_step_attempts # <<< NEW CONFIGURATION
 
     # --- General Configuration ---
     attr_accessor :logger                 # Default: Logger.new($stdout, level: Logger::INFO)
@@ -58,7 +58,7 @@ module Yantra
       @worker_adapter = :active_job
 
       # Retry Defaults
-      @default_max_job_attempts = 3 # <<< SET DEFAULT HERE
+      @default_max_step_attempts = 3 # <<< SET DEFAULT HERE
 
       # General Defaults
       @logger = Logger.new($stdout)
