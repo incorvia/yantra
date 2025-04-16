@@ -4,18 +4,19 @@ require 'securerandom'
 require_relative 'workflow'
 require_relative 'job'
 require_relative 'errors'
-require_relative 'core/orchestrator' # Require Orchestrator
-require_relative 'core/state_machine' # Require StateMachine for constants
+require_relative 'core/orchestrator'
+require_relative 'core/state_machine'
+# --- Require the new service class ---
+require_relative 'core/workflow_retry_service'
+# --- ---
 
 module Yantra
   # Public interface for interacting with the Yantra workflow system.
-  # Provides methods for creating, starting, and inspecting workflows and jobs.
   class Client
 
     # Creates and persists a new workflow instance along with its defined
     # jobs and their dependencies.
     def self.create_workflow(workflow_klass, *args, **kwargs)
-      # ... (implementation remains the same) ...
       # 1. Validate Input
       unless workflow_klass.is_a?(Class) && workflow_klass < Yantra::Workflow
         raise ArgumentError, "#{workflow_klass} must be a Class inheriting from Yantra::Workflow"
@@ -69,7 +70,6 @@ module Yantra
 
     # Starts a previously created workflow.
     def self.start_workflow(workflow_id)
-      # ... (implementation remains the same) ...
       puts "INFO: [Client] Requesting start for workflow #{workflow_id}..."
       orchestrator = Core::Orchestrator.new
       orchestrator.start_workflow(workflow_id)
@@ -77,33 +77,23 @@ module Yantra
 
     # Finds a workflow by its ID using the configured repository.
     def self.find_workflow(workflow_id)
-      # ... (implementation remains the same) ...
       puts "INFO: [Client] Finding workflow #{workflow_id}..."
       Yantra.repository.find_workflow(workflow_id)
     end
 
     # Finds a job by its ID using the configured repository.
     def self.find_job(job_id)
-      # ... (implementation remains the same) ...
       puts "INFO: [Client] Finding job #{job_id}..."
       Yantra.repository.find_job(job_id)
     end
 
     # Retrieves jobs associated with a workflow, optionally filtered by status.
     def self.get_workflow_jobs(workflow_id, status: nil)
-      # ... (implementation remains the same) ...
       puts "INFO: [Client] Getting jobs for workflow #{workflow_id} (status: #{status})..."
       Yantra.repository.get_workflow_jobs(workflow_id, status: status)
     end
 
-    # --- NEW METHOD: cancel_workflow ---
     # Attempts to cancel a workflow.
-    # - Marks the workflow state as 'cancelled'.
-    # - Cancels all associated jobs that are currently 'pending' or 'enqueued'.
-    # - Allows currently 'running' jobs to complete naturally.
-    # @param workflow_id [String] The UUID of the workflow to cancel.
-    # @return [Boolean] true if cancellation was successfully initiated, false otherwise
-    #   (e.g., workflow not found, already finished, or failed to update state).
     def self.cancel_workflow(workflow_id)
       puts "INFO: [Client.cancel_workflow] Attempting to cancel workflow #{workflow_id}..."
       repo = Yantra.repository
@@ -122,23 +112,18 @@ module Yantra
       end
 
       # 2. Mark Workflow as Cancelled
-      # Use expected_old_state for optimistic locking
-      # We might be able to cancel from pending or running
       possible_previous_states = [Core::StateMachine::PENDING, Core::StateMachine::RUNNING]
       update_success = false
-
       possible_previous_states.each do |prev_state|
-         # Try updating from each possible previous state
          update_success = repo.update_workflow_attributes(
            workflow_id,
            { state: Core::StateMachine::CANCELLED.to_s, finished_at: Time.current },
            expected_old_state: prev_state
          )
-         break if update_success # Stop trying if update succeeded
+         break if update_success
       end
 
       unless update_success
-         # Reload to check the actual current state if update failed
          latest_state = repo.find_workflow(workflow_id)&.state || 'unknown'
          puts "WARN: [Client.cancel_workflow] Failed to update workflow #{workflow_id} state to cancelled (maybe state changed concurrently? Current state: #{latest_state})."
          return false
@@ -157,37 +142,90 @@ module Yantra
         job_ids_to_cancel = jobs_to_cancel.map(&:id)
         puts "INFO: [Client.cancel_workflow] Cancelling #{job_ids_to_cancel.size} pending/enqueued jobs: #{job_ids_to_cancel}."
         begin
-          # Use the bulk cancellation method from the repository interface
           cancelled_count = repo.cancel_jobs_bulk(job_ids_to_cancel)
           puts "INFO: [Client.cancel_workflow] Repository confirmed cancellation update for #{cancelled_count} jobs."
-          # TODO: Emit job.cancelled events (might be hard in bulk)
         rescue Yantra::Errors::PersistenceError => e
-          # Log error but continue, workflow state is already cancelled
           puts "ERROR: [Client.cancel_workflow] Failed during bulk job cancellation for workflow #{workflow_id}: #{e.message}"
         end
       else
         puts "INFO: [Client.cancel_workflow] No pending or enqueued jobs found to cancel for workflow #{workflow_id}."
       end
 
-      # 5. Running jobs are left untouched and will finish naturally.
-      #    The Orchestrator#job_finished method needs modification to handle this.
-
       true # Cancellation process initiated successfully
     rescue StandardError => e
-      # Catch unexpected errors during the process
       puts "ERROR: [Client.cancel_workflow] Unexpected error for workflow #{workflow_id}: #{e.class} - #{e.message}\n#{e.backtrace.take(5).join("\n")}"
-      # Optionally re-raise wrapped in a Yantra::Error
-      # raise Yantra::Error, "Cancellation failed: #{e.message}"
       false
     end
-    # --- END cancel_workflow ---
+
+
+    # --- REFACTORED METHOD: retry_failed_jobs ---
+    # Attempts to retry all failed jobs within a failed workflow.
+    # Delegates the core re-enqueuing logic to WorkflowRetryService.
+    # @param workflow_id [String] The UUID of the workflow to retry.
+    # @return [Integer, false] The number of jobs re-enqueued for retry, or false if the
+    #   workflow was not found, not in a failed state, or failed to reset state.
+    def self.retry_failed_jobs(workflow_id)
+      puts "INFO: [Client.retry_failed_jobs] Attempting to retry failed jobs for workflow #{workflow_id}..."
+      repo = Yantra.repository
+      worker = Yantra.worker_adapter # Get worker adapter instance
+
+      # 1. Validate Workflow State
+      workflow = repo.find_workflow(workflow_id)
+      unless workflow
+        puts "WARN: [Client.retry_failed_jobs] Workflow #{workflow_id} not found."
+        return false
+      end
+      unless workflow.state.to_sym == Core::StateMachine::FAILED
+        puts "WARN: [Client.retry_failed_jobs] Workflow #{workflow_id} is not in 'failed' state (current: #{workflow.state}). Cannot retry."
+        return false
+      end
+
+      # 2. Reset Workflow State
+      # Atomically update state back to running and clear has_failures flag,
+      # ensuring it was previously 'failed'.
+      workflow_update_success = repo.update_workflow_attributes(
+        workflow_id,
+        {
+          state: Core::StateMachine::RUNNING.to_s,
+          has_failures: false,
+          finished_at: nil # Clear finished_at timestamp
+        },
+        expected_old_state: Core::StateMachine::FAILED
+      )
+
+      unless workflow_update_success
+        # Reload to check the actual current state if update failed
+        latest_state = repo.find_workflow(workflow_id)&.state || 'unknown'
+        puts "WARN: [Client.retry_failed_jobs] Failed to reset workflow #{workflow_id} state to running (maybe state changed concurrently? Current state: #{latest_state})."
+        return false
+      end
+      puts "INFO: [Client.retry_failed_jobs] Workflow #{workflow_id} state reset to running."
+      # TODO: Emit workflow.retrying event?
+
+      # 3. Delegate Job Re-enqueuing to Service Class
+      # Ensure the service class is required at the top of the file
+      retry_service = Core::WorkflowRetryService.new(
+        workflow_id: workflow_id,
+        repository: repo,
+        worker_adapter: worker
+      )
+      reenqueued_count = retry_service.call
+
+      puts "INFO: [Client.retry_failed_jobs] Finished. Service reported #{reenqueued_count} jobs re-enqueued."
+      reenqueued_count # Return the count from the service
+
+    rescue StandardError => e
+      # Catch unexpected errors during the process
+      puts "ERROR: [Client.retry_failed_jobs] Unexpected error for workflow #{workflow_id}: #{e.class} - #{e.message}\n#{e.backtrace.take(5).join("\n")}"
+      false
+    end
+    # --- END REFACTORED retry_failed_jobs ---
 
 
     # --- Placeholder for Other Client Methods ---
 
     # def self.list_workflows(status: nil, limit: 50, offset: 0) ... end
-    # def self.retry_failed_jobs(workflow_id) ... end
-    # def self.retry_job(job_id) ... end
+    # def self.retry_job(job_id) ... end # Might call retry_failed_jobs internally after finding workflow?
     # ... etc ...
 
   end

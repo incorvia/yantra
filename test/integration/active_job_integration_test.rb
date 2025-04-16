@@ -1,5 +1,5 @@
 # --- test/integration/active_job_integration_test.rb ---
-# (Full file content with unreliable assertions commented/removed)
+# (Added tests for Client.retry_failed_jobs)
 
 require "test_helper"
 
@@ -124,7 +124,7 @@ module Yantra
 
       # --- Helper to get job records ---
       def get_job_records(workflow_id)
-        Persistence::ActiveRecord::JobRecord.where(workflow_id: workflow_id).index_by(&:klass)
+        Persistence::ActiveRecord::JobRecord.where(workflow_id: workflow_id).order(:created_at).index_by(&:klass)
       end
 
       # --- Test Cases ---
@@ -132,20 +132,16 @@ module Yantra
       def test_linear_workflow_success_end_to_end
          # Arrange
          workflow_id = Client.create_workflow(LinearSuccessWorkflow)
-
          # Act 1: Start
          Client.start_workflow(workflow_id)
-
          # Assert 1: Job A enqueued
          assert_equal 1, enqueued_jobs.size
          job_records = get_job_records(workflow_id)
          job_a_record = job_records["IntegrationJobA"]
          assert_enqueued_with(job: Worker::ActiveJob::AsyncJob, args: [job_a_record.id, workflow_id, "IntegrationJobA"])
          assert_equal "enqueued", job_a_record.reload.state
-
          # Act 2: Perform Job A
          perform_enqueued_jobs
-
          # Assert 2: Job A succeeded, Job B enqueued
          job_a_record.reload
          assert_equal "succeeded", job_a_record.state
@@ -154,16 +150,13 @@ module Yantra
          job_b_record = job_records["IntegrationJobB"]
          assert_enqueued_with(job: Worker::ActiveJob::AsyncJob, args: [job_b_record.id, workflow_id, "IntegrationJobB"])
          assert_equal "enqueued", job_b_record.reload.state
-
          # Act 3: Perform Job B
          perform_enqueued_jobs
-
          # Assert 3: Job B succeeded, Queue empty
          job_b_record.reload
          assert_equal "succeeded", job_b_record.state
          assert_equal({ "output_b" => "A_OUT_WORLD" }, job_b_record.output)
          assert_equal 0, enqueued_jobs.size
-
          # Assert 4: Workflow succeeded (Phase 6 check)
          wf_record = Persistence::ActiveRecord::WorkflowRecord.find(workflow_id)
          assert_equal "succeeded", wf_record.state, "Workflow state should be 'succeeded' after last job finishes"
@@ -189,7 +182,6 @@ module Yantra
          job_f_record.reload
          assert_equal "failed", job_f_record.state
          refute_nil job_f_record.error
-         # Check the class and message within the persisted error hash
          assert_equal "StandardError", job_f_record.error["class"]
          assert_match(/Integration job failed!/, job_f_record.error["message"])
          job_a_record = job_records["IntegrationJobA"]
@@ -214,7 +206,6 @@ module Yantra
         job_a_record = job_records["IntegrationJobA"]
         assert_enqueued_with(job: Worker::ActiveJob::AsyncJob, args: [job_a_record.id, workflow_id, "IntegrationJobA"])
         assert_equal "enqueued", job_a_record.reload.state
-
         # Act 2: Perform Job A
         perform_enqueued_jobs # Runs Job A
         # Assert 2: Job A succeeded, Jobs B and C enqueued
@@ -226,10 +217,8 @@ module Yantra
         assert_equal "enqueued", job_b_record.reload.state
         assert_equal "enqueued", job_c_record.reload.state
         assert_enqueued_jobs 2 # Verify count using helper
-
         # Act 3: Perform Jobs B and C
         perform_enqueued_jobs # Runs both B and C (as they are both enqueued)
-
         # Assert 3: Jobs B and C succeeded, Job D is enqueued
         job_b_record.reload
         job_c_record.reload
@@ -240,10 +229,8 @@ module Yantra
         job_d_record.reload # Reload to get the updated state
         assert_enqueued_with(job: Worker::ActiveJob::AsyncJob, args: [job_d_record.id, workflow_id, "IntegrationJobD"])
         assert_equal "enqueued", job_d_record.state # D should now be enqueued as B and C finished
-
         # Act 4: Perform Job D
         perform_enqueued_jobs # Runs D
-
         # Assert 4: Job D succeeded, Workflow succeeded
         job_d_record.reload
         assert_equal "succeeded", job_d_record.state
@@ -342,8 +329,7 @@ module Yantra
         refute_nil job_b_record.finished_at
 
         # Assert: Running perform again should do nothing
-        # The job might be "performed" by the test helper, but should abort early.
-        # assert_no_performed_jobs { perform_enqueued_jobs } # <<< REMOVED THIS ASSERTION
+        # assert_no_performed_jobs { perform_enqueued_jobs } # Removed unreliable check
       end
 
       def test_cancel_workflow_cancels_pending_workflow
@@ -394,7 +380,6 @@ module Yantra
         refute cancel_result, "Client.cancel_workflow should return false for finished workflow"
         wf_record.reload
         assert_equal "succeeded", wf_record.state # State remains succeeded
-        # Job states should also remain unchanged
         assert_equal "succeeded", job_records["IntegrationJobA"].reload.state
         assert_equal "succeeded", job_records["IntegrationJobB"].reload.state
       end
@@ -405,6 +390,103 @@ module Yantra
         # Act & Assert
         cancel_result = Client.cancel_workflow(non_existent_id)
         refute cancel_result, "Client.cancel_workflow should return false for non-existent workflow"
+      end
+
+      # --- NEW TESTS FOR Client.retry_failed_jobs ---
+
+      def test_retry_failed_jobs_restarts_failed_workflow
+        # Arrange: Create F -> A, run it so it fails
+        workflow_id = Client.create_workflow(LinearFailureWorkflow)
+        Client.start_workflow(workflow_id)
+        perform_enqueued_jobs # Run F (fails)
+        wf_record = Persistence::ActiveRecord::WorkflowRecord.find(workflow_id)
+        job_records = get_job_records(workflow_id)
+        job_f_record = job_records["IntegrationJobFails"]
+        job_a_record = job_records["IntegrationJobA"]
+        assert_equal "failed", wf_record.reload.state # Verify WF failed
+        assert_equal "failed", job_f_record.reload.state # Verify F failed
+        assert_equal "cancelled", job_a_record.reload.state # Verify A was cancelled
+
+        # Act: Retry the failed jobs
+        retry_result = Client.retry_failed_jobs(workflow_id)
+
+        # Assert: Retry initiated successfully
+        assert_equal 1, retry_result, "Should return count of jobs re-enqueued (1)"
+        wf_record.reload
+        assert_equal "running", wf_record.state # Workflow state reset to running
+        refute wf_record.has_failures # has_failures flag reset
+        assert_nil wf_record.finished_at # finished_at cleared
+
+        # Assert: Failed job F is now enqueued, cancelled job A remains cancelled
+        job_f_record.reload
+        assert_equal "enqueued", job_f_record.state
+        assert_nil job_f_record.finished_at # finished_at cleared
+        assert_equal "cancelled", job_a_record.reload.state # Job A remains cancelled
+
+        # Assert: Job F is in the queue
+        assert_equal 1, enqueued_jobs.size
+        assert_enqueued_with(job: Worker::ActiveJob::AsyncJob, args: [job_f_record.id, workflow_id, "IntegrationJobFails"])
+
+        # Act 2: Perform the retried job (it will fail again in this test)
+        perform_enqueued_jobs
+
+        # Assert 2: Workflow fails again
+        job_f_record.reload
+        assert_equal "failed", job_f_record.state # F fails again
+        assert_equal "cancelled", job_a_record.reload.state # A still cancelled
+        wf_record.reload
+        assert_equal "failed", wf_record.state # WF state becomes failed again
+        assert wf_record.has_failures
+        refute_nil wf_record.finished_at
+      end
+
+      def test_retry_failed_jobs_does_nothing_for_succeeded_workflow
+        # Arrange: Create A -> B, run it to completion
+        workflow_id = Client.create_workflow(LinearSuccessWorkflow)
+        Client.start_workflow(workflow_id)
+        perform_enqueued_jobs # Run A
+        perform_enqueued_jobs # Run B
+        wf_record = Persistence::ActiveRecord::WorkflowRecord.find(workflow_id)
+        assert_equal "succeeded", wf_record.reload.state
+
+        # Act: Attempt to retry
+        retry_result = Client.retry_failed_jobs(workflow_id)
+
+        # Assert: Retry failed / did nothing
+        assert_equal false, retry_result, "Should return false for non-failed workflow"
+        assert_equal "succeeded", wf_record.reload.state # State remains succeeded
+      end
+
+      def test_retry_failed_jobs_handles_not_found
+        # Arrange
+        non_existent_id = SecureRandom.uuid
+
+        # Act & Assert
+        retry_result = Client.retry_failed_jobs(non_existent_id)
+        assert_equal false, retry_result, "Should return false for non-existent workflow"
+      end
+
+      def test_retry_failed_jobs_handles_failed_workflow_with_no_failed_jobs
+         # Arrange: Manually create a failed workflow record without failed jobs
+         # (This state shouldn't normally occur but tests robustness)
+         workflow_id = SecureRandom.uuid
+         wf_record = Persistence::ActiveRecord::WorkflowRecord.create!(
+            id: workflow_id, klass: "TestWf", state: "failed", has_failures: true, finished_at: Time.current
+         )
+         job_a_record = Persistence::ActiveRecord::JobRecord.create!(
+             id: SecureRandom.uuid, workflow_id: workflow_id, klass: "TestJob", state: "succeeded", finished_at: Time.current
+         )
+
+         # Act: Attempt to retry
+         retry_result = Client.retry_failed_jobs(workflow_id)
+
+         # Assert: Returns 0 jobs retried, workflow state reset
+         assert_equal 0, retry_result, "Should return 0 if no failed jobs found"
+         wf_record.reload
+         assert_equal "running", wf_record.state # State reset
+         refute wf_record.has_failures
+         assert_nil wf_record.finished_at
+         assert_equal "succeeded", job_a_record.reload.state # Other job untouched
       end
 
     end
