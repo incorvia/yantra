@@ -11,7 +11,7 @@ if AR_LOADED # Assumes test_helper defines AR_LOADED based on ActiveRecord/SQLit
   require "yantra/persistence/active_record/workflow_record"
   require "yantra/persistence/active_record/step_record"
   require "yantra/persistence/active_record/step_dependency_record"
-  require "yantra/worker/active_job/async_job"
+  require "yantra/worker/active_job/step_job"
   require "yantra/worker/active_job/adapter"
   require 'active_job/test_helper'
 end
@@ -138,7 +138,7 @@ module Yantra
          assert_equal 1, enqueued_jobs.size
          step_records = get_step_records(workflow_id)
          step_a_record = step_records["IntegrationStepA"]
-         assert_enqueued_with(job: Worker::ActiveJob::AsyncJob, args: [step_a_record.id, workflow_id, "IntegrationStepA"])
+         assert_enqueued_with(job: Worker::ActiveJob::StepJob, args: [step_a_record.id, workflow_id, "IntegrationStepA"])
          assert_equal "enqueued", step_a_record.reload.state
          # Act 2: Perform Job A
          perform_enqueued_jobs
@@ -148,7 +148,7 @@ module Yantra
          assert_equal({ "output_a" => "HELLO" }, step_a_record.output)
          assert_equal 1, enqueued_jobs.size
          step_b_record = step_records["IntegrationStepB"]
-         assert_enqueued_with(job: Worker::ActiveJob::AsyncJob, args: [step_b_record.id, workflow_id, "IntegrationStepB"])
+         assert_enqueued_with(job: Worker::ActiveJob::StepJob, args: [step_b_record.id, workflow_id, "IntegrationStepB"])
          assert_equal "enqueued", step_b_record.reload.state
          # Act 3: Perform Job B
          perform_enqueued_jobs
@@ -174,7 +174,7 @@ module Yantra
          assert_equal 1, enqueued_jobs.size
          step_records = get_step_records(workflow_id)
          step_f_record = step_records["IntegrationStepFails"]
-         assert_enqueued_with(job: Worker::ActiveJob::AsyncJob, args: [step_f_record.id, workflow_id, "IntegrationStepFails"])
+         assert_enqueued_with(job: Worker::ActiveJob::StepJob, args: [step_f_record.id, workflow_id, "IntegrationStepFails"])
          assert_equal "enqueued", step_f_record.reload.state
          # Act 2: Perform Job F (fails permanently as max_attempts = 1)
          perform_enqueued_jobs
@@ -204,7 +204,7 @@ module Yantra
         assert_equal 1, enqueued_jobs.size
         step_records = get_step_records(workflow_id)
         step_a_record = step_records["IntegrationStepA"]
-        assert_enqueued_with(job: Worker::ActiveJob::AsyncJob, args: [step_a_record.id, workflow_id, "IntegrationStepA"])
+        assert_enqueued_with(job: Worker::ActiveJob::StepJob, args: [step_a_record.id, workflow_id, "IntegrationStepA"])
         assert_equal "enqueued", step_a_record.reload.state
         # Act 2: Perform Job A
         perform_enqueued_jobs # Runs Job A
@@ -227,7 +227,7 @@ module Yantra
         assert_equal 1, enqueued_jobs.size # Only D should be enqueued now
         step_d_record = step_records["IntegrationStepD"]
         step_d_record.reload # Reload to get the updated state
-        assert_enqueued_with(job: Worker::ActiveJob::AsyncJob, args: [step_d_record.id, workflow_id, "IntegrationStepD"])
+        assert_enqueued_with(job: Worker::ActiveJob::StepJob, args: [step_d_record.id, workflow_id, "IntegrationStepD"])
         assert_equal "enqueued", step_d_record.state # D should now be enqueued as B and C finished
         # Act 4: Perform Job D
         perform_enqueued_jobs # Runs D
@@ -255,7 +255,7 @@ module Yantra
          assert_equal 1, enqueued_jobs.size
          step_records = get_step_records(workflow_id)
          step_r_record = step_records["IntegrationJobRetry"]
-         assert_enqueued_with(job: Worker::ActiveJob::AsyncJob, args: [step_r_record.id, workflow_id, "IntegrationJobRetry"])
+         assert_enqueued_with(job: Worker::ActiveJob::StepJob, args: [step_r_record.id, workflow_id, "IntegrationJobRetry"])
          assert_equal "enqueued", step_r_record.reload.state
 
          # Act 2: Perform Job R (Attempt 1 - Fails)
@@ -272,7 +272,7 @@ module Yantra
 
          # Act 3: Perform Job R (Attempt 2 - Succeeds)
          clear_enqueued_jobs
-         Worker::ActiveJob::AsyncJob.set(queue: step_r_record.queue || 'default').perform_later(step_r_record.id, workflow_id, "IntegrationJobRetry")
+         Worker::ActiveJob::StepJob.set(queue: step_r_record.queue || 'default').perform_later(step_r_record.id, workflow_id, "IntegrationJobRetry")
          perform_enqueued_jobs # Runs the re-enqueued job (Attempt 2)
 
          # Assert 3: Job R succeeded, Job A enqueued
@@ -285,7 +285,7 @@ module Yantra
          # After success, the *next* job (Job A) should be enqueued
          assert_equal 1, enqueued_jobs.size # Check Job A is now in the queue
          step_a_record = step_records["IntegrationStepA"]
-         assert_enqueued_with(job: Worker::ActiveJob::AsyncJob, args: [step_a_record.id, workflow_id, "IntegrationStepA"])
+         assert_enqueued_with(job: Worker::ActiveJob::StepJob, args: [step_a_record.id, workflow_id, "IntegrationStepA"])
 
          # Act 4: Perform Job A
          perform_enqueued_jobs
@@ -425,7 +425,7 @@ module Yantra
 
         # Assert: Job F is in the queue
         assert_equal 1, enqueued_jobs.size
-        assert_enqueued_with(job: Worker::ActiveJob::AsyncJob, args: [step_f_record.id, workflow_id, "IntegrationStepFails"])
+        assert_enqueued_with(job: Worker::ActiveJob::StepJob, args: [step_f_record.id, workflow_id, "IntegrationStepFails"])
 
         # Act 2: Perform the retried job (it will fail again in this test)
         perform_enqueued_jobs

@@ -1,4 +1,4 @@
-# --- lib/yantra/worker/active_job/async_job.rb ---
+# --- lib/yantra/worker/active_job/step_job.rb ---
 # (Modify perform to catch NameError specifically)
 
 begin
@@ -42,17 +42,17 @@ module Yantra
       # This ActiveJob class is enqueued by ActiveJob::Adapter.
       # Its perform method executes the actual Yantra::Step logic asynchronously.
       # It delegates error/retry handling to a RetryHandler class.
-      class AsyncJob < ::ActiveJob::Base # Inherit from the loaded ActiveJob::Base
+      class StepJob < ::ActiveJob::Base # Inherit from the loaded ActiveJob::Base
 
         # Main execution logic called by ActiveJob backend.
         def perform(yantra_step_id, yantra_workflow_id, yantra_step_klass_name)
-          puts "INFO: [AJ::AsyncJob] Attempt ##{self.executions} for Yantra step: #{yantra_step_id} WF: #{yantra_workflow_id} Klass: #{yantra_step_klass_name}"
+          puts "INFO: [AJ::StepJob] Attempt ##{self.executions} for Yantra step: #{yantra_step_id} WF: #{yantra_workflow_id} Klass: #{yantra_step_klass_name}"
           repo = Yantra.repository
           orchestrator = Yantra::Core::Orchestrator.new
 
           # --- 1. Notify Orchestrator: Starting ---
           unless orchestrator.step_starting(yantra_step_id)
-             puts "WARN: [AJ::AsyncJob] Orchestrator#step_starting indicated job #{yantra_step_id} should not proceed. Aborting."
+             puts "WARN: [AJ::StepJob] Orchestrator#step_starting indicated job #{yantra_step_id} should not proceed. Aborting."
              return
           end
 
@@ -106,7 +106,7 @@ module Yantra
           # Rescue StepDefinitionError specifically if you want distinct handling,
           # otherwise it will be caught by StandardError.
           # rescue Yantra::Errors::StepDefinitionError => e
-          #   puts "ERROR: [AJ::AsyncJob] Job definition error for #{yantra_step_id}: #{e.message}"
+          #   puts "ERROR: [AJ::StepJob] Job definition error for #{yantra_step_id}: #{e.message}"
           #   # Decide how to handle this - likely fail permanently without retry?
           #   # Example: Mark as failed directly?
           #   # repo.update_step_attributes(yantra_step_id, { state: 'failed', finished_at: Time.current })
@@ -116,10 +116,10 @@ module Yantra
 
           rescue StandardError => e
             # --- 3b. Handle Failure via RetryHandler (for runtime errors) ---
-            puts "ERROR: [AJ::AsyncJob] Job #{yantra_step_id} failed on attempt #{self.executions}. Delegating to RetryHandler."
+            puts "ERROR: [AJ::StepJob] Job #{yantra_step_id} failed on attempt #{self.executions}. Delegating to RetryHandler."
             # Ensure step_record was loaded before the error
             unless step_record
-              puts "FATAL: [AJ::AsyncJob] Cannot handle error for job #{yantra_step_id} - step_record not loaded."
+              puts "FATAL: [AJ::StepJob] Cannot handle error for job #{yantra_step_id} - step_record not loaded."
               raise e # Re-raise original if step_record is missing here
             end
             # Ensure user_step_klass is available, default to base if const_get failed earlier
@@ -143,21 +143,21 @@ module Yantra
               if outcome == :failed
                 # If handler returned :failed, it means it handled the permanent failure state update.
                 # We just need to notify the orchestrator to check downstream jobs/workflow state.
-                puts "INFO: [AJ::AsyncJob] Notifying orchestrator job finished (failed permanently) for #{yantra_step_id}"
+                puts "INFO: [AJ::StepJob] Notifying orchestrator job finished (failed permanently) for #{yantra_step_id}"
                 orchestrator.step_finished(yantra_step_id)
               end
             rescue => retry_error # Catch the error re-raised by handler on retry path
               # Ensure we're re-raising the *original* error passed to the handler
               unless retry_error.equal?(e)
-                 puts "WARN: [AJ::AsyncJob] RetryHandler raised a different error than expected. Re-raising original error."
+                 puts "WARN: [AJ::StepJob] RetryHandler raised a different error than expected. Re-raising original error."
                  retry_error = e
               end
-              puts "DEBUG: [AJ::AsyncJob] Re-raising error for ActiveJob retry: #{retry_error.class}"
+              puts "DEBUG: [AJ::StepJob] Re-raising error for ActiveJob retry: #{retry_error.class}"
               raise retry_error # Let ActiveJob handle the retry scheduling
             end
           end
         end # end perform
-      end # class AsyncJob
+      end # class StepJob
     end
   end
 end

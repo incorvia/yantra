@@ -1,4 +1,4 @@
-# --- test/worker/active_job/async_step_test.rb ---
+# --- test/worker/active_job/async_job_test.rb ---
 # (Update mock expectations and definition error test)
 
 require "test_helper"
@@ -6,13 +6,13 @@ require "ostruct" # For creating simple mock objects
 
 # Conditionally load ActiveJob related files
 if AR_LOADED # Using AR_LOADED as proxy for full dev env
-  require "yantra/worker/active_job/async_job"
+  require "yantra/worker/active_job/step_job"
   require "yantra/core/orchestrator"
   require "yantra/core/state_machine"
   require "yantra/errors"
   require "yantra/step" # Need base Yantra::Step
   require "minitest/mock"
-  # Require RetryHandler as it's now instantiated directly in AsyncJob's rescue block
+  # Require RetryHandler as it's now instantiated directly in StepJob's rescue block
   require "yantra/worker/retry_handler"
 end
 
@@ -28,9 +28,9 @@ end
 module Yantra
   module Worker
     module ActiveJob
-      if defined?(YantraActiveRecordTestCase) && AR_LOADED && defined?(Yantra::Worker::ActiveJob::AsyncJob)
+      if defined?(YantraActiveRecordTestCase) && AR_LOADED && defined?(Yantra::Worker::ActiveJob::StepJob)
 
-        class AsyncJobTest < YantraActiveRecordTestCase
+        class StepJobTest < YantraActiveRecordTestCase
 
           def setup
             super
@@ -55,8 +55,8 @@ module Yantra
               retries: 0 # Start retries at 0
             )
 
-            @async_step_instance = AsyncJob.new
-            @async_step_instance.executions = 1 # Default executions to 1 for most tests
+            @async_job_instance = StepJob.new
+            @async_job_instance.executions = 1 # Default executions to 1 for most tests
           end
 
           def teardown
@@ -92,7 +92,7 @@ module Yantra
               @mock_orchestrator_instance.expect(:step_succeeded, nil, [@step_id, expected_output])
 
               # Act
-              @async_step_instance.perform(@step_id, @workflow_id, @step_klass_name)
+              @async_job_instance.perform(@step_id, @workflow_id, @step_klass_name)
             end
           end
 
@@ -102,7 +102,7 @@ module Yantra
             failing_step_klass_name = "AsyncFailureJob"
             @mock_step_record.klass = failing_step_klass_name
             @mock_step_record.state = :running # Assume step_starting succeeded
-            @async_step_instance.executions = 1 # Explicitly set attempt number
+            @async_job_instance.executions = 1 # Explicitly set attempt number
 
             # Mock user class lookup if needed, though const_get might work if class defined
             # Object.stub(:const_get, AsyncFailureJob) do ... end
@@ -125,7 +125,7 @@ module Yantra
 
                 # Act & Assert: Expect the original error (ArgumentError) to be re-raised by RetryHandler
                 error = assert_raises(ArgumentError) do
-                  @async_step_instance.perform(@step_id, @workflow_id, failing_step_klass_name)
+                  @async_job_instance.perform(@step_id, @workflow_id, failing_step_klass_name)
                 end
                 assert_match(/unknown keyword: :multiplier/, error.message)
              end # End run_perform_with_stubs
@@ -139,7 +139,7 @@ module Yantra
             failing_step_klass_name = "AsyncFailureJob"
             @mock_step_record.klass = failing_step_klass_name
             @mock_step_record.state = :running # Assume state from previous attempt
-            @async_step_instance.executions = 3 # Set to max attempts
+            @async_job_instance.executions = 3 # Set to max attempts
 
             run_perform_with_stubs do
               # Expectations
@@ -162,12 +162,12 @@ module Yantra
               @mock_repo.expect(:set_workflow_has_failures_flag, true, [@workflow_id])
               # --- DO NOT Expect increment_step_retries ---
 
-              # Expect AsyncJob to call orchestrator.step_finished AFTER handler returns :failed
+              # Expect StepJob to call orchestrator.step_finished AFTER handler returns :failed
               @mock_orchestrator_instance.expect(:step_finished, nil, [@step_id])
 
               # Act
               # Perform should NOT raise an error now, as RetryHandler handles final failure
-              @async_step_instance.perform(@step_id, @workflow_id, failing_step_klass_name)
+              @async_job_instance.perform(@step_id, @workflow_id, failing_step_klass_name)
             end
           end
           # <<< --- END ADJUSTED MAX ATTEMPTS TEST --- >>>
@@ -180,7 +180,7 @@ module Yantra
                # --> Expect NO other calls (repo.find_step etc.)
 
                # Act
-               @async_step_instance.perform(@step_id, @workflow_id, @step_klass_name)
+               @async_job_instance.perform(@step_id, @workflow_id, @step_klass_name)
              end
           end
 
@@ -192,7 +192,7 @@ module Yantra
 
                # Act & Assert
                error = assert_raises(Yantra::Errors::StepNotFound) do # Check specific error
-                  @async_step_instance.perform(@step_id, @workflow_id, @step_klass_name)
+                  @async_job_instance.perform(@step_id, @workflow_id, @step_klass_name)
                end
                assert_match(/Job record #{@step_id} not found after starting/, error.message)
              end
@@ -211,12 +211,12 @@ module Yantra
                # --- DO NOT Expect RetryHandler calls (increment_step_retries, etc.) ---
                # --- DO NOT Expect orchestrator.step_finished or step_succeeded ---
 
-               # Act & Assert: Expect StepDefinitionError to be raised directly by AsyncJob
+               # Act & Assert: Expect StepDefinitionError to be raised directly by StepJob
                error = assert_raises(Yantra::Errors::StepDefinitionError) do
                   # Pass the invalid name to perform
-                  @async_step_instance.perform(@step_id, @workflow_id, invalid_klass_name)
+                  @async_job_instance.perform(@step_id, @workflow_id, invalid_klass_name)
                end
-               # Check the error message raised by AsyncJob's specific rescue
+               # Check the error message raised by StepJob's specific rescue
                assert_match(/Class #{invalid_klass_name} could not be loaded/, error.message)
             end
           end

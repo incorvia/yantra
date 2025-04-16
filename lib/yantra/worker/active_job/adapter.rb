@@ -4,9 +4,9 @@ require_relative '../enqueuing_interface'
 # Attempt to load the actual ActiveJob class, handle LoadError if AJ not present
 begin
   # Make sure this path matches the actual filename if you renamed it
-  require_relative 'async_job'
+  require_relative 'step_job'
 rescue LoadError
-  puts "WARN: Could not load Yantra ActiveJob AsyncJob. ActiveJob adapter may not function."
+  puts "WARN: Could not load Yantra ActiveJob StepJob. ActiveJob adapter may not function."
 end
 
 # Require Yantra's custom errors if needed for rescue block
@@ -28,7 +28,7 @@ module Yantra
         # @param queue_name [String] The target queue name.
         def enqueue(step_id, workflow_id, step_klass_name, queue_name)
           # Define the expected constant name
-          step_const_name = :AsyncJob # Or ExecutionJob/Job depending on final name
+          step_const_name = :StepJob # Or ExecutionJob/Job depending on final name
           step_class_module = Yantra::Worker::ActiveJob
 
           # Check if the required job class constant exists *before* trying to use it.
