@@ -59,7 +59,7 @@ module Yantra
             id: step_instance.id, workflow_id: step_instance.workflow_id,
             klass: step_instance.klass.to_s, arguments: step_instance.arguments,
             state: 'pending', queue: step_instance.queue_name,
-            is_terminal: step_instance.terminal?, retries: 0
+            retries: 0
           )
           true
         rescue ::ActiveRecord::RecordInvalid => e
@@ -70,11 +70,17 @@ module Yantra
           return true if step_instances_array.nil? || step_instances_array.empty?
           current_time = Time.current
           records_to_insert = step_instances_array.map do |step_instance|
-            { id: step_instance.id, workflow_id: step_instance.workflow_id,
-              klass: step_instance.klass.to_s, arguments: step_instance.arguments,
-              state: 'pending', queue: step_instance.queue_name,
-              is_terminal: step_instance.terminal?, retries: 0,
-              created_at: current_time, updated_at: current_time }
+            { 
+              id: step_instance.id,
+              workflow_id: step_instance.workflow_id,
+              klass: step_instance.klass.to_s,
+              arguments: step_instance.arguments,
+              state: 'pending',
+              queue: step_instance.queue_name,
+              retries: 0,
+              created_at: current_time,
+              updated_at: current_time
+            }
           end
           begin
             StepRecord.insert_all(records_to_insert)

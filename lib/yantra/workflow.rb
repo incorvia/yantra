@@ -51,7 +51,6 @@ module Yantra
         # Call the subclass's perform method, passing through original args/kwargs
         perform(*@arguments, **@kwargs)
         # Calculate terminal status immediately after the graph is built
-        calculate_terminal_status!
       end
     end
 
@@ -101,7 +100,6 @@ module Yantra
         klass: step_klass,
         arguments: params,
         dsl_name: step_ref_name, # Store the potentially modified, unique name
-        is_terminal: false # Default, calculated later by calculate_terminal_status!
       )
 
       @steps << job
@@ -127,22 +125,6 @@ module Yantra
     # @return [Yantra::Step, nil] The found job instance or nil.
     def find_step_by_ref(ref_name)
       @step_lookup[ref_name]
-    end
-
-    # Calculates which jobs are terminal and updates their instance variable.
-    # Called automatically by initialize after perform completes.
-    def calculate_terminal_status!
-      return if @steps.empty?
-
-      prerequisite_step_ids = Set.new
-      @dependencies.each_value do |dependency_id_array|
-        dependency_id_array.each { |dep_id| prerequisite_step_ids.add(dep_id) }
-      end
-
-      @steps.each do |job|
-        is_terminal = !prerequisite_step_ids.include?(job.id)
-        job.instance_variable_set(:@is_terminal, is_terminal)
-      end
     end
 
     # Placeholder: Method to convert workflow definition to persistable hash.

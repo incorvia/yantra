@@ -27,7 +27,6 @@ ActiveRecord::Schema[7.2].define(version: 2025_04_16_031219) do
     t.integer "retries", default: 0, null: false
     t.json "output"
     t.json "error"
-    t.boolean "is_terminal", default: false, null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.datetime "enqueued_at"

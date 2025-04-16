@@ -11,8 +11,6 @@ module Yantra
     attr_reader :id, :workflow_id, :klass, :arguments, :state, :dsl_name
     attr_reader :created_at, :enqueued_at, :started_at, :finished_at
     attr_reader :output, :error, :retries
-    # Make is_terminal readable if needed externally
-    # attr_reader :is_terminal
 
     # Initializes a new job instance. Typically called internally by Workflow DSL.
     #
@@ -22,9 +20,8 @@ module Yantra
     # @param arguments [Hash] Parameters passed to the #perform method.
     # @param state [Symbol] Initial state (defaults to :pending).
     # @param dsl_name [String] The reference name used in the workflow DSL.
-    # @param is_terminal [Boolean] Flag indicating if this job is a terminal node in the graph.
     # @param internal_state [Hash] Used internally for reconstruction from persistence.
-    def initialize(id: SecureRandom.uuid, workflow_id:, klass:, arguments: {}, state: :pending, dsl_name: nil, is_terminal: false, internal_state: {})
+    def initialize(id: SecureRandom.uuid, workflow_id:, klass:, arguments: {}, state: :pending, dsl_name: nil, internal_state: {})
       # Prioritize internal_state for rehydration if loading from persistence
       @id = internal_state.fetch(:id, id)
       @workflow_id = internal_state.fetch(:workflow_id, workflow_id)
@@ -33,7 +30,6 @@ module Yantra
       @state = internal_state.fetch(:state, state).to_sym
       @dsl_name = internal_state.fetch(:dsl_name, dsl_name) # Store reference name
       # Store terminal status, defaulting to false if not provided
-      @is_terminal = internal_state.fetch(:is_terminal, is_terminal)
 
       # Timestamps and execution details usually populated/updated by the system/repository
       @created_at = internal_state.fetch(:created_at, Time.now.utc)
@@ -63,17 +59,6 @@ module Yantra
       'default'
     end
 
-    # Indicates if this job is a terminal node in the workflow graph
-    # (i.e., no other jobs depend on it). This status is typically determined
-    # during graph construction (by the Workflow DSL/builder) and passed
-    # to this job's initializer.
-    # @return [Boolean] True if terminal, false otherwise.
-    def terminal?
-      # Read from the instance variable set during initialization.
-      # Defaults to false if not explicitly set.
-      @is_terminal || false
-    end
-
     # --- Helper Methods ---
 
     # Placeholder: Method to convert job instance to persistable hash.
@@ -88,7 +73,6 @@ module Yantra
         state: @state,
         dsl_name: @dsl_name,
         queue: queue_name,        # Include queue from method
-        is_terminal: terminal?,   # Include terminal status from method
         created_at: @created_at,
         enqueued_at: @enqueued_at,
         started_at: @started_at,

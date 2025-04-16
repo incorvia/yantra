@@ -168,25 +168,6 @@ class WorkflowTest < Minitest::Test
     end
   end
 
-  def test_calculate_terminal_status_correctly_identifies_terminal_jobs
-    wf_complex = ComplexTestWorkflow.new
-    step_d = wf_complex.find_step_by_ref('task_d')
-    step_a = wf_complex.find_step_by_ref('task_a')
-    step_b = wf_complex.find_step_by_ref('task_b')
-    step_c = wf_complex.find_step_by_ref('task_c')
-
-    assert step_d.terminal?, "task_d should be terminal"
-    refute step_a.terminal?, "task_a should not be terminal"
-    refute step_b.terminal?, "task_b should not be terminal"
-    refute step_c.terminal?, "task_c should not be terminal"
-
-    wf_linear = LinearTestWorkflow.new
-    step_c_linear = wf_linear.find_step_by_ref('c')
-    step_b_linear = wf_linear.find_step_by_ref('b')
-    assert step_c_linear.terminal?, "Job C (linear) should be terminal"
-    refute step_b_linear.terminal?, "Job B (linear) should not be terminal"
-  end
-
   def test_dynamic_dependencies_from_loop # <<< NEW TEST
     # Arrange: Define workflow that creates jobs in a loop
     wf = DynamicDepWorkflow.new(count: 3)

@@ -104,12 +104,6 @@ module Yantra
         refute_nil process_job, "Process Data job record should exist"
         refute_nil final_job, "Final Step job record should exist"
         assert step_records.all? { |j| j.state == "pending" }, "All jobs should start in pending state"
-        # Check is_terminal flag persistence
-        # Note: This assertion will likely fail until the logic to determine/set is_terminal is added
-        # assert final_job.is_terminal, "Final job should be marked terminal"
-        # refute fetch_job.is_terminal, "Non-terminal job should not be marked terminal"
-        # refute process_job.is_terminal, "Non-terminal job should not be marked terminal"
-
 
         # Assert: Dependency Records were created correctly
         # Query dependencies based on the job IDs we found
