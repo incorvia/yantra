@@ -112,6 +112,8 @@ GEM
     marcel (1.0.4)
     mini_mime (1.1.5)
     minitest (5.25.5)
+    minitest-focus (1.4.0)
+      minitest (>= 4, < 6)
     net-imap (0.5.6)
       date
       net-protocol
@@ -194,6 +196,7 @@ DEPENDENCIES
   activerecord (~> 7.1)
   database_cleaner-active_record
   minitest (~> 5.0)
+  minitest-focus
   rails (>= 6.0)
   rake (~> 13.0)
   sqlite3 (>= 2.1)

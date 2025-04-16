@@ -1,133 +1,178 @@
-# test/job_test.rb
+# test/step_test.rb
 require "test_helper"
+require "ostruct" # For creating simple mock objects
 
-# Dummy Job class for testing instantiation context
+# Conditionally load ActiveJob related files
+if AR_LOADED
+  require "yantra/errors"
+  require "yantra/step" # Need base Yantra::Step
+  require "minitest/mock"
+end
+
+
+# Dummy Step class for testing instantiation context
 class MyTestStep < Yantra::Step
   # No need to implement perform for these tests
 end
 
 class StepTest < Minitest::Test
+  # Define UUID regex constant for reuse
+  UUID_REGEX = /\A\h{8}-\h{4}-\h{4}-\h{4}-\h{12}\z/
+
   def setup
     @workflow_id = SecureRandom.uuid
     @klass = MyTestStep
     @arguments = { sample: "data", count: 1 }
     @dsl_name = "test_step_instance"
+
+    # Mock repo still needed for other tests
+    @mock_repo = Minitest::Mock.new
   end
 
-  def test_initialization_with_defaults
-    job = @klass.new(workflow_id: @workflow_id, klass: @klass)
+  def teardown
+    @mock_repo.verify
+    Yantra::Configuration.reset! if defined?(Yantra::Configuration) && Yantra::Configuration.respond_to?(:reset!)
+    super
+  end
 
-    assert_instance_of String, job.id
-    assert_match(/\w{8}-\w{4}-\w{4}-\w{4}-\w{12}/, job.id) # UUID format check
-    assert_equal @workflow_id, job.workflow_id
-    assert_equal @klass, job.klass
-    assert_equal :pending, job.state
-    assert_empty job.arguments
-    assert_nil job.dsl_name
-    assert_in_delta Time.now.utc, job.created_at, 1 # Check within 1 second
-    assert_nil job.enqueued_at
-    assert_nil job.started_at
-    assert_nil job.finished_at
-    assert_nil job.output
-    assert_nil job.error
-    assert_equal 0, job.retries
+  # --- Initialization Tests ---
+  # (Remain the same)
+
+  def test_initialization_with_defaults
+    step = @klass.new(workflow_id: @workflow_id, klass: @klass)
+    assert_instance_of String, step.id
+    assert_match(UUID_REGEX, step.id)
+    assert_equal @workflow_id, step.workflow_id
+    assert_equal @klass, step.klass
+    assert_empty step.arguments
+    assert_nil step.dsl_name
+    assert_equal "my_test_step_queue", step.queue_name
+    assert_empty step.parent_ids
   end
 
   def test_initialization_with_specific_arguments
-    job = @klass.new(
+    step = @klass.new(
       workflow_id: @workflow_id,
       klass: @klass,
       arguments: @arguments,
       dsl_name: @dsl_name,
-      state: :enqueued # Override default state
+      queue_name: "custom_queue",
+      parent_ids: ["parent-uuid-1"]
     )
-
-    assert_equal @arguments, job.arguments
-    assert_equal @dsl_name, job.dsl_name
-    assert_equal :enqueued, job.state
+    assert_equal @arguments, step.arguments
+    assert_equal @dsl_name, step.dsl_name
+    assert_equal "custom_queue", step.queue_name
+    assert_equal ["parent-uuid-1"], step.parent_ids
   end
 
-  def test_initialization_with_internal_state_reconstruction
-    timestamp = Time.now.utc - 3600 # An hour ago
-    error_info = { class: "StandardError", message: "It failed" }
-    internal_data = {
-      id: "job-uuid-123",
-      workflow_id: "wf-uuid-456",
-      klass: @klass, # Note: Class needs to be passed again or handled differently
-      arguments: @arguments,
-      state: :failed,
-      dsl_name: @dsl_name,
-      created_at: timestamp,
-      enqueued_at: timestamp + 60,
-      started_at: timestamp + 120,
-      finished_at: timestamp + 180,
-      output: { result: "partial" },
-      error: error_info,
-      retries: 2
-    }
-
-    # Pass the class again, as internal_state typically won't have the actual constant
-    job = @klass.new(klass: @klass, workflow_id: "ignored", internal_state: internal_data)
-
-    assert_equal "job-uuid-123", job.id
-    assert_equal "wf-uuid-456", job.workflow_id
-    assert_equal @klass, job.klass
-    assert_equal @arguments, job.arguments
-    assert_equal :failed, job.state
-    assert_equal @dsl_name, job.dsl_name
-    assert_equal timestamp, job.created_at
-    assert_equal timestamp + 60, job.enqueued_at
-    assert_equal timestamp + 120, job.started_at
-    assert_equal timestamp + 180, job.finished_at
-    assert_equal({ result: "partial" }, job.output)
-    assert_equal error_info, job.error
-    assert_equal 2, job.retries
+  def test_initialization_with_explicit_id_and_other_args
+    persisted_data = { id: "job-uuid-123", workflow_id: "wf-uuid-456", arguments: @arguments, dsl_name: @dsl_name, parent_ids: ["parent-1", "parent-2"] }
+    step = @klass.new(klass: @klass, workflow_id: persisted_data[:workflow_id], step_id: persisted_data[:id], arguments: persisted_data[:arguments], dsl_name: persisted_data[:dsl_name], parent_ids: persisted_data[:parent_ids])
+    assert_equal "job-uuid-123", step.id
+    assert_equal "wf-uuid-456", step.workflow_id
+    assert_equal @klass, step.klass
+    assert_equal @arguments, step.arguments
+    assert_equal @dsl_name, step.dsl_name
+    assert_equal ["parent-1", "parent-2"], step.parent_ids
   end
+
+  # --- Helper Method Tests ---
+  # (Remain the same)
 
   def test_to_hash_serialization
-    job = @klass.new(
-      workflow_id: @workflow_id,
-      klass: @klass,
-      arguments: @arguments,
-      dsl_name: @dsl_name,
-      state: :succeeded
-    )
-    # Simulate setting some state during execution
-    job.instance_variable_set(:@started_at, Time.now.utc - 10)
-    job.instance_variable_set(:@finished_at, Time.now.utc)
-    job.instance_variable_set(:@output, { final: "value" })
-
-    hash = job.to_hash
-
-    assert_equal job.id, hash[:id]
-    assert_equal job.workflow_id, hash[:workflow_id]
-    assert_equal job.klass.to_s, hash[:klass] # Should store class name as string
-    assert_equal job.arguments, hash[:arguments]
-    assert_equal job.state, hash[:state]
-    assert_equal job.dsl_name, hash[:dsl_name]
-    assert_equal job.created_at, hash[:created_at]
-    assert_equal job.enqueued_at, hash[:enqueued_at] # nil in this case
-    assert_equal job.started_at, hash[:started_at]
-    assert_equal job.finished_at, hash[:finished_at]
-    assert_equal job.output, hash[:output]
-    assert_equal job.error, hash[:error] # nil in this case
-    assert_equal job.retries, hash[:retries]
+    step = @klass.new(workflow_id: @workflow_id, klass: @klass, arguments: @arguments, dsl_name: @dsl_name, parent_ids: ["p1"])
+    hash = step.to_hash
+    assert_equal step.id, hash[:id]
+    assert_equal step.workflow_id, hash[:workflow_id]
+    assert_equal step.klass.to_s, hash[:klass]
+    assert_equal step.arguments, hash[:arguments]
+    assert_equal step.dsl_name, hash[:dsl_name]
+    assert_equal step.queue_name, hash[:queue_name]
+    assert_equal step.parent_ids, hash[:parent_ids]
+    refute hash.key?(:state)
   end
 
   def test_name_helper
     step_no_dsl = @klass.new(workflow_id: @workflow_id, klass: @klass)
-    step_with_dsl = @klass.new(workflow_id: @workflow_id, klass: @klass, dsl_name: "MySpecificJobName")
-
+    step_with_dsl = @klass.new(workflow_id: @workflow_id, klass: @klass, dsl_name: "MySpecificStepName")
     assert_equal "MyTestStep", step_no_dsl.name
-    assert_equal "MySpecificJobName", step_with_dsl.name
+    assert_equal "MySpecificStepName", step_with_dsl.name
   end
 
   def test_base_perform_raises_not_implemented_error
-    # Instantiate the base class directly
-    base_job = Yantra::Step.new(workflow_id: @workflow_id, klass: Yantra::Step)
-    assert_raises(NotImplementedError) do
-      base_job.perform
+    base_step = Yantra::Step.new(workflow_id: @workflow_id, klass: Yantra::Step)
+    assert_raises(NotImplementedError) { base_step.perform }
+  end
+
+  # --- Pipelining Tests (`parent_outputs`) ---
+  # (Tests using @mock_repo remain the same)
+
+  def test_parent_outputs_returns_empty_hash_for_no_parents
+    step = @klass.new(workflow_id: @workflow_id, klass: @klass, parent_ids: [])
+    step.stub(:repository, @mock_repo) do
+      assert_equal({}, step.parent_outputs)
     end
   end
+
+  def test_parent_outputs_fetches_and_returns_output_for_one_parent
+    parent_id = SecureRandom.uuid
+    expected_output = { "some_key" => "some_value" }
+    step = @klass.new(workflow_id: @workflow_id, klass: @klass, parent_ids: [parent_id])
+    @mock_repo.expect(:fetch_step_outputs, { parent_id => expected_output }, [[parent_id]])
+    step.stub(:repository, @mock_repo) do
+      result = step.parent_outputs
+      assert_equal({ parent_id => expected_output }, result)
+    end
+  end
+
+  def test_parent_outputs_fetches_and_returns_outputs_for_multiple_parents
+    parent_id_1 = SecureRandom.uuid
+    parent_id_2 = SecureRandom.uuid
+    output_1 = { value: 1 }
+    output_2 = nil
+    parent_ids = [parent_id_1, parent_id_2]
+    expected_result = { parent_id_1 => output_1, parent_id_2 => output_2 }
+    step = @klass.new(workflow_id: @workflow_id, klass: @klass, parent_ids: parent_ids)
+    @mock_repo.expect(:fetch_step_outputs, expected_result, [parent_ids])
+    step.stub(:repository, @mock_repo) do
+      result = step.parent_outputs
+      assert_equal(expected_result, result)
+    end
+  end
+
+  def test_parent_outputs_lazy_loads_and_caches_result
+    parent_id = SecureRandom.uuid
+    expected_output = { value: "cached" }
+    step = @klass.new(workflow_id: @workflow_id, klass: @klass, parent_ids: [parent_id])
+    @mock_repo.expect(:fetch_step_outputs, { parent_id => expected_output }, [[parent_id]])
+    step.stub(:repository, @mock_repo) do
+      result1 = step.parent_outputs # First call
+      result2 = step.parent_outputs # Second call (should use cache)
+      assert_equal({ parent_id => expected_output }, result1)
+      assert_equal({ parent_id => expected_output }, result2)
+    end
+  end
+
+   def test_parent_outputs_handles_repository_error_gracefully
+    parent_id = SecureRandom.uuid
+    step = @klass.new(workflow_id: @workflow_id, klass: @klass, parent_ids: [parent_id])
+
+    # *** FIX HERE: Use a simple object that raises instead of Minitest::Mock ***
+    error_repo = Object.new
+    # Define the method directly on the object instance
+    def error_repo.fetch_step_outputs(ids)
+      raise Yantra::Errors::PersistenceError, "DB connection failed"
+    end
+
+    # Stub the repository method on the step instance to return our error_repo
+    step.stub(:repository, error_repo) do
+        # Call the method under test
+        result = step.parent_outputs
+        # Assert that it returns empty hash because the rescue block should catch the error
+        assert_equal({}, result, "Should return empty hash on repository error")
+    end
+    # No need to verify @mock_repo here as it wasn't used.
+   end
+
 end
 
