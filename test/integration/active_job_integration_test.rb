@@ -176,15 +176,63 @@ module Yantra
 
 
       def test_cancel_workflow_cancels_pending_workflow
-        # ... (remains the same) ...
+        # Arrange: Create A -> B, do not start it
+        workflow_id = Client.create_workflow(LinearSuccessWorkflow)
+        wf_record = Persistence::ActiveRecord::WorkflowRecord.find(workflow_id)
+        job_records = get_job_records(workflow_id)
+        job_a_record = job_records["IntegrationJobA"]
+        job_b_record = job_records["IntegrationJobB"]
+        assert_equal "pending", wf_record.reload.state
+        assert_equal "pending", job_a_record.reload.state
+        assert_equal "pending", job_b_record.reload.state
+
+        # Act: Cancel the workflow
+        cancel_result = Client.cancel_workflow(workflow_id)
+
+        # Assert: Cancellation succeeded
+        assert cancel_result, "Client.cancel_workflow should return true"
+        wf_record.reload
+        assert_equal "cancelled", wf_record.state
+        refute_nil wf_record.finished_at
+
+        # Assert: All jobs become cancelled
+        assert_equal "cancelled", job_a_record.reload.state
+        assert_equal "cancelled", job_b_record.reload.state
+        refute_nil job_a_record.finished_at
+        refute_nil job_b_record.finished_at
+
+        # Assert: Starting the workflow now does nothing
+        refute Client.start_workflow(workflow_id)
+        assert_equal 0, enqueued_jobs.size
       end
 
       def test_cancel_workflow_does_nothing_for_finished_workflow
-        # ... (remains the same) ...
+        # Arrange: Create A -> B, run it to completion
+        workflow_id = Client.create_workflow(LinearSuccessWorkflow)
+        Client.start_workflow(workflow_id)
+        perform_enqueued_jobs # Run A
+        perform_enqueued_jobs # Run B
+        wf_record = Persistence::ActiveRecord::WorkflowRecord.find(workflow_id)
+        job_records = get_job_records(workflow_id)
+        assert_equal "succeeded", wf_record.reload.state # Verify WF succeeded
+
+        # Act: Attempt to cancel the finished workflow
+        cancel_result = Client.cancel_workflow(workflow_id)
+
+        # Assert: Cancellation failed / did nothing
+        refute cancel_result, "Client.cancel_workflow should return false for finished workflow"
+        wf_record.reload
+        assert_equal "succeeded", wf_record.state # State remains succeeded
+        assert_equal "succeeded", job_records["IntegrationJobA"].reload.state
+        assert_equal "succeeded", job_records["IntegrationJobB"].reload.state
       end
 
       def test_cancel_workflow_handles_not_found
-        # ... (remains the same) ...
+        # Arrange
+        non_existent_id = SecureRandom.uuid
+        # Act & Assert
+        cancel_result = Client.cancel_workflow(non_existent_id)
+        refute cancel_result, "Client.cancel_workflow should return false for non-existent workflow"
       end
 
     end
