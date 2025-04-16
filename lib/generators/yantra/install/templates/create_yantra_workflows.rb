@@ -1,28 +1,29 @@
-# frozen_string_literal: true
-
-# Migration template copied from the Yantra gem.
-# Creates the main table for storing workflow state.
-class CreateYantraWorkflows < ActiveRecord::Migration[7.0] # Adjust [7.0] to your target Rails version
+class CreateYantraWorkflows < ActiveRecord::Migration[<%= ActiveRecord::Migration.current_version %>]
   def change
-    # Use string type for UUID primary key for cross-database compatibility.
-    # enable_extension 'pgcrypto' # Still needed for default generation in Postgres if desired
-
-    create_table :yantra_workflows, id: false do |t| # Use id: false
+    # Creates the main table for storing workflow instances.
+    # Uses id: false and defines the primary key explicitly as a string UUID.
+    create_table :yantra_workflows, id: false do |t|
       # Explicitly define the UUID primary key as a string
       t.string :id, limit: 36, primary_key: true, null: false
 
-      t.string :klass, null: false
-      t.json :arguments # Use :json for cross-db compatibility
-      t.string :state, null: false
-      t.json :globals # Use :json for cross-db compatibility
-      t.boolean :has_failures, null: false, default: false
+      # Basic workflow information
+      t.string :klass, null: false       # Stores the class name of the user-defined workflow.
+      t.json :arguments                  # Stores the initial arguments passed to the workflow (use :text if :json type not supported).
+      t.string :state, null: false       # Stores the current state (e.g., pending, running, succeeded, failed).
+      t.json :globals                    # Optional field for storing global data (use :text if :json type not supported).
+      t.boolean :has_failures, null: false, default: false # Flag indicating if any step within the workflow has failed permanently.
 
-      t.timestamp :created_at, null: false
-      t.timestamp :updated_at, null: false
-      t.timestamp :started_at
-      t.timestamp :finished_at
+      # Timestamps (using t.timestamp for cross-db compatibility)
+      t.timestamp :created_at, null: false # Timestamp for when the workflow record was created.
+      t.timestamp :updated_at, null: false # Timestamp for the last update (e.g., state change).
+      t.timestamp :started_at             # Timestamp for when the workflow execution began.
+      t.timestamp :finished_at            # Timestamp for when the workflow reached a terminal state.
     end
 
+    # Add indexes for commonly queried columns
     add_index :yantra_workflows, :state
+    add_index :yantra_workflows, :started_at
+    add_index :yantra_workflows, :finished_at
+    # Note: Primary key is automatically indexed.
   end
 end

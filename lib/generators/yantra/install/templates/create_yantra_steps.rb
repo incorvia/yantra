@@ -1,42 +1,41 @@
 # frozen_string_literal: true
 
-# Migration template copied from the Yantra gem.
-# Creates the table for storing individual job state within workflows.
-class CreateYantraSteps < ActiveRecord::Migration[7.0] # Adjust [7.0] to your target Rails version
+class CreateYantraSteps < ActiveRecord::Migration[<%= ActiveRecord::Migration.current_version %>]
   def change
-    create_table :yantra_steps, id: false do |t| # Use id: false
+    # Creates the table for storing individual step instances within workflows.
+    # Uses id: false and defines the primary key explicitly as a string UUID.
+    create_table :yantra_steps, id: false do |t|
       # Explicitly define the UUID primary key as a string
       t.string :id, limit: 36, primary_key: true, null: false
 
-      # Use :string, limit: 36 for UUID foreign keys
-      t.string :workflow_id, limit: 36, null: false
+      # Foreign key linking to the yantra_workflows table (as string UUID).
+      t.string :workflow_id, limit: 36, null: false, index: true # Indexed for lookups by workflow.
 
-      t.string :klass, null: false
-      t.json :arguments # Use :json
-      t.string :state, null: false
-      t.string :queue
-      t.integer :retries, default: 0, null: false
-      t.json :output # Use :json
-      t.json :error # Use :json
-      t.boolean :is_terminal, default: false, null: false
+      # Basic step information
+      t.string :klass, null: false        # Stores the class name of the user-defined step.
+      t.json :arguments                   # Stores the arguments passed to the step's perform method (use :text if :json type not supported).
+      t.string :state, null: false, index: true # Stores the current state of the step. Indexed.
+      t.string :queue                     # Stores the name of the background queue this step should run on.
+      t.integer :retries, default: 0, null: false # Counter for how many times this step has been retried.
+      t.integer :max_attempts, default: 3, null: false # Stores the maximum number of attempts allowed for this step instance.
+      t.json :output                    # Stores the return value of the step's perform method upon success (use :text if :json type not supported).
+      t.json :error                     # Stores information about the last error if the step failed (use :text if :json type not supported).
 
-      t.timestamp :created_at, null: false
-      t.timestamp :updated_at, null: false
-      t.timestamp :enqueued_at
-      t.timestamp :started_at
-      t.timestamp :finished_at
+      # Timestamps (using t.timestamp)
+      t.timestamp :created_at, null: false # Timestamp for when the step record was created.
+      t.timestamp :updated_at, null: false # Timestamp for the last update.
+      t.timestamp :enqueued_at            # Timestamp for when the step was sent to the background queue.
+      t.timestamp :started_at             # Timestamp for when the step execution began.
+      t.timestamp :finished_at            # Timestamp for when the step reached a terminal state.
     end
 
-    # Foreign Key constraint - Commented out for SQLite compatibility during schema load
-    # SQLite doesn't enforce FKs by default anyway. Associations rely on AR logic.
-    # Remove `type: :uuid` as PK is now string
-    # add_foreign_key :yantra_steps, :yantra_workflows, column: :workflow_id, primary_key: :id, on_delete: :cascade
+    # Add the foreign key constraint separately.
+    # Ensures that if a workflow is deleted, its associated steps are also deleted (cascade).
+    # Specifies the primary_key type matches the string 'id' column on yantra_workflows.
+    add_foreign_key :yantra_steps, :yantra_workflows, column: :workflow_id, primary_key: :id, on_delete: :cascade
 
-    # --- Indexes ---
-    add_index :yantra_steps, [:workflow_id, :state] # Critical index
-    add_index :yantra_steps, :state
-    # Add index for the foreign key column itself
-    add_index :yantra_steps, :workflow_id
+    # Add any other desired indexes
+    # Example: Composite index (optional, but potentially useful)
+    # add_index :yantra_steps, [:workflow_id, :state]
   end
 end
-

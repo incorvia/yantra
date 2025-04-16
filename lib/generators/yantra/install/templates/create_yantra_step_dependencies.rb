@@ -1,25 +1,29 @@
 # frozen_string_literal: true
 
-# Migration template copied from the Yantra gem.
-# Creates the join table for tracking job dependencies (DAG edges).
-class CreateYantraStepDependencies < ActiveRecord::Migration[7.0] # Adjust [7.0] to your target Rails version
+class CreateYantraStepDependencies < ActiveRecord::Migration[<%= ActiveRecord::Migration.current_version %>]
   def change
+    # Creates the join table to represent the dependency graph (DAG edges).
+    # No separate primary key ('id: false') as the combination of the two foreign keys is unique.
     create_table :yantra_step_dependencies, id: false do |t|
-      # Use :string, limit: 36 for UUID foreign keys
+      # Foreign key for the step that depends on another (the "downstream" step) (as string UUID).
       t.string :step_id, limit: 36, null: false
+
+      # Foreign key for the step that must be completed first (the "upstream" prerequisite/dependency) (as string UUID).
       t.string :depends_on_step_id, limit: 36, null: false
     end
 
-    # --- Indexes ---
-    add_index :yantra_step_dependencies, [:step_id, :depends_on_step_id], unique: true, name: 'idx_step_dependencies_unique'
-    add_index :yantra_step_dependencies, :depends_on_step_id, name: 'idx_step_dependencies_on_prereq'
-    # Add index for the step_id column as well if needed for finding dependencies quickly
-    # add_index :yantra_step_dependencies, :step_id
+    # Add a unique composite index to enforce the one-way dependency relationship
+    # and provide fast lookups based on the dependent step.
+    add_index :yantra_step_dependencies, [:step_id, :depends_on_step_id], unique: true, name: 'index_yantra_step_dependencies_on_step_and_depends_on'
 
-    # --- Foreign Keys ---
-    # Commented out for SQLite compatibility during schema load.
-    # Remove `type: :uuid` as PK is now string
-    # add_foreign_key :yantra_step_dependencies, :yantra_steps, column: :step_id, primary_key: :id, on_delete: :cascade
-    # add_foreign_key :yantra_step_dependencies, :yantra_steps, column: :depends_on_step_id, primary_key: :id, on_delete: :cascade
+    # Add an index on the prerequisite step ID for efficiently finding all steps
+    # that depend on a specific step (finding dependents).
+    add_index :yantra_step_dependencies, [:depends_on_step_id], name: 'index_yantra_step_dependencies_on_depends_on_step_id'
+
+    # Add foreign key constraints separately.
+    # Ensures dependency records are removed if either linked step is deleted (cascade).
+    # Specifies the primary_key type matches the string 'id' column on yantra_steps.
+    add_foreign_key :yantra_step_dependencies, :yantra_steps, column: :step_id, primary_key: :id, on_delete: :cascade
+    add_foreign_key :yantra_step_dependencies, :yantra_steps, column: :depends_on_step_id, primary_key: :id, on_delete: :cascade
   end
 end
