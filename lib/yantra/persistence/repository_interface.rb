@@ -5,6 +5,25 @@ module Yantra
     module RepositoryInterface
 
       # ... (persist_workflow, find_workflow, etc. - keep existing methods) ...
+      def find_workflow(workflow_id)
+        raise NotImplementedError
+      end
+
+      def persist_workflow(workflow_instance)
+        raise NotImplementedError
+      end
+
+      def update_workflow_attributes(workflow_id, attributes_hash, expected_old_state: nil)
+        raise NotImplementedError
+      end
+
+      def set_workflow_has_failures_flag(workflow_id)
+        raise NotImplementedError
+      end
+
+      def workflow_has_failures?(workflow_id)
+        raise NotImplementedError
+      end
 
       # --- Job Methods ---
 
@@ -24,19 +43,22 @@ module Yantra
         raise NotImplementedError
       end
 
-      # --- NEW METHOD ---
-      # Updates multiple jobs to the 'cancelled' state efficiently.
-      # Should only cancel jobs that are in a cancellable state (e.g., pending, enqueued, running).
-      # @param job_ids [Array<String>] An array of job UUIDs to cancel.
-      # @return [Integer] The number of jobs actually updated/cancelled.
       def cancel_jobs_bulk(job_ids)
         raise NotImplementedError, "#{self.class.name}#cancel_jobs_bulk is not implemented"
       end
-      # --- END NEW METHOD ---
 
       def running_job_count(workflow_id)
         raise NotImplementedError
       end
+
+      # --- NEW METHOD ---
+      # Counts jobs currently in the 'enqueued' state for a workflow.
+      # @param workflow_id [String] The UUID of the workflow.
+      # @return [Integer] The number of enqueued jobs.
+      def enqueued_job_count(workflow_id)
+        raise NotImplementedError, "#{self.class.name}#enqueued_job_count is not implemented"
+      end
+      # --- END NEW METHOD ---
 
       def get_workflow_jobs(workflow_id, status: nil)
         raise NotImplementedError

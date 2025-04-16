@@ -5,6 +5,7 @@ require_relative 'workflow'
 require_relative 'job'
 require_relative 'errors'
 require_relative 'core/orchestrator' # Require Orchestrator
+require_relative 'core/state_machine' # Require StateMachine for constants
 
 module Yantra
   # Public interface for interacting with the Yantra workflow system.
@@ -13,8 +14,8 @@ module Yantra
 
     # Creates and persists a new workflow instance along with its defined
     # jobs and their dependencies.
-    # (Implementation remains the same as before)
     def self.create_workflow(workflow_klass, *args, **kwargs)
+      # ... (implementation remains the same) ...
       # 1. Validate Input
       unless workflow_klass.is_a?(Class) && workflow_klass < Yantra::Workflow
         raise ArgumentError, "#{workflow_klass} must be a Class inheriting from Yantra::Workflow"
@@ -66,66 +67,127 @@ module Yantra
       wf_instance.id
     end
 
-    # --- Implemented Client Methods ---
-
     # Starts a previously created workflow.
-    # This triggers the Orchestrator to find and enqueue initial jobs.
-    # @param workflow_id [String] The UUID of the workflow to start.
-    # @return [Boolean] true if the start process was initiated successfully, false otherwise.
     def self.start_workflow(workflow_id)
+      # ... (implementation remains the same) ...
       puts "INFO: [Client] Requesting start for workflow #{workflow_id}..."
-      # Instantiate orchestrator (uses configured repo/worker adapters)
       orchestrator = Core::Orchestrator.new
-      # Delegate to orchestrator's start method
       orchestrator.start_workflow(workflow_id)
     end
 
     # Finds a workflow by its ID using the configured repository.
-    # @param workflow_id [String] The UUID of the workflow.
-    # @return [Object, nil] A representation of the workflow or nil if not found.
     def self.find_workflow(workflow_id)
+      # ... (implementation remains the same) ...
       puts "INFO: [Client] Finding workflow #{workflow_id}..."
       Yantra.repository.find_workflow(workflow_id)
     end
 
     # Finds a job by its ID using the configured repository.
-    # @param job_id [String] The UUID of the job.
-    # @return [Object, nil] A representation of the job or nil if not found.
     def self.find_job(job_id)
+      # ... (implementation remains the same) ...
       puts "INFO: [Client] Finding job #{job_id}..."
       Yantra.repository.find_job(job_id)
     end
 
     # Retrieves jobs associated with a workflow, optionally filtered by status.
-    # @param workflow_id [String] The UUID of the workflow.
-    # @param status [Symbol, String, nil] Filter jobs by this state if provided.
-    # @return [Array<Object>] An array of job representations.
     def self.get_workflow_jobs(workflow_id, status: nil)
+      # ... (implementation remains the same) ...
       puts "INFO: [Client] Getting jobs for workflow #{workflow_id} (status: #{status})..."
       Yantra.repository.get_workflow_jobs(workflow_id, status: status)
     end
 
+    # --- NEW METHOD: cancel_workflow ---
+    # Attempts to cancel a workflow.
+    # - Marks the workflow state as 'cancelled'.
+    # - Cancels all associated jobs that are currently 'pending' or 'enqueued'.
+    # - Allows currently 'running' jobs to complete naturally.
+    # @param workflow_id [String] The UUID of the workflow to cancel.
+    # @return [Boolean] true if cancellation was successfully initiated, false otherwise
+    #   (e.g., workflow not found, already finished, or failed to update state).
+    def self.cancel_workflow(workflow_id)
+      puts "INFO: [Client.cancel_workflow] Attempting to cancel workflow #{workflow_id}..."
+      repo = Yantra.repository
+      workflow = repo.find_workflow(workflow_id)
+
+      # 1. Validate Workflow State
+      unless workflow
+        puts "WARN: [Client.cancel_workflow] Workflow #{workflow_id} not found."
+        return false
+      end
+
+      current_wf_state = workflow.state.to_sym
+      if Core::StateMachine.terminal?(current_wf_state) || current_wf_state == Core::StateMachine::CANCELLED
+        puts "WARN: [Client.cancel_workflow] Workflow #{workflow_id} is already in a terminal or cancelled state (#{current_wf_state})."
+        return false # Already finished or cancelled
+      end
+
+      # 2. Mark Workflow as Cancelled
+      # Use expected_old_state for optimistic locking
+      # We might be able to cancel from pending or running
+      possible_previous_states = [Core::StateMachine::PENDING, Core::StateMachine::RUNNING]
+      update_success = false
+
+      possible_previous_states.each do |prev_state|
+         # Try updating from each possible previous state
+         update_success = repo.update_workflow_attributes(
+           workflow_id,
+           { state: Core::StateMachine::CANCELLED.to_s, finished_at: Time.current },
+           expected_old_state: prev_state
+         )
+         break if update_success # Stop trying if update succeeded
+      end
+
+      unless update_success
+         # Reload to check the actual current state if update failed
+         latest_state = repo.find_workflow(workflow_id)&.state || 'unknown'
+         puts "WARN: [Client.cancel_workflow] Failed to update workflow #{workflow_id} state to cancelled (maybe state changed concurrently? Current state: #{latest_state})."
+         return false
+      end
+
+      puts "INFO: [Client.cancel_workflow] Workflow #{workflow_id} marked as cancelled in repository."
+      # TODO: Emit workflow.cancelled event here
+
+      # 3. Find Pending/Enqueued Jobs for this Workflow
+      cancellable_job_states = [Core::StateMachine::PENDING, Core::StateMachine::ENQUEUED]
+      jobs_to_cancel = repo.get_workflow_jobs(workflow_id)
+                           .select { |j| cancellable_job_states.include?(j.state.to_sym) }
+
+      # 4. Bulk Cancel Pending/Enqueued Jobs
+      if jobs_to_cancel.any?
+        job_ids_to_cancel = jobs_to_cancel.map(&:id)
+        puts "INFO: [Client.cancel_workflow] Cancelling #{job_ids_to_cancel.size} pending/enqueued jobs: #{job_ids_to_cancel}."
+        begin
+          # Use the bulk cancellation method from the repository interface
+          cancelled_count = repo.cancel_jobs_bulk(job_ids_to_cancel)
+          puts "INFO: [Client.cancel_workflow] Repository confirmed cancellation update for #{cancelled_count} jobs."
+          # TODO: Emit job.cancelled events (might be hard in bulk)
+        rescue Yantra::Errors::PersistenceError => e
+          # Log error but continue, workflow state is already cancelled
+          puts "ERROR: [Client.cancel_workflow] Failed during bulk job cancellation for workflow #{workflow_id}: #{e.message}"
+        end
+      else
+        puts "INFO: [Client.cancel_workflow] No pending or enqueued jobs found to cancel for workflow #{workflow_id}."
+      end
+
+      # 5. Running jobs are left untouched and will finish naturally.
+      #    The Orchestrator#job_finished method needs modification to handle this.
+
+      true # Cancellation process initiated successfully
+    rescue StandardError => e
+      # Catch unexpected errors during the process
+      puts "ERROR: [Client.cancel_workflow] Unexpected error for workflow #{workflow_id}: #{e.class} - #{e.message}\n#{e.backtrace.take(5).join("\n")}"
+      # Optionally re-raise wrapped in a Yantra::Error
+      # raise Yantra::Error, "Cancellation failed: #{e.message}"
+      false
+    end
+    # --- END cancel_workflow ---
+
+
     # --- Placeholder for Other Client Methods ---
 
-    # def self.list_workflows(status: nil, limit: 50, offset: 0)
-    #   puts "INFO: [Client] Listing workflows..."
-    #   Yantra.repository.list_workflows(status: status, limit: limit, offset: offset)
-    # end
-
-    # def self.cancel_workflow(workflow_id)
-    #   puts "INFO: [Client] Requesting cancellation for workflow #{workflow_id}..."
-    #   # orchestrator = Core::Orchestrator.new
-    #   # orchestrator.cancel_workflow(workflow_id) # Need cancel method on orchestrator
-    #   raise NotImplementedError
-    # end
-
-    # def self.retry_failed_jobs(workflow_id)
-    #   puts "INFO: [Client] Requesting retry for failed jobs in workflow #{workflow_id}..."
-    #   # orchestrator = Core::Orchestrator.new
-    #   # orchestrator.retry_failed_jobs(workflow_id) # Need retry method on orchestrator
-    #   raise NotImplementedError
-    # end
-
+    # def self.list_workflows(status: nil, limit: 50, offset: 0) ... end
+    # def self.retry_failed_jobs(workflow_id) ... end
+    # def self.retry_job(job_id) ... end
     # ... etc ...
 
   end

@@ -2,6 +2,10 @@
 
 require_relative '../repository_interface'
 require_relative '../../core/state_machine' # Needed for state constants
+require_relative 'workflow_record' # Ensure models are required
+require_relative 'job_record'
+require_relative 'job_dependency_record'
+
 
 module Yantra
   module Persistence
@@ -10,7 +14,7 @@ module Yantra
         include Yantra::Persistence::RepositoryInterface
 
         # --- Workflow Methods ---
-        # (find_workflow, persist_workflow, update_workflow_attributes, etc. remain the same)
+        # ... (find_workflow, persist_workflow, etc. remain the same) ...
         def find_workflow(workflow_id)
           WorkflowRecord.find_by(id: workflow_id)
         end
@@ -45,7 +49,7 @@ module Yantra
         end
 
         # --- Job Methods ---
-        # (find_job, persist_job, persist_jobs_bulk, update_job_attributes remain the same)
+        # ... (find_job, persist_job, etc. remain the same) ...
         def find_job(job_id)
           JobRecord.find_by(id: job_id)
         end
@@ -95,6 +99,12 @@ module Yantra
           JobRecord.where(workflow_id: workflow_id, state: 'running').count
         end
 
+        # --- IMPLEMENTED: enqueued_job_count ---
+        def enqueued_job_count(workflow_id)
+          JobRecord.where(workflow_id: workflow_id, state: 'enqueued').count
+        end
+        # --- END IMPLEMENTED ---
+
         def get_workflow_jobs(workflow_id, status: nil)
           scope = JobRecord.where(workflow_id: workflow_id)
           scope = scope.with_state(status) if status
@@ -102,23 +112,29 @@ module Yantra
         end
 
         def increment_job_retries(job_id)
+          # Use COALESCE for safety if retries column could be NULL
           updated_count = JobRecord.where(id: job_id).update_all("retries = COALESCE(retries, 0) + 1")
           updated_count > 0
         end
 
         def record_job_output(job_id, output)
+          # Convert output to JSON string if your column type requires it
+          # output_json = output.to_json
           updated_count = JobRecord.where(id: job_id).update_all(output: output)
           updated_count > 0
         end
 
         def record_job_error(job_id, error)
+          # Format error object into hash for JSON storage
           error_data = { class: error.class.name, message: error.message, backtrace: error.backtrace&.first(10) }
+          # Convert hash to JSON string if your column type requires it
+          # error_json = error_data.to_json
           updated_count = JobRecord.where(id: job_id).update_all(error: error_data)
           updated_count > 0
         end
 
         # --- Dependency Methods ---
-        # (add_job_dependency, add_job_dependencies_bulk, get_job_dependencies, get_job_dependents remain the same)
+        # ... (add_job_dependency, etc. remain the same) ...
         def add_job_dependency(job_id, dependency_job_id)
           JobDependencyRecord.create!(job_id: job_id, depends_on_job_id: dependency_job_id)
           true
@@ -150,42 +166,34 @@ module Yantra
           record ? record.dependents.pluck(:id) : []
         end
 
-        # --- UPDATED find_ready_jobs ---
-        # Finds jobs within a workflow that are ready to run.
-        # A job is ready if it's 'pending' AND either:
-        #   1. It has no dependencies.
-        #   2. All of its direct dependencies have 'succeeded'.
-        # @param workflow_id [String] The UUID of the workflow.
-        # @return [Array<String>] An array of job UUIDs ready to be enqueued.
         def find_ready_jobs(workflow_id)
           ready_job_ids = []
-          # Eager load dependencies to avoid N+1 queries inside the loop
           JobRecord.includes(:dependencies).where(workflow_id: workflow_id, state: 'pending').find_each do |job|
-            # Check if the job is ready: No dependencies OR all dependencies succeeded
             if job.dependencies.empty? || job.dependencies.all? { |dep| dep.state == 'succeeded' }
               ready_job_ids << job.id
-            else
-              # Optional: Check if any dependency failed/cancelled to proactively cancel this job
-              # This check could also live in the Orchestrator's check_and_enqueue_dependents logic
-              # any_dep_failed = job.dependencies.any? { |dep| ['failed', 'cancelled'].include?(dep.state) }
-              # update_job_attributes(job.id, { state: 'cancelled', finished_at: Time.current }) if any_dep_failed
             end
           end
           ready_job_ids
         end
-        # --- END UPDATED find_ready_jobs ---
 
         # --- Bulk Cancellation Method ---
+        # ... (remains the same) ...
         def cancel_jobs_bulk(job_ids)
            return 0 if job_ids.nil? || job_ids.empty?
            cancellable_states = [
              Yantra::Core::StateMachine::PENDING.to_s,
              Yantra::Core::StateMachine::ENQUEUED.to_s,
-             Yantra::Core::StateMachine::RUNNING.to_s
+             Yantra::Core::StateMachine::RUNNING.to_s # Should running be cancelled by this? Maybe not. Let's remove for now.
+           ].freeze # Define as constant
+           # Revisit: Should cancel_jobs_bulk cancel RUNNING jobs?
+           # Let's assume NO for now, aligning with cancel_workflow logic.
+           cancellable_states_query = [
+             Yantra::Core::StateMachine::PENDING.to_s,
+             Yantra::Core::StateMachine::ENQUEUED.to_s
            ]
-           updated_count = JobRecord.where(id: job_ids, state: cancellable_states).update_all(
+           updated_count = JobRecord.where(id: job_ids, state: cancellable_states_query).update_all(
              state: Yantra::Core::StateMachine::CANCELLED.to_s,
-             finished_at: Time.current
+             finished_at: Time.current # Or Time.now.utc
            )
            updated_count
         rescue ::ActiveRecord::StatementInvalid, ::ActiveRecord::ActiveRecordError => e
@@ -193,7 +201,7 @@ module Yantra
         end
 
         # --- Listing/Cleanup Methods ---
-        # (list_workflows, delete_workflow, delete_expired_workflows remain the same)
+        # ... (list_workflows, delete_workflow, delete_expired_workflows remain the same) ...
         def list_workflows(status: nil, limit: 50, offset: 0)
           scope = WorkflowRecord.order(created_at: :desc).limit(limit).offset(offset)
           scope = scope.with_state(status) if status
