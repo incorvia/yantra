@@ -1,75 +1,64 @@
 # lib/yantra/configuration.rb
 
-require 'singleton'
 require 'logger'
-# Attempt to load ActiveSupport::Notifications for default notifier, but don't fail if not present
-begin
-  require 'active_support/notifications'
-rescue LoadError
-  # ActiveSupport not available
-end
+require_relative 'errors'
 
 module Yantra
   # Handles configuration settings for the Yantra gem.
-  # Access the singleton instance via `Yantra.configuration` or `Yantra::Configuration.instance`.
+  # Provides default values and allows overrides via `Yantra.configure`.
   class Configuration
-    include Singleton # Use Singleton pattern for easy global access
-
     # --- Persistence Configuration ---
-    attr_accessor :persistence_adapter # Default: :active_record
-    attr_accessor :redis_url           # Default: 'redis://localhost:6379/0'
-    attr_accessor :redis_options       # Default: {}
-    attr_accessor :redis_namespace     # Default: 'yantra'
+    attr_accessor :persistence_adapter
+    attr_accessor :persistence_options
 
     # --- Worker Configuration ---
-    attr_accessor :worker_adapter      # Default: :active_job
-    # TODO: Add specific worker options if needed
+    attr_accessor :worker_adapter
+    attr_accessor :worker_adapter_options
 
-    # --- Retry Configuration ---
-    # Default maximum number of times a job will be attempted (including first run).
-    # Can be overridden per job class by defining `self.yantra_max_attempts`.
-    # Default: 3
-    attr_accessor :default_max_step_attempts # <<< NEW CONFIGURATION
+    # --- Event Notification Configuration ---
+    attr_accessor :notification_adapter
+    attr_accessor :notification_adapter_options
 
     # --- General Configuration ---
-    attr_accessor :logger                 # Default: Logger.new($stdout, level: Logger::INFO)
-    attr_accessor :notification_backend   # Default: ActiveSupport::Notifications or nil
-    # TODO: Add config for RetryHandler class to allow swapping?
-    # attr_accessor :retry_handler_class
+    attr_accessor :default_step_options
+    attr_accessor :logger # Logger instance used by Yantra internals.
+
+    # --- Retry Handler Configuration ---
+    attr_accessor :retry_handler_class
 
     def initialize
-      set_defaults
-    end
-
-    def self.reset!
-      instance.send(:set_defaults)
-    end
-
-    private
-
-    def set_defaults
-      # Persistence Defaults
+      # --- Defaults ---
       @persistence_adapter = :active_record
-      @redis_url = ENV['YANTRA_REDIS_URL'] || ENV['REDIS_URL'] || 'redis://localhost:6379/0'
-      @redis_options = {}
-      @redis_namespace = 'yantra'
+      @persistence_options = {}
 
-      # Worker Defaults
       @worker_adapter = :active_job
+      @worker_adapter_options = {}
 
-      # Retry Defaults
-      @default_max_step_attempts = 3 # <<< SET DEFAULT HERE
+      @notification_adapter = :null
+      @notification_adapter_options = {}
 
-      # General Defaults
-      @logger = Logger.new($stdout)
-      @logger.level = Logger::INFO
-      @notification_backend = default_notification_backend
-      # @retry_handler_class = Yantra::Worker::RetryHandler # Default handler class
+      @default_step_options = { retries: 3 }
+
+      # *** FIX HERE: Default logger to standard Logger writing to STDOUT ***
+      # Users in a Rails environment can explicitly set config.logger = Rails.logger
+      # in their initializer if desired.
+      @logger = ::Logger.new($stdout, level: ::Logger::INFO)
+      # Apply a simple formatter
+      @logger.formatter ||= proc do |severity, datetime, progname, msg|
+        "[#{datetime.strftime('%Y-%m-%d %H:%M:%S.%L')}] #{severity} -- : #{msg}\n"
+      end
+
+
+      @retry_handler_class = nil # Use default RetryHandler unless overridden
     end
 
-    def default_notification_backend
-      defined?(ActiveSupport::Notifications) ? ActiveSupport::Notifications : nil
+    # Allows resetting configuration, primarily for testing.
+    def self.reset!
+      Yantra.instance_variable_set(:@configuration, nil)
+      Yantra.instance_variable_set(:@repository, nil)
+      Yantra.instance_variable_set(:@worker_adapter, nil)
+      Yantra.instance_variable_set(:@notifier, nil)
     end
+
   end
 end
-

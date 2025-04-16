@@ -17,6 +17,7 @@ if AR_LOADED # Assumes test_helper defines AR_LOADED based on ActiveRecord/SQLit
 end
 
 # --- Dummy Classes for Integration Tests ---
+# (These remain the same as the previous version)
 class IntegrationStepA < Yantra::Step
   def perform(msg: "A"); puts "INTEGRATION_TEST: Job A running"; sleep 0.1; { output_a: msg.upcase }; end
 end
@@ -52,52 +53,39 @@ class IntegrationJobRetry < Yantra::Step
     end
   end
 end
-
-# --- NEW Steps for Pipelining Test ---
 class PipeProducer < Yantra::Step
   def perform(value:)
     puts "INTEGRATION_TEST: PipeProducer running"
     { produced_data: "PRODUCED_#{value.upcase}" }
   end
 end
-
 class PipeConsumer < Yantra::Step
   def perform() # Takes no arguments itself
     puts "INTEGRATION_TEST: PipeConsumer running"
     parent_data = parent_outputs # Hash like { "producer_id" => {"produced_data"=>"..."} }
-
-    # Find the producer's output hash (assuming one parent)
     producer_output_hash = parent_data.values.first
-
-    # *** FIX HERE: Access using string key ***
-    # Check if the hash exists and if the key (likely a string from JSON) exists
     unless producer_output_hash && producer_output_hash['produced_data']
       raise "Consumer failed: Did not receive expected data key from producer. Got: #{parent_data.inspect}"
     end
-
-    # Use the parent's output accessed via string key
     consumed_data = producer_output_hash['produced_data']
     { consumed: consumed_data, extra: "CONSUMED" }
   end
 end
-# --- END NEW Steps ---
-
 
 # --- Dummy Workflow Classes ---
+# (These remain the same as the previous version)
 class LinearSuccessWorkflow < Yantra::Workflow
   def perform
     step_a_ref = run IntegrationStepA, name: :step_a, params: { msg: "Hello" }
     run IntegrationStepB, name: :step_b, params: { input_data: { a_out: "A_OUT" }, msg: "World" }, after: step_a_ref
   end
 end
-
 class LinearFailureWorkflow < Yantra::Workflow
    def perform
       step_f_ref = run IntegrationStepFails, name: :step_f, params: { msg: "Fail Me" }
       run IntegrationStepA, name: :step_a, params: { msg: "Never runs" }, after: step_f_ref
    end
 end
-
 class ComplexGraphWorkflow < Yantra::Workflow
   def perform
     step_a_ref = run IntegrationStepA, name: :a, params: { msg: "Start" }
@@ -106,22 +94,18 @@ class ComplexGraphWorkflow < Yantra::Workflow
     run IntegrationStepD, name: :d, params: { input_b: { output_b: "B_OUT" }, input_c: { output_c: "c_out" } }, after: [step_b_ref, step_c_ref]
   end
 end
-
 class RetryWorkflow < Yantra::Workflow
   def perform
     step_r_ref = run IntegrationJobRetry, name: :step_r
     run IntegrationStepA, name: :step_a, after: step_r_ref # Runs after retry succeeds
   end
 end
-
-# --- NEW Workflow for Pipelining Test ---
 class PipeliningWorkflow < Yantra::Workflow
   def perform
     producer_ref = run PipeProducer, name: :producer, params: { value: "data123" }
     run PipeConsumer, name: :consumer, after: producer_ref
   end
 end
-# --- END NEW Workflow ---
 
 
 module Yantra
@@ -131,12 +115,12 @@ module Yantra
       include ActiveJob::TestHelper
 
       def setup
-        # ... (setup remains the same) ...
         super
         Yantra.configure do |config|
           config.persistence_adapter = :active_record
           config.worker_adapter = :active_job
-          config.default_max_step_attempts = 3
+          # *** FIX HERE: Use default_step_options hash ***
+          config.default_step_options[:retries] = 3
         end
         Yantra.instance_variable_set(:@repository, nil)
         Yantra.instance_variable_set(:@worker_adapter, nil)
@@ -150,9 +134,8 @@ module Yantra
       end
 
       def teardown
-         # ... (teardown remains the same) ...
          clear_enqueued_jobs
-         Yantra::Configuration.reset! if Yantra::Configuration.respond_to?(:reset!)
+         Yantra::Configuration.reset! if defined?(Yantra::Configuration) && Yantra::Configuration.respond_to?(:reset!)
          super
       end
 
@@ -162,8 +145,21 @@ module Yantra
       end
 
       # --- Test Cases ---
-      # ... (other tests remain the same) ...
+      # (All test cases remain the same as the previous version)
+      # ... test_linear_workflow_success_end_to_end ...
+      # ... test_linear_workflow_failure_end_to_end ...
+      # ... test_complex_graph_success_end_to_end ...
+      # ... test_workflow_with_retries ...
+      # ... test_pipelining_workflow ...
+      # ... test_cancel_workflow_cancels_running_workflow ...
+      # ... test_cancel_workflow_cancels_pending_workflow ...
+      # ... test_cancel_workflow_does_nothing_for_finished_workflow ...
+      # ... test_retry_failed_steps_restarts_failed_workflow ...
+      # ... test_retry_failed_steps_does_nothing_for_succeeded_workflow ...
+      # ... test_retry_failed_steps_handles_not_found ...
+      # ... test_retry_failed_steps_handles_failed_workflow_with_no_failed_steps ...
 
+      # --- Test Methods (Copied from previous version for completeness) ---
       def test_linear_workflow_success_end_to_end
          # Arrange
          workflow_id = Client.create_workflow(LinearSuccessWorkflow)
@@ -340,7 +336,6 @@ module Yantra
          refute_nil wf_record.finished_at
       end
 
-      # --- NEW Pipelining Test ---
       def test_pipelining_workflow
         # Arrange: Producer -> Consumer (uses parent_outputs)
         workflow_id = Client.create_workflow(PipeliningWorkflow)
@@ -391,11 +386,8 @@ module Yantra
         assert_equal "succeeded", wf_record.state
         refute wf_record.has_failures
       end
-      # --- END NEW Pipelining Test ---
-
 
       # --- Cancel Tests ---
-      # ... (cancel tests remain the same) ...
       def test_cancel_workflow_cancels_running_workflow
         workflow_id = Client.create_workflow(LinearSuccessWorkflow)
         Client.start_workflow(workflow_id)
@@ -457,7 +449,6 @@ module Yantra
 
 
       # --- Retry Failed Steps Tests ---
-      # ... (retry tests remain the same) ...
       def test_retry_failed_steps_restarts_failed_workflow
         workflow_id = Client.create_workflow(LinearFailureWorkflow)
         Client.start_workflow(workflow_id)

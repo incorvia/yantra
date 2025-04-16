@@ -19,10 +19,8 @@ class AsyncSuccessJob < Yantra::Step
   def perform(data:, multiplier: 1); "Success output with #{data * multiplier}"; end
 end
 class AsyncFailureJob < Yantra::Step
-  # *** FIX HERE: Modify signature to accept arguments being passed ***
-  # Accept data: and ignore other keywords like multiplier:
+  # Accept args to avoid ArgumentError, then raise intended error
   def perform(data:, **_options)
-    # Now this line can be reached
     raise StandardError, "Job failed intentionally";
   end
 end
@@ -36,7 +34,9 @@ module Yantra
 
           def setup
             super
-            Yantra.configure { |c| c.default_max_step_attempts = 3 }
+            # Ensure max attempts default is known for tests using correct config key
+            # *** FIX HERE: Use default_step_options hash ***
+            Yantra.configure { |c| c.default_step_options[:retries] = 3 }
 
             @mock_repo = Minitest::Mock.new
             @mock_orchestrator_instance = Minitest::Mock.new
@@ -44,7 +44,6 @@ module Yantra
             @step_id = SecureRandom.uuid
             @workflow_id = SecureRandom.uuid
             @step_klass_name = "AsyncSuccessJob"
-            # Arguments used in tests - ensure dummy classes can handle them
             @arguments = { data: 10, multiplier: 2 }
 
             @mock_step_record = OpenStruct.new(
@@ -61,13 +60,16 @@ module Yantra
           def teardown
             @mock_repo.verify
             @mock_orchestrator_instance.verify
-            Yantra::Configuration.reset! if Yantra::Configuration.respond_to?(:reset!)
+            Yantra::Configuration.reset! if defined?(Yantra::Configuration) && Yantra::Configuration.respond_to?(:reset!)
             super
           end
 
           # Helper to run perform within the stubbed context
           def run_perform_with_stubs(&block)
+             # Stub the repository method directly on the Yantra module
+             # Ensure Yantra module itself is available
              Yantra.stub(:repository, @mock_repo) do
+               # Stub the Orchestrator class's new method
                Yantra::Core::Orchestrator.stub(:new, @mock_orchestrator_instance) do
                   yield
                end
@@ -97,11 +99,10 @@ module Yantra
           def test_perform_user_step_failure_path_allows_retry
             # Arrange: Simulate first failure (attempt 1 < max 3)
             failing_step_klass_name = "AsyncFailureJob"
-            expected_error_class = StandardError # The error raised by AsyncFailureJob
+            expected_error_class = StandardError
             @mock_step_record.klass = failing_step_klass_name
             @mock_step_record.state = :running
-            # Provide arguments that AsyncFailureJob now accepts
-            @mock_step_record.arguments = { data: 5 }.transform_keys(&:to_s)
+            @mock_step_record.arguments = { data: 5 }.transform_keys(&:to_s) # Match args for AsyncFailureJob
             @async_job_instance.executions = 1
 
             run_perform_with_stubs do
@@ -116,12 +117,10 @@ module Yantra
                    jid == @step_id && err_object.is_a?(expected_error_class)
                 end
 
-                # Act & Assert: Expect the *intended* error
+                # Act & Assert: Expect the intended error
                 error = assert_raises(expected_error_class) do
-                  # Pass the class name, StepJob will load args from @mock_step_record
                   @async_job_instance.perform(@step_id, @workflow_id, failing_step_klass_name)
                 end
-                # Assert the message from the intended error
                 assert_match(/Job failed intentionally/, error.message)
             end
           end
@@ -130,12 +129,11 @@ module Yantra
           def test_perform_user_step_failure_path_reaches_max_attempts
             # Arrange: Simulate final failure (attempt 3 >= max 3)
             failing_step_klass_name = "AsyncFailureJob"
-            expected_error_class = StandardError # The error raised by AsyncFailureJob
+            expected_error_class = StandardError
             @mock_step_record.klass = failing_step_klass_name
             @mock_step_record.state = :running
-            # Provide arguments that AsyncFailureJob now accepts
-            @mock_step_record.arguments = { data: 5 }.transform_keys(&:to_s)
-            @async_job_instance.executions = 3 # Set to max attempts
+            @mock_step_record.arguments = { data: 5 }.transform_keys(&:to_s) # Match args
+            @async_job_instance.executions = 3 # Set to max attempts (using default_step_options[:retries]=3 means max attempts is 3)
 
             run_perform_with_stubs do
               # Expectations

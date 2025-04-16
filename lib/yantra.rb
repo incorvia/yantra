@@ -1,131 +1,157 @@
-# frozen_string_literal: true
-
 # lib/yantra.rb
-# Main entry point for the Yantra gem.
-# Handles requiring core components and dynamically loading configured adapters.
+
+require 'zeitwerk'
+
+# --- Zeitwerk Setup ---
+loader = Zeitwerk::Loader.for_gem
+loader.setup
+# --- END Zeitwerk Setup ---
 
 require_relative "yantra/version"
 require_relative "yantra/errors"
-require_relative "yantra/configuration" # Needed early for configuration access
-require_relative "yantra/step"           # Base class for user jobs
-require_relative "yantra/workflow"       # Base class for user workflows
-require_relative "yantra/client"         # Public API class
-
-# --- Require Core Interfaces and Logic ---
-require_relative "yantra/persistence/repository_interface" # Persistence contract
-require_relative "yantra/worker/enqueuing_interface"     # Worker contract
-require_relative "yantra/core/state_machine"           # State Machine logic
-require_relative "yantra/core/orchestrator"            # Core workflow logic
-# ... require other core components ...
+require_relative "yantra/configuration"
+require_relative "yantra/persistence/repository_interface"
+require_relative "yantra/worker/enqueuing_interface"
+require_relative "yantra/events/notifier_interface"
 
 module Yantra
-  # Provides convenient access to the singleton configuration instance.
-  # @return [Yantra::Configuration] the configuration instance
-  def self.configuration
-    Configuration.instance
-  end
-
-  # Provides a block syntax for configuring Yantra.
-  # @yield [Yantra::Configuration] the configuration instance
-  def self.configure
-    yield(configuration)
-  end
-
-  # Central place to access the configured repository instance.
-  # Dynamically loads and instantiates the correct persistence adapter.
-  # @return [Object] an instance of the configured persistence adapter.
-  def self.repository
-    @repository ||= load_adapter(
-      config_key:         :persistence_adapter,
-      base_path_segment:  'persistence',
-      base_module:        Yantra::Persistence,
-      interface_module:   Yantra::Persistence::RepositoryInterface,
-      adapter_type_name:  'persistence',
-      gem_suggestions:    { # Hints for LoadError messages
-        active_record: "'activerecord' (and potentially DB driver like 'pg', 'mysql2')",
-        redis:         "'redis'"
-      }
-    )
-  end
-
-  # Central place to access the configured worker adapter instance.
-  # Dynamically loads and instantiates the correct worker adapter.
-  # @return [Object] an instance of the configured worker adapter.
-  def self.worker_adapter
-    @worker_adapter ||= load_adapter(
-      config_key:         :worker_adapter,
-      base_path_segment:  'worker',
-      base_module:        Yantra::Worker,
-      interface_module:   Yantra::Worker::EnqueuingInterface,
-      adapter_type_name:  'worker',
-      gem_suggestions:    { # Hints for LoadError messages
-        active_job: "'activejob' (usually part of Rails)",
-        sidekiq:    "'sidekiq'",
-        resque:     "'resque'"
-      }
-    )
-  end
-
-  # --- Private Helper Method for Adapter Loading ---
   class << self
+    attr_writer :configuration
+
+    def configuration
+      @configuration ||= Configuration.new
+    end
+
+    def configure
+      yield(configuration)
+    end
+
+    def logger
+      @logger || configuration.logger
+    end
+    attr_writer :logger
+
+    def repository
+      @repository ||= load_adapter(
+        :persistence,
+        configuration.persistence_adapter,
+        configuration.persistence_options
+      )
+    end
+
+    def worker_adapter
+      @worker_adapter ||= load_adapter(
+        :worker,
+        configuration.worker_adapter,
+        configuration.worker_adapter_options
+      )
+    end
+
+    def notifier
+      @notifier ||= load_adapter(
+        :notifier,
+        configuration.notification_adapter,
+        configuration.notification_adapter_options
+      )
+    end
+
     private
 
-    # Dynamically loads and instantiates the configured adapter.
-    # @param config_key [Symbol] e.g., :persistence_adapter
-    # @param base_path_segment [String] e.g., 'persistence'
-    # @param base_module [Module] e.g., Yantra::Persistence
-    # @param interface_module [Module] e.g., Yantra::Persistence::RepositoryInterface
-    # @param adapter_type_name [String] e.g., 'persistence' (for error messages)
-    # @param gem_suggestions [Hash] e.g., { redis: "'redis'" } (for error messages)
-    # @return [Object] An instance of the loaded adapter class.
-    # @raise [Errors::ConfigurationError] If configuration or loading fails.
-    def load_adapter(config_key:, base_path_segment:, base_module:, interface_module:, adapter_type_name:, gem_suggestions:)
-      adapter_sym = configuration.send(config_key)&.to_sym
-      unless adapter_sym
-        raise Errors::ConfigurationError, "Yantra #{adapter_type_name}_adapter not configured via config.#{config_key}"
-      end
+    # Internal helper to load and instantiate adapters based on configuration.
+    def load_adapter(type, adapter_config, options = {})
+      adapter_instance = case adapter_config
+                         when Symbol
+                           adapter_class = find_adapter_class(type, adapter_config)
+                           initialize_adapter(adapter_class, options)
+                         when nil
+                           raise Yantra::Errors::ConfigurationError, "#{type.capitalize} adapter configuration is nil."
+                         else
+                           validate_adapter_interface(type, adapter_config) # Validate provided instance
+                           adapter_config
+                         end
 
-      # Construct paths and names based on convention: <base>/<type>/adapter.rb
-      adapter_require_path = "yantra/#{base_path_segment}/#{adapter_sym}/adapter"
-      # Convert :some_adapter to SomeAdapter
-      adapter_module_name = adapter_sym.to_s.split('_').map(&:capitalize).join
+      validate_adapter_interface(type, adapter_instance) # Validate final instance
+      adapter_instance
 
-      # 1. Require the adapter file
+    rescue NameError => e
+       class_name_str = adapter_config.is_a?(Symbol) ? adapter_config.to_s.camelize : 'Unknown'
+       namespace_str = "Yantra::#{type.capitalize}::#{class_name_str}::Adapter" # Consistent lookup path
+       raise Yantra::Errors::ConfigurationError, "Could not find #{type.capitalize} adapter class for ':#{adapter_config}' configuration (tried resolving #{namespace_str}). Autoloading issue or incorrect configuration? #{e.message}"
+    rescue ArgumentError => e
+       adapter_class_name = adapter_config.is_a?(Symbol) ? find_adapter_class(type, adapter_config).name : adapter_config.class.name rescue adapter_config.inspect
+       raise Yantra::Errors::ConfigurationError, "Error initializing #{type.capitalize} adapter '#{adapter_class_name}' with options #{options.inspect}. Check initializer arguments. Original error: #{e.message}"
+    rescue LoadError => e
+       raise Yantra::Errors::ConfigurationError, "Failed to load dependency for #{type.capitalize} adapter ':#{adapter_config}'. Is the required gem installed? Original error: #{e.message}"
+    end
+
+    # Initializes an adapter class with options, handling different initializer arities.
+    def initialize_adapter(adapter_class, options)
+       # Check arity more carefully: arity == 0 means no args, arity < 0 means optional/keyword args
+       init_arity = adapter_class.instance_method(:initialize).arity
+       if options && !options.empty? && init_arity != 0 # Pass options if given AND initializer accepts args
+          adapter_class.new(**options)
+       else
+          adapter_class.new
+       end
+    end
+
+    # Validates that the loaded adapter instance conforms to the expected interface.
+    def validate_adapter_interface(type, instance)
+       interface_module = case type
+                          when :persistence then Persistence::RepositoryInterface
+                          when :worker then Worker::EnqueuingInterface
+                          when :notifier then Events::NotifierInterface
+                          else raise ArgumentError, "Unknown adapter type: #{type}"
+                          end
+
+       unless instance.is_a?(interface_module)
+         required_method = case type
+                           when :persistence then :find_workflow
+                           when :worker then :enqueue
+                           when :notifier then :publish
+                           end
+         unless instance.respond_to?(required_method)
+            raise Yantra::Errors::ConfigurationError, "Invalid #{type} adapter configured. Instance of #{instance.class} does not implement the required interface (#{interface_module.name} or respond to ##{required_method})."
+         end
+         puts "WARN: [Yantra.validate_adapter_interface] Configured #{type} adapter #{instance.class} does not explicitly include #{interface_module.name}, but responds to ##{required_method}."
+       end
+       # Add return true for clarity if validation passes
+       true
+    end
+
+
+    # *** UPDATED: Simplified and Consistent Adapter Lookup ***
+    # Internal helper to find the adapter class constant based on type and name.
+    def find_adapter_class(type, name)
+      base_module = case type
+                    when :persistence then Yantra::Persistence
+                    when :worker then Yantra::Worker
+                    when :notifier then Yantra::Events # Base module for notifiers
+                    else raise ArgumentError, "Unknown adapter type: #{type}"
+                    end
+
+      # Consistent naming convention: Yantra::<Type>::<Name>::Adapter
+      class_name_part = name.to_s.camelize
+      full_class_name = "#{base_module.name}::#{class_name_part}::Adapter"
+
       begin
-        require adapter_require_path
-      rescue LoadError => e
-        gem_name = gem_suggestions[adapter_sym] || "'#{adapter_sym}' adapter support gem(s)"
-        raise Errors::ConfigurationError,
-              "Could not load Yantra #{adapter_type_name} adapter file at '#{adapter_require_path}.rb'. " \
-              "Ensure the adapter file exists and the necessary gem(s) #{gem_name} are available " \
-              "when configuring the ':#{adapter_sym}' adapter. Original error: #{e.message}"
+        Object.const_get(full_class_name)
+      rescue NameError => e
+         # Reraise with a more informative message if lookup fails
+         raise Yantra::Errors::ConfigurationError, "Cannot find adapter class #{full_class_name} for type :#{type}, name :#{name}. #{e.message}"
       end
+    end
+    # *** END UPDATE ***
 
-      # 2. Find the specific adapter module (e.g., Yantra::Persistence::ActiveRecord)
-      begin
-        adapter_module = base_module.const_get(adapter_module_name)
-      rescue NameError
-         raise Errors::ConfigurationError, "Could not find Yantra #{adapter_type_name} module '#{base_module}::#{adapter_module_name}' for adapter ':#{adapter_sym}'. Is '#{adapter_require_path}.rb' correctly defining this module?"
-      end
-
-      # 3. Find the Adapter class within that module
-      begin
-         adapter_class = adapter_module.const_get("Adapter")
-      rescue NameError
-         raise Errors::ConfigurationError, "Could not find Yantra #{adapter_type_name} adapter class 'Adapter' within module '#{base_module}::#{adapter_module_name}' for adapter ':#{adapter_sym}'. Is '#{adapter_require_path}.rb' correctly defining the 'Adapter' class inside the module?"
-      end
-
-      # 4. Verify the adapter implements the required interface
-      unless adapter_class.include?(interface_module)
-         raise Errors::ConfigurationError, "Adapter class '#{adapter_class.name}' does not include the required interface '#{interface_module.name}'."
-      end
-
-      # 5. Instantiate the adapter
-      adapter_class.new # Or: adapter_class.new(configuration) if adapter needs config
+    # Simple camelize fallback if ActiveSupport is not available
+    unless String.method_defined?(:camelize)
+      puts "WARN: ActiveSupport::Inflector not available. Using basic String#camelize fallback."
+      class ::String; def camelize; self.split('_').map(&:capitalize).join; end; end
     end
 
   end # class << self
-  # --- End Private Helper ---
+end # module Yantra
 
-end
+# Initialize default configuration
+Yantra.configuration
 

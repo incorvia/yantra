@@ -1,5 +1,6 @@
 # test/configuration_test.rb
 require "test_helper"
+require 'logger' # Ensure logger is available
 
 # If ActiveSupport is available, you might need to handle its definition for the notification test.
 class ConfigurationTest < Minitest::Test
@@ -8,104 +9,80 @@ class ConfigurationTest < Minitest::Test
   def setup
     # If you add the reset! method to Yantra::Configuration:
     Yantra::Configuration.reset! if Yantra::Configuration.respond_to?(:reset!)
-
-    # Manually clear relevant ENV vars before each test (or use a helper)
-    @original_yantra_redis_url = ENV.delete('YANTRA_REDIS_URL')
-    @original_redis_url = ENV.delete('REDIS_URL')
-    @original_yantra_db_url = ENV.delete('YANTRA_DATABASE_URL')
-    @original_db_url = ENV.delete('DATABASE_URL')
   end
 
-  # Restore ENV vars after each test
   def teardown
-    ENV['YANTRA_REDIS_URL'] = @original_yantra_redis_url if @original_yantra_redis_url
-    ENV['REDIS_URL'] = @original_redis_url if @original_redis_url
-    ENV['YANTRA_DATABASE_URL'] = @original_yantra_db_url if @original_yantra_db_url
-    ENV['DATABASE_URL'] = @original_db_url if @original_db_url
-
     # Reset again after test if needed, depending on your reset strategy
     Yantra::Configuration.reset! if Yantra::Configuration.respond_to?(:reset!)
+    super # Call Minitest teardown
   end
 
   def test_default_configuration_values
     config = Yantra.configuration
 
+    # Check main adapter defaults
     assert_equal :active_record, config.persistence_adapter
-    assert_equal 'redis://localhost:6379/0', config.redis_url # Assuming no relevant ENV vars set
-    assert_equal({}, config.redis_options)
+    assert_equal :active_job, config.worker_adapter
+    assert_equal :null, config.notification_adapter
+
+    # Check default options hashes are empty
+    assert_equal({}, config.persistence_options)
+    assert_equal({}, config.worker_adapter_options)
+    assert_equal({}, config.notification_adapter_options)
+
+    # Check default step options
+    assert_equal({ retries: 3 }, config.default_step_options)
+
+    # Check default logger
     assert_instance_of Logger, config.logger
     assert_equal Logger::INFO, config.logger.level
-    assert_equal 'yantra', config.redis_namespace
 
-    # Check default notification backend (might need mocking defined? for full test)
-    assert config.notification_backend.respond_to?(:publish)
+    # Check default retry handler class
+    assert_nil config.retry_handler_class
   end
 
   def test_configure_block_sets_values
+    # Example custom logger
+    custom_logger = Logger.new(nil) # Null logger for test
+
     Yantra.configure do |config|
-      config.persistence_adapter = :sql
-      config.redis_namespace = 'my_test_app'
-      config.logger.level = Logger::DEBUG
-      config.redis_options = { timeout: 5 }
+      config.persistence_adapter = :redis # Change adapter type
+      # *** FIX: Set options via persistence_options hash ***
+      config.persistence_options = { url: 'redis://custom:6379/1', namespace: 'my_test_app', timeout: 5 }
+      config.worker_adapter = :sidekiq
+      config.worker_adapter_options = { concurrency: 10 }
+      config.notification_adapter = :logger
+      config.notification_adapter_options = { logger: custom_logger }
+      config.default_step_options[:retries] = 5 # Modify value within the hash
+      config.logger = custom_logger
+      config.retry_handler_class = "MyCustomRetryHandler" # Example custom class name
     end
 
     config = Yantra.configuration
 
-    assert_equal :sql, config.persistence_adapter
-    assert_equal 'my_test_app', config.redis_namespace
-    assert_equal Logger::DEBUG, config.logger.level
-    assert_equal({ timeout: 5 }, config.redis_options)
+    # Assert main adapter types
+    assert_equal :redis, config.persistence_adapter
+    assert_equal :sidekiq, config.worker_adapter
+    assert_equal :logger, config.notification_adapter
 
-    # Check a default value wasn't accidentally changed
-    assert_equal 'redis://localhost:6379/0', config.redis_url
+    # *** FIX: Assert options hashes ***
+    expected_persistence_options = { url: 'redis://custom:6379/1', namespace: 'my_test_app', timeout: 5 }
+    assert_equal expected_persistence_options, config.persistence_options
+
+    expected_worker_options = { concurrency: 10 }
+    assert_equal expected_worker_options, config.worker_adapter_options
+
+    expected_notification_options = { logger: custom_logger }
+    assert_equal expected_notification_options, config.notification_adapter_options
+
+    # Assert other settings
+    assert_equal({ retries: 5 }, config.default_step_options)
+    assert_same custom_logger, config.logger # Use assert_same for object identity
+    assert_equal "MyCustomRetryHandler", config.retry_handler_class
   end
 
-  def test_redis_url_uses_environment_variables_in_order
-    default_url = 'redis://localhost:6379/0'
-    env_redis_url = 'redis://env-redis:1111'
-    env_yantra_redis_url = 'redis://yantra-env-redis:2222'
+  # Removed test_redis_url_uses_environment_variables_in_order
+  # as this logic should reside within the specific Redis adapter, not the base Configuration.
 
-    # 1. No ENV vars set
-    Yantra::Configuration.reset!
-    assert_equal default_url, Yantra.configuration.redis_url
-
-    # 2. Only REDIS_URL set
-    with_env('REDIS_URL' => env_redis_url) do
-      Yantra::Configuration.reset!
-      assert_equal env_redis_url, Yantra.configuration.redis_url
-    end
-
-    # 3. YANTRA_REDIS_URL takes precedence over REDIS_URL
-    with_env('REDIS_URL' => env_redis_url, 'YANTRA_REDIS_URL' => env_yantra_redis_url) do
-      Yantra::Configuration.reset!
-      assert_equal env_yantra_redis_url, Yantra.configuration.redis_url
-    end
-  end
-
-  # Helper to temporarily set ENV vars for a test
-  def with_env(options = {}, &block)
-    original_values = {}
-    options.each_key { |k| original_values[k] = ENV[k] }
-    options.each { |k, v| ENV[k] = v }
-    begin
-      yield
-    ensure
-      options.each_key { |k| ENV[k] = original_values[k] }
-    end
-  end
-
-  # Example test for notification backend (requires stubbing/mocking `defined?`)
-  # def test_notification_backend_default_logic
-  #   # Test case 1: ActiveSupport::Notifications is defined
-  #   # Need a way to stub `defined?(ActiveSupport::Notifications)` to return true
-  #   # Yantra::Configuration.reset!
-  #   # assert_equal ActiveSupport::Notifications, Yantra.configuration.notification_backend
-  #
-  #   # Test case 2: ActiveSupport::Notifications is not defined
-  #   # Need a way to stub `defined?(ActiveSupport::Notifications)` to return false/nil
-  #   # Yantra::Configuration.reset!
-  #   # assert Yantra.configuration.notification_backend.respond_to?(:publish)
-  #   # refute_equal ActiveSupport::Notifications, Yantra.configuration.notification_backend
-  # end
 end
 
