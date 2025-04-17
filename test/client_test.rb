@@ -127,6 +127,89 @@ module Yantra
         end
       end
 
+      focus
+      def test_cancel_workflow_publishes_event_on_success
+        workflow_id = SecureRandom.uuid
+        mock_repo = Minitest::Mock.new
+        mock_notifier = Minitest::Mock.new
+        # Mock workflow record returned by find_workflow
+        mock_workflow = OpenStruct.new(
+          id: workflow_id,
+          klass: "ClientTestWorkflow",
+          state: 'running' # Start in a cancellable state
+        )
+        # Mock step records returned by get_workflow_steps
+        mock_steps_to_cancel = [
+          OpenStruct.new(id: SecureRandom.uuid, state: :pending),
+          OpenStruct.new(id: SecureRandom.uuid, state: :enqueued)
+        ]
+        step_ids_to_cancel = mock_steps_to_cancel.map(&:id)
+
+        # Stub Yantra module methods to return our mocks
+        Yantra.stub(:repository, mock_repo) do
+          Yantra.stub(:notifier, mock_notifier) do
+            Time.stub :current, @frozen_time do # Freeze time
+
+              # --- Expectations ---
+              # 1. Find the workflow
+              mock_repo.expect(:find_workflow, mock_workflow, [workflow_id])
+
+              # 2. Expect FIRST call to update_workflow_attributes (trying with :pending state) -> return false
+              #    *** CORRECTED ARGUMENT EXPECTATION FOR KEYWORD ARG ***
+              mock_repo.expect(
+                :update_workflow_attributes,
+                false, # Simulate failure because actual state is 'running'
+                [ # Positional arguments array
+                  workflow_id, # arg 1
+                  { state: Yantra::Core::StateMachine::CANCELLED.to_s, finished_at: @frozen_time } # arg 2 (attrs hash)
+                ],
+                # Keyword arguments hash (placed after positional args array)
+                expected_old_state: Yantra::Core::StateMachine::PENDING
+              )
+
+              # 3. Expect SECOND call to update_workflow_attributes (trying with :running state) -> return true
+              #    Using block validation here which handles keyword args correctly.
+              mock_repo.expect(:update_workflow_attributes, true) do |id, attrs, **opts| # Use **opts to capture keyword args
+                # Validate arguments passed to the *successful* update call
+                id == workflow_id &&
+                attrs[:state] == Yantra::Core::StateMachine::CANCELLED.to_s &&
+                attrs[:finished_at] == @frozen_time && # Check timestamp
+                opts == { expected_old_state: Yantra::Core::StateMachine::RUNNING } # Check keyword args hash
+              end
+
+              # 4. *** Expect the event publish call *** (after successful update)
+              mock_notifier.expect(:publish, nil) do |event_name, payload|
+                event_name == 'yantra.workflow.cancelled' &&
+                payload[:workflow_id] == workflow_id &&
+                payload[:klass] == mock_workflow.klass &&
+                payload[:state] == Yantra::Core::StateMachine::CANCELLED &&
+                payload[:finished_at] == @frozen_time
+              end
+
+              # 5. Get steps to cancel (after workflow marked cancelled)
+              mock_repo.expect(:get_workflow_steps, mock_steps_to_cancel, [workflow_id])
+
+              # 6. Bulk cancel steps
+              mock_repo.expect(:cancel_steps_bulk, step_ids_to_cancel.size, [step_ids_to_cancel])
+              # --- End Expectations ---
+
+              # Act
+              result = Client.cancel_workflow(workflow_id)
+
+              # Assert
+              assert result, "cancel_workflow should return true on success"
+
+            end # End Time.stub
+          end # End Yantra.stub(:notifier)
+        end # End Yantra.stub(:repository)
+
+        # Verify mocks
+        mock_repo.verify
+        mock_notifier.verify
+      end
+
+
+
       # TODO: Add tests for persistence errors (e.g., mock repo methods to raise errors)
       # TODO: Add tests for other Client methods (find_workflow, start_workflow, etc.) once implemented
 
