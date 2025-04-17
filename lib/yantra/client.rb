@@ -192,6 +192,7 @@ module Yantra
       puts "INFO: [Client.retry_failed_steps] Attempting to retry failed jobs for workflow #{workflow_id}..."
       repo = Yantra.repository
       worker = Yantra.worker_adapter # Get worker adapter instance
+      notifier = Yantra.notifier # Get worker adapter instance
 
       # 1. Validate Workflow State
       workflow = repo.find_workflow(workflow_id)
@@ -231,6 +232,7 @@ module Yantra
       retry_service = Core::WorkflowRetryService.new(
         workflow_id: workflow_id,
         repository: repo,
+        notifier: notifier,
         worker_adapter: worker
       )
       reenqueued_count = retry_service.call

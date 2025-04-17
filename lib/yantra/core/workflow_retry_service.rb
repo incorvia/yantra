@@ -6,97 +6,103 @@ require_relative 'state_machine'
 module Yantra
   module Core
     # Service class responsible for finding failed steps in a workflow
-    # and re-enqueuing them.
+    # and re-enqueuing them via the configured worker adapter.
     class WorkflowRetryService
-      attr_reader :workflow_id, :repository, :worker_adapter
+      attr_reader :workflow_id, :repository, :worker_adapter, :notifier # Added notifier
 
-      # @param workflow_id [String] The ID of the workflow to process.
-      # @param repository [#get_workflow_steps, #update_step_attributes, #find_step] The persistence adapter.
-      # @param worker_adapter [#enqueue] The worker adapter.
-      def initialize(workflow_id:, repository:, worker_adapter:)
+      # --- UPDATED: Inject notifier ---
+      def initialize(workflow_id:, repository:, worker_adapter:, notifier:)
         @workflow_id = workflow_id
         @repository = repository
         @worker_adapter = worker_adapter
+        @notifier = notifier # Store injected notifier
+
+        # Validation (optional but recommended)
+        unless @repository && @repository.respond_to?(:get_workflow_steps)
+          raise ArgumentError, "WorkflowRetryService requires a valid repository."
+        end
+        unless @worker_adapter && @worker_adapter.respond_to?(:enqueue)
+          raise ArgumentError, "WorkflowRetryService requires a valid worker adapter."
+        end
+        unless @notifier && @notifier.respond_to?(:publish)
+           # Allow nil notifier for flexibility, but log if missing when needed?
+           # Or raise ArgumentError, "WorkflowRetryService requires a valid notifier."
+           Yantra.logger.warn { "[WorkflowRetryService] Notifier not provided or invalid." } if Yantra.logger && !@notifier
+        end
       end
 
-      # Finds failed steps and attempts to re-enqueue them.
-      # @return [Integer] The number of steps successfully re-enqueued.
+      # Finds failed steps and re-enqueues them.
+      # Returns the number of steps successfully re-enqueued.
       def call
         failed_steps = find_failed_steps
-        if failed_steps.empty?
-          puts "INFO: [WorkflowRetryService] No steps found in 'failed' state for workflow #{workflow_id}."
-          return 0
-        end
+        return 0 if failed_steps.empty?
 
-        puts "INFO: [WorkflowRetryService] Found #{failed_steps.size} failed steps to retry: #{failed_steps.map(&:id)}."
-        reenqueue_steps(failed_steps)
-      end
+        Yantra.logger.info { "[WorkflowRetryService] Found #{failed_steps.size} failed steps to retry: #{failed_steps.map(&:id)}." } if Yantra.logger
 
-      private
-
-      # Fetches steps in the 'failed' state for the workflow.
-      # @return [Array<Object>] Array of failed step objects from the repository.
-      def find_failed_steps
-        repository.get_workflow_steps(workflow_id, status: :failed)
-      rescue StandardError => e
-        puts "ERROR: [WorkflowRetryService] Failed to query failed steps for workflow #{workflow_id}: #{e.message}"
-        [] # Return empty array on error to prevent further processing
-      end
-
-      # Iterates through failed steps and attempts to re-enqueue each one.
-      # @param steps [Array<Object>] Array of failed step objects.
-      # @return [Integer] Count of successfully re-enqueued steps.
-      def reenqueue_steps(steps)
         reenqueued_count = 0
-        steps.each do |step|
-          if reenqueue_step(step)
+        failed_steps.each do |step|
+          if reset_and_enqueue_step(step)
             reenqueued_count += 1
+          else
+            # Log if a step failed to re-enqueue
+            Yantra.logger.error { "[WorkflowRetryService] Failed to reset and re-enqueue step #{step.id}." } if Yantra.logger
           end
         end
         reenqueued_count
       end
 
-      # Handles the state update and enqueuing for a single step.
-      # @param step [Object] A failed step object from the repository.
-      # @return [Boolean] true if successfully re-enqueued, false otherwise.
-      def reenqueue_step(step)
-        # Validate transition (failed -> enqueued)
-        StateMachine.validate_transition!(:failed, :enqueued) # Let it raise if invalid
+      private
 
-        # Update step state back to enqueued (atomically)
-        step_update_success = repository.update_step_attributes(
-          step.id,
-          {
-            state: Core::StateMachine::ENQUEUED.to_s,
-            enqueued_at: Time.current,
-            finished_at: nil # Clear finished_at timestamp
-            # error: nil # Optionally clear error
-          },
-          expected_old_state: :failed
-        )
+      # Finds steps in the 'failed' state for the workflow.
+      def find_failed_steps
+        repository.get_workflow_steps(workflow_id, status: :failed)
+      rescue => e
+        Yantra.logger.error { "[WorkflowRetryService] Error finding failed steps for workflow #{workflow_id}: #{e.message}" } if Yantra.logger
+        [] # Return empty array on error
+      end
 
-        if step_update_success
-          # Enqueue the step via the worker adapter
-          queue_to_use = step.queue || 'default'
-          worker_adapter.enqueue(step.id, step.workflow_id, step.klass, queue_to_use)
-          puts "INFO: [WorkflowRetryService] step #{step.id} re-enqueued."
-          # TODO: Emit step.retrying event?
-          true
-        else
-          latest_step_state = repository.find_step(step.id)&.state || 'unknown'
-          puts "WARN: [WorkflowRetryService] Failed to update step #{step.id} state to enqueued (maybe state changed concurrently? Current state: #{latest_step_state}). Skipping enqueue."
-          false
+      # Resets a step's state to 'enqueued' and enqueues it via the worker adapter.
+      # Publishes the 'yantra.step.enqueued' event.
+      # Returns true on success, false on failure.
+      def reset_and_enqueue_step(step)
+        # Reset state back to enqueued, clear error/output/timestamps
+        reset_attrs = {
+          state: StateMachine::ENQUEUED.to_s,
+          error: nil,
+          output: nil,
+          started_at: nil,
+          finished_at: nil
+          # Do not reset retries - let the StepJob/RetryHandler manage that on next run
+        }
+        update_success = repository.update_step_attributes(step.id, reset_attrs, expected_old_state: :failed)
+
+        unless update_success
+          Yantra.logger.warn { "[WorkflowRetryService] Failed to reset state for failed step #{step.id} (maybe state changed?)." } if Yantra.logger
+          return false
         end
 
-      rescue Yantra::Errors::InvalidStateTransition => e
-        puts "ERROR: [WorkflowRetryService] Invalid state transition for step #{step.id}. #{e.message}"
-        false
-      rescue Yantra::Errors::WorkerError => e
-        puts "ERROR: [WorkflowRetryService] Worker error enqueuing step #{step.id}. #{e.message}"
-        false # Failed to enqueue this specific step
-      rescue StandardError => e
-        puts "ERROR: [WorkflowRetryService] Unexpected error retrying step #{step.id}: #{e.class} - #{e.message}"
-        false # Failed to enqueue this specific step
+        # --- ADDED: Publish step.enqueued event ---
+        begin
+          if @notifier # Check if notifier was provided
+            payload = { step_id: step.id, workflow_id: step.workflow_id, klass: step.klass }
+            @notifier.publish('yantra.step.enqueued', payload)
+            Yantra.logger.info { "[WorkflowRetryService] Published yantra.step.enqueued event for retried step #{step.id}." } if Yantra.logger
+          end
+        rescue => e
+          Yantra.logger.error { "[WorkflowRetryService] Failed to publish yantra.step.enqueued event for step #{step.id}: #{e.message}" } if Yantra.logger
+          # Continue with enqueuing even if event publishing fails
+        end
+        # --- END ADDED SECTION ---
+
+        # Enqueue the job via the worker adapter
+        worker_adapter.enqueue(step.id, step.workflow_id, step.klass, step.queue)
+        Yantra.logger.info { "[WorkflowRetryService] step #{step.id} re-enqueued." } if Yantra.logger
+        true # Indicate success
+
+      rescue => e
+        # Catch errors during the enqueue process for a specific step
+        Yantra.logger.error { "[WorkflowRetryService] Error re-enqueuing step #{step.id}: #{e.class} - #{e.message}" } if Yantra.logger
+        false # Indicate failure for this step
       end
 
     end
