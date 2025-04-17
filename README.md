@@ -1,7 +1,7 @@
 # Yantra
 
 [![Gem Version](https://badge.fury.io/rb/yantra.svg)](https://badge.fury.io/rb/yantra)
-[![Build Status](https://github.com/your_github/yantra/actions/workflows/ci.yml/badge.svg)](https://github.com/your_github/yantra/actions/workflows/ci.yml)
+[![Build Status](https://github.com/incorvia/yantra/actions/workflows/ci.yml/badge.svg)](https://github.com/your_github/yantra/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Yantra is a robust, backend-agnostic workflow engine for Ruby applications. Define complex workflows as Directed Acyclic Graphs (DAGs) of individual steps (jobs), run them reliably via background workers, and gain insight through a built-in event system.
