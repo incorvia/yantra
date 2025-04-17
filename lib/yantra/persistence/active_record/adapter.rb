@@ -15,7 +15,6 @@ module Yantra
         include Yantra::Persistence::RepositoryInterface
 
         # --- Workflow Methods ---
-        # ... (find_workflow, persist_workflow, etc. remain the same) ...
         def find_workflow(workflow_id)
           WorkflowRecord.find_by(id: workflow_id)
         end
@@ -32,39 +31,16 @@ module Yantra
         end
 
         def update_workflow_attributes(workflow_id, attributes_hash, expected_old_state: nil)
-          # --- BEGIN DEBUG LOGGING ---
-          puts "DEBUG: [AR::Adapter#update_workflow_attributes] ID: #{workflow_id}, Attrs: #{attributes_hash.inspect}, Expected State: #{expected_old_state.inspect}"
-          # --- END DEBUG LOGGING ---
           workflow = WorkflowRecord.find_by(id: workflow_id)
-          unless workflow
-            puts "DEBUG: [AR::Adapter#update_workflow_attributes] Workflow not found." # DEBUG
-            return false
-          end
-
-          # Convert expected_old_state symbol to string for comparison
+          return false unless workflow
           expected_state_str = expected_old_state&.to_s
           actual_state_str = workflow.state
-
-          # --- BEGIN DEBUG LOGGING ---
-          puts "DEBUG: [AR::Adapter#update_workflow_attributes] Actual State: #{actual_state_str.inspect}"
-          # --- END DEBUG LOGGING ---
-
           if expected_state_str && actual_state_str != expected_state_str
-            puts "WARN: [AR::Adapter] State mismatch for workflow #{workflow_id}. Expected: #{expected_state_str}, Actual: #{actual_state_str}" # DEBUG
+            Yantra.logger.warn { "[AR::Adapter] State mismatch for workflow #{workflow_id}. Expected: #{expected_state_str}, Actual: #{actual_state_str}" } if Yantra.logger
             return false
           end
-
-          # Ensure state in attributes_hash is also a string if passed
           attributes_hash[:state] = attributes_hash[:state].to_s if attributes_hash.key?(:state)
-
-          update_result = workflow.update(attributes_hash)
-          # --- BEGIN DEBUG LOGGING ---
-          puts "DEBUG: [AR::Adapter#update_workflow_attributes] Update Result: #{update_result.inspect}"
-          unless update_result
-             puts "DEBUG: [AR::Adapter#update_workflow_attributes] Errors: #{workflow.errors.full_messages.inspect}" if workflow.errors.any?
-          end
-          # --- END DEBUG LOGGING ---
-          update_result # Returns true on success, false on failure
+          workflow.update(attributes_hash) # Returns true on success, false on failure
         end
 
         def set_workflow_has_failures_flag(workflow_id)
@@ -82,9 +58,7 @@ module Yantra
         end
 
         def persist_step(step_instance)
-          # Ensure klass is converted to string for persistence
           klass_name = step_instance.klass.is_a?(Class) ? step_instance.klass.to_s : step_instance.klass.to_s
-
           StepRecord.create!(
             id: step_instance.id, workflow_id: step_instance.workflow_id,
             klass: klass_name, arguments: step_instance.arguments,
@@ -100,19 +74,10 @@ module Yantra
           return true if step_instances_array.nil? || step_instances_array.empty?
           current_time = Time.current
           records_to_insert = step_instances_array.map do |step_instance|
-             # Ensure klass is converted to string for persistence
              klass_name = step_instance.klass.is_a?(Class) ? step_instance.klass.to_s : step_instance.klass.to_s
-            {
-              id: step_instance.id,
-              workflow_id: step_instance.workflow_id,
-              klass: klass_name,
-              arguments: step_instance.arguments,
-              state: 'pending',
-              queue: step_instance.queue_name,
-              retries: 0,
-              created_at: current_time,
-              updated_at: current_time
-            }
+            { id: step_instance.id, workflow_id: step_instance.workflow_id, klass: klass_name,
+              arguments: step_instance.arguments, state: 'pending', queue: step_instance.queue_name,
+              retries: 0, created_at: current_time, updated_at: current_time }
           end
           begin
             StepRecord.insert_all(records_to_insert)
@@ -125,39 +90,16 @@ module Yantra
         end
 
         def update_step_attributes(step_id, attributes_hash, expected_old_state: nil)
-          # --- BEGIN DEBUG LOGGING ---
-          puts "DEBUG: [AR::Adapter#update_step_attributes] ID: #{step_id}, Attrs: #{attributes_hash.inspect}, Expected State: #{expected_old_state.inspect}"
-          # --- END DEBUG LOGGING ---
-          step_record = StepRecord.find_by(id: step_id) # Renamed variable
-          unless step_record
-            puts "DEBUG: [AR::Adapter#update_step_attributes] Step not found." # DEBUG
-            return false
-          end
-
-          # Convert expected_old_state symbol to string for comparison
+          step_record = StepRecord.find_by(id: step_id)
+          return false unless step_record
           expected_state_str = expected_old_state&.to_s
           actual_state_str = step_record.state
-
-          # --- BEGIN DEBUG LOGGING ---
-          puts "DEBUG: [AR::Adapter#update_step_attributes] Actual State: #{actual_state_str.inspect}"
-          # --- END DEBUG LOGGING ---
-
           if expected_state_str && actual_state_str != expected_state_str
-            puts "WARN: [AR::Adapter] State mismatch for step #{step_id}. Expected: #{expected_state_str}, Actual: #{actual_state_str}" # DEBUG
+            Yantra.logger.warn { "[AR::Adapter] State mismatch for step #{step_id}. Expected: #{expected_state_str}, Actual: #{actual_state_str}" } if Yantra.logger
             return false
           end
-
-          # Ensure state in attributes_hash is also a string if passed
           attributes_hash[:state] = attributes_hash[:state].to_s if attributes_hash.key?(:state)
-
-          update_result = step_record.update(attributes_hash)
-          # --- BEGIN DEBUG LOGGING ---
-          puts "DEBUG: [AR::Adapter#update_step_attributes] Update Result: #{update_result.inspect}"
-          unless update_result
-             puts "DEBUG: [AR::Adapter#update_step_attributes] Errors: #{step_record.errors.full_messages.inspect}" if step_record.errors.any?
-          end
-          # --- END DEBUG LOGGING ---
-          update_result # Returns true on success, false on failure
+          step_record.update(attributes_hash) # Returns true on success, false on failure
         end
 
 
@@ -171,38 +113,59 @@ module Yantra
 
         def get_workflow_steps(workflow_id, status: nil)
           scope = StepRecord.where(workflow_id: workflow_id)
-          # Assuming StepRecord has a `with_state` scope or similar
-          # If not, implement state filtering directly:
           scope = scope.where(state: status.to_s) if status
-          scope.order(:created_at).to_a # Add ordering for consistency
+          scope.order(:created_at).to_a
         end
 
         def increment_step_retries(step_id)
-          updated_count = StepRecord.where(id: step_id).update_all("retries = COALESCE(retries, 0) + 1")
+          # Use Arel for atomic increment to avoid race conditions
+          step_table = StepRecord.arel_table
+          update_manager = ::Arel::UpdateManager.new
+          update_manager.table(step_table)
+          update_manager.set([[step_table[:retries], ::Arel::Nodes::Addition.new(step_table[:retries], 1)]])
+          update_manager.where(step_table[:id].eq(step_id))
+          # Execute the update and check rows affected
+          updated_count = StepRecord.connection.update(update_manager)
           updated_count > 0
+        rescue => e
+           Yantra.logger.error { "[AR Adapter] Failed increment_step_retries for #{step_id}: #{e.message}" } if Yantra.logger
+           false # Indicate failure
         end
+
 
         def record_step_output(step_id, output)
-          # Consider JSON serialization if output is complex and column is text/jsonb
-          # output_data = output.to_json rescue output # Basic fallback
-          updated_count = StepRecord.where(id: step_id).update_all(output: output)
+          # Ensure output is serializable if column is JSON/JSONB
+          serializable_output = output.is_a?(String) ? output : JSON.dump(output) rescue output.to_s
+          updated_count = StepRecord.where(id: step_id).update_all(output: serializable_output)
           updated_count > 0
         end
 
+        # --- UPDATED: Return error_data hash ---
         def record_step_error(step_id, error)
-          # Handle case where error might not be an Exception object
           if error.is_a?(Exception)
             error_data = { class: error.class.name, message: error.message, backtrace: error.backtrace&.first(10) }
-          elsif error.is_a?(Hash) # Allow passing pre-formatted hash
+          elsif error.is_a?(Hash)
             error_data = error.slice(:class, :message, :backtrace)
           else
             error_data = { class: error.class.name, message: error.to_s }
           end
-          # Consider JSON serialization if column is text/jsonb
-          # error_json = error_data.to_json rescue error_data.inspect
-          updated_count = StepRecord.where(id: step_id).update_all(error: error_data)
-          updated_count > 0
+
+          serializable_error = JSON.dump(error_data) rescue error_data.inspect
+
+          if ::ActiveRecord::Base.connection.adapter_name == 'PostgreSQL'
+            updated_count = StepRecord.where(id: step_id).update_all(["error = ?::jsonb", serializable_error])
+          else
+            updated_count = StepRecord.where(id: step_id).update_all(error: serializable_error)
+          end
+
+          # Return the formatted error data hash, regardless of update count
+          error_data
+        rescue => e
+          Yantra.logger.error { "[AR Adapter] Failed record_step_error for #{step_id}: #{e.message}" } if Yantra.logger
+          { class: 'PersistenceError', message: "Failed to record original error: #{e.message}" }
         end
+
+        # --- END UPDATE ---
 
         # --- Dependency Methods ---
         def add_step_dependency(step_id, dependency_step_id)
@@ -210,67 +173,75 @@ module Yantra
           true
         rescue ::ActiveRecord::RecordInvalid, ::ActiveRecord::RecordNotUnique => e
            is_duplicate = e.is_a?(::ActiveRecord::RecordNotUnique) || (e.is_a?(::ActiveRecord::RecordInvalid) && e.record.errors.details.any? { |_field, errors| errors.any? { |err| err[:error] == :taken } })
-           # Only raise if it's not a duplicate constraint violation
            raise Yantra::Errors::PersistenceError, "Failed to add dependency: #{e.message}" unless is_duplicate
-           true # Return true if it already exists (idempotent)
+           true
         end
 
         def add_step_dependencies_bulk(dependency_links_array)
           return true if dependency_links_array.nil? || dependency_links_array.empty?
           begin
-            # Use ignore option for databases that support it (like PostgreSQL with ON CONFLICT DO NOTHING)
-            # This makes the operation idempotent if links already exist.
-            # Note: `insert_all` uniqueness option might vary slightly by Rails version.
-            # For basic idempotency, rescuing RecordNotUnique might be needed if `ignore` isn't available/suitable.
-            StepDependencyRecord.insert_all(dependency_links_array) # Add ", unique_by: [:step_id, :depends_on_step_id]" if needed and supported
+            # Consider adding unique_by constraint if supported and needed for idempotency
+            StepDependencyRecord.insert_all(dependency_links_array)
             true
-          rescue ::ActiveRecord::RecordNotUnique # Catch if unique constraint fails (means link existed)
-             puts "INFO: [AR::Adapter#add_step_dependencies_bulk] Some dependency links already existed (ignored)."
-             true # Treat as success if links already exist
+          rescue ::ActiveRecord::RecordNotUnique
+             Yantra.logger.info { "[AR::Adapter#add_step_dependencies_bulk] Some dependency links already existed (ignored)." } if Yantra.logger
+             true
           rescue ::ActiveRecord::StatementInvalid, ::ActiveRecord::ActiveRecordError => e
             raise Yantra::Errors::PersistenceError, "Bulk dependency insert failed: #{e.message}"
           end
         end
 
         def get_step_dependencies(step_id)
-          # Use StepRecord association if defined, otherwise query StepDependencyRecord
-          record = StepRecord.find_by(id: step_id)
-          # Assuming `has_many :dependency_records` association exists on StepRecord
-          # And `belongs_to :dependency_step, class_name: 'StepRecord', foreign_key: 'depends_on_step_id'` on StepDependencyRecord
-          # record ? record.dependency_records.pluck(:depends_on_step_id) : []
-          # Fallback to direct query if associations aren't set up:
           StepDependencyRecord.where(step_id: step_id).pluck(:depends_on_step_id)
         end
 
         def get_step_dependents(step_id)
-          # Use StepRecord association if defined, otherwise query StepDependencyRecord
-          # record = StepRecord.find_by(id: step_id)
-          # Assuming `has_many :dependent_records, class_name: 'StepDependencyRecord', foreign_key: 'depends_on_step_id'`
-          # record ? record.dependent_records.pluck(:step_id) : []
-          # Fallback to direct query:
           StepDependencyRecord.where(depends_on_step_id: step_id).pluck(:step_id)
         end
 
         def find_ready_steps(workflow_id)
-          ready_step_ids = []
-          # Find pending jobs and eagerly load their dependencies' states
-          StepRecord.includes(:dependencies) # Assumes `has_many :dependencies, through: :dependency_records` etc.
-                    .where(workflow_id: workflow_id, state: 'pending')
-                    .find_each do |step_record|
-            # Check if all dependencies (parents) are succeeded
-            # The `step_record.dependencies` here should refer to the parent StepRecord objects
-            if step_record.dependencies.empty? || step_record.dependencies.all? { |dep| dep.state == Yantra::Core::StateMachine::SUCCEEDED.to_s }
-              ready_step_ids << step_record.id
-            end
-          end
+          # Find IDs of all steps for the workflow
+          all_step_ids = StepRecord.where(workflow_id: workflow_id).pluck(:id)
+          return [] if all_step_ids.empty?
+
+          # Find IDs of steps that have dependencies within this workflow
+          steps_with_deps_ids = StepDependencyRecord.where(step_id: all_step_ids).pluck(:step_id).uniq
+
+          # Find IDs of steps whose dependencies are NOT yet succeeded
+          incomplete_deps = StepDependencyRecord
+            .joins("INNER JOIN yantra_steps AS dependent_steps ON yantra_step_dependencies.step_id = dependent_steps.id")
+            .joins("INNER JOIN yantra_steps AS prerequisite_steps ON yantra_step_dependencies.depends_on_step_id = prerequisite_steps.id")
+            .where(dependent_steps: { workflow_id: workflow_id, state: 'pending' }) # Only check pending steps
+            .where.not(prerequisite_steps: { state: 'succeeded' }) # Where parent is NOT succeeded
+            .pluck(:step_id).uniq # Get IDs of pending steps with incomplete parents
+
+          # Find all pending steps for the workflow
+          pending_step_ids = StepRecord.where(workflow_id: workflow_id, state: 'pending').pluck(:id)
+
+          # Ready steps are:
+          # 1. Pending steps that have NO dependencies within the workflow
+          # 2. Pending steps whose dependencies ARE ALL succeeded (i.e., not in incomplete_deps)
+          ready_step_ids = pending_step_ids - incomplete_deps
+
           ready_step_ids
         end
+
 
         # --- Pipelining Methods ---
         def fetch_step_outputs(step_ids)
           return {} if step_ids.nil? || step_ids.empty?
           begin
-            StepRecord.where(id: step_ids).pluck(:id, :output).to_h
+            # Assuming 'output' column stores JSON or serialized data
+            outputs = StepRecord.where(id: step_ids).pluck(:id, :output)
+            # Attempt to parse JSON if output is string, handle potential errors
+            outputs.to_h do |id, out_data|
+              parsed_output = if out_data.is_a?(String)
+                                begin; JSON.parse(out_data); rescue JSON::ParserError; out_data; end
+                              else
+                                out_data # Assume already parsed by AR or is simple type
+                              end
+              [id, parsed_output]
+            end
           rescue ::ActiveRecord::ActiveRecordError => e
             raise Yantra::Errors::PersistenceError, "Failed to fetch step outputs: #{e.message}"
           end
@@ -280,6 +251,7 @@ module Yantra
         # --- Bulk Cancellation Method ---
         def cancel_steps_bulk(step_ids)
            return 0 if step_ids.nil? || step_ids.empty?
+           # Only cancel steps that are currently pending or enqueued
            cancellable_states_query = [
              Yantra::Core::StateMachine::PENDING.to_s,
              Yantra::Core::StateMachine::ENQUEUED.to_s
@@ -296,24 +268,22 @@ module Yantra
         # --- Listing/Cleanup Methods ---
         def list_workflows(status: nil, limit: 50, offset: 0)
           scope = WorkflowRecord.order(created_at: :desc).limit(limit).offset(offset)
-          # scope = scope.with_state(status) if status # Assumes scope on WorkflowRecord
           scope = scope.where(state: status.to_s) if status
           scope.to_a
         end
 
         def delete_workflow(workflow_id)
-          # Ensure dependent records (steps, dependencies) are handled by DB constraints or model callbacks
+          # Relies on `dependent: :destroy` on WorkflowRecord association or DB cascade
           workflow = WorkflowRecord.find_by(id: workflow_id)
-          deleted = workflow&.destroy # Use destroy to trigger callbacks/associations
+          deleted = workflow&.destroy
           !deleted.nil? && deleted.destroyed?
         end
 
         def delete_expired_workflows(cutoff_timestamp)
-          # Assumes `dependent: :delete_all` or similar on WorkflowRecord associations,
-          # or foreign keys with ON DELETE CASCADE in the database schema.
+          # Relies on `dependent: :destroy` or DB cascade
           deleted_workflows = WorkflowRecord.where("finished_at < ?", cutoff_timestamp)
-          count = deleted_workflows.count # Get count before destroying
-          deleted_workflows.destroy_all if count > 0 # Avoid query if nothing to delete
+          count = deleted_workflows.count
+          deleted_workflows.destroy_all if count > 0
           count
         end
 

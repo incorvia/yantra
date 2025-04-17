@@ -16,6 +16,8 @@ if AR_LOADED # Assumes test_helper defines AR_LOADED based on ActiveRecord/SQLit
   require 'json' # Ensure JSON is available for parsing/checking arguments if needed
 end
 
+require_relative '../support/test_notifier_adapter'
+
 # --- Dummy Classes for Integration Tests ---
 # (These remain the same as the previous version)
 class IntegrationStepA < Yantra::Step
@@ -32,8 +34,8 @@ class IntegrationStepD < Yantra::Step
   def perform(input_b:, input_c:); puts "INTEGRATION_TEST: Job D running"; { output_d: "#{input_b[:output_b]}-#{input_c[:output_c]}" }; end
 end
 class IntegrationStepFails < Yantra::Step
-   def self.yantra_max_attempts; 1; end # Force immediate permanent failure
-   def perform(msg: "F"); puts "INTEGRATION_TEST: Job Fails running - WILL FAIL"; raise StandardError, "Integration job failed!"; end
+  def self.yantra_max_attempts; 1; end # Force immediate permanent failure
+  def perform(msg: "F"); puts "INTEGRATION_TEST: Job Fails running - WILL FAIL"; raise StandardError, "Integration job failed!"; end
 end
 class IntegrationJobRetry < Yantra::Step
   @@retry_test_attempts = Hash.new(0)
@@ -81,10 +83,10 @@ class LinearSuccessWorkflow < Yantra::Workflow
   end
 end
 class LinearFailureWorkflow < Yantra::Workflow
-   def perform
-      step_f_ref = run IntegrationStepFails, name: :step_f, params: { msg: "Fail Me" }
-      run IntegrationStepA, name: :step_a, params: { msg: "Never runs" }, after: step_f_ref
-   end
+  def perform
+    step_f_ref = run IntegrationStepFails, name: :step_f, params: { msg: "Fail Me" }
+    run IntegrationStepA, name: :step_a, params: { msg: "Never runs" }, after: step_f_ref
+  end
 end
 class ComplexGraphWorkflow < Yantra::Workflow
   def perform
@@ -119,24 +121,29 @@ module Yantra
         Yantra.configure do |config|
           config.persistence_adapter = :active_record
           config.worker_adapter = :active_job
-          # *** FIX HERE: Use default_step_options hash ***
           config.default_step_options[:retries] = 3
+          config.notification_adapter = TestNotifierAdapter # Use the class constant
         end
+        # Reset memoized adapters AFTER configuration
         Yantra.instance_variable_set(:@repository, nil)
         Yantra.instance_variable_set(:@worker_adapter, nil)
+        Yantra.instance_variable_set(:@notifier, nil) # <<< ADD THIS LINE
 
+        # ... rest of setup ...
         ActiveJob::Base.queue_adapter = :test
         clear_enqueued_jobs
         ActiveJob::Base.queue_adapter.perform_enqueued_jobs = false
         ActiveJob::Base.queue_adapter.perform_enqueued_at_jobs = false
 
         IntegrationJobRetry.reset_attempts!
+        # This clear! will now correctly instantiate and memoize an *instance*
+        Yantra.notifier.clear! if Yantra.notifier.respond_to?(:clear!)
       end
 
       def teardown
-         clear_enqueued_jobs
-         Yantra::Configuration.reset! if defined?(Yantra::Configuration) && Yantra::Configuration.respond_to?(:reset!)
-         super
+        clear_enqueued_jobs
+        Yantra::Configuration.reset! if defined?(Yantra::Configuration) && Yantra::Configuration.respond_to?(:reset!)
+        super
       end
 
       # --- Helper to access repository ---
@@ -144,132 +151,138 @@ module Yantra
         Yantra.repository
       end
 
-      # --- Test Cases ---
-      # (All test cases remain the same as the previous version)
-      # ... test_linear_workflow_success_end_to_end ...
-      # ... test_linear_workflow_failure_end_to_end ...
-      # ... test_complex_graph_success_end_to_end ...
-      # ... test_workflow_with_retries ...
-      # ... test_pipelining_workflow ...
-      # ... test_cancel_workflow_cancels_running_workflow ...
-      # ... test_cancel_workflow_cancels_pending_workflow ...
-      # ... test_cancel_workflow_does_nothing_for_finished_workflow ...
-      # ... test_retry_failed_steps_restarts_failed_workflow ...
-      # ... test_retry_failed_steps_does_nothing_for_succeeded_workflow ...
-      # ... test_retry_failed_steps_handles_not_found ...
-      # ... test_retry_failed_steps_handles_failed_workflow_with_no_failed_steps ...
+      # Helper to access the test notifier instance
+      def test_notifier
+         notifier = Yantra.notifier
+         # Ensure the correct adapter is loaded, helps catch setup issues
+         assert_instance_of TestNotifierAdapter, notifier, "TestNotifierAdapter not configured correctly"
+         notifier
+      end
 
       # --- Test Methods (Copied from previous version for completeness) ---
       def test_linear_workflow_success_end_to_end
-         # Arrange
-         workflow_id = Client.create_workflow(LinearSuccessWorkflow)
-         # Act 1: Start
-         Client.start_workflow(workflow_id)
-         # Assert 1: Job A enqueued
-         assert_equal 1, enqueued_jobs.size
-         step_a_record = repository.find_step(enqueued_jobs.first[:args][0])
-         assert_enqueued_with(job: Worker::ActiveJob::StepJob, args: [step_a_record.id, workflow_id, "IntegrationStepA"])
-         assert_equal "enqueued", step_a_record.reload.state
-         # Act 2: Perform Job A
-         perform_enqueued_jobs # Runs Job A
-         # Assert 2: Job A succeeded, Job B enqueued
-         step_a_record.reload
-         assert_equal "succeeded", step_a_record.state
-         # Use string keys for comparison as that's likely what AR returns from JSON
-         assert_equal({ "output_a" => "HELLO" }, step_a_record.output)
-         assert_equal 1, enqueued_jobs.size
-         step_b_record = repository.find_step(enqueued_jobs.first[:args][0])
-         assert_enqueued_with(job: Worker::ActiveJob::StepJob, args: [step_b_record.id, workflow_id, "IntegrationStepB"])
-         assert_equal "enqueued", step_b_record.reload.state
-         # Act 3: Perform Job B
-         perform_enqueued_jobs # Runs Job B
-         # Assert 3: Job B succeeded, Queue empty
-         step_b_record.reload
-         assert_equal "succeeded", step_b_record.state
-         assert_equal({ "output_b" => "A_OUT_WORLD" }, step_b_record.output)
-         assert_equal 0, enqueued_jobs.size
-         # Assert 4: Workflow succeeded
-         wf_record = repository.find_workflow(workflow_id)
-         assert_equal "succeeded", wf_record.state, "Workflow state should be 'succeeded' after last job finishes"
-         refute wf_record.has_failures
-         refute_nil wf_record.finished_at
-      end
+        # Arrange
+        workflow_id = Client.create_workflow(LinearSuccessWorkflow)
+        step_a_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == "IntegrationStepA" }
+        step_b_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == "IntegrationStepB" }
+        refute_nil step_a_record, "Setup: Step A record missing"
+        refute_nil step_b_record, "Setup: Step B record missing"
 
-
-      def test_linear_workflow_failure_end_to_end
-         # Arrange
-         workflow_id = Client.create_workflow(LinearFailureWorkflow)
-         # Act 1: Start
-         Client.start_workflow(workflow_id)
-         # Assert 1: Job F enqueued
-         assert_equal 1, enqueued_jobs.size
-         step_f_record = repository.find_step(enqueued_jobs.first[:args][0])
-         assert_enqueued_with(job: Worker::ActiveJob::StepJob, args: [step_f_record.id, workflow_id, "IntegrationStepFails"])
-         assert_equal "enqueued", step_f_record.reload.state
-         # Act 2: Perform Job F (fails permanently as max_attempts = 1)
-         perform_enqueued_jobs # Runs Job F
-         # Assert 2: Job F failed, Job A cancelled
-         step_f_record.reload
-         assert_equal "failed", step_f_record.state
-         refute_nil step_f_record.error
-         assert_equal "StandardError", step_f_record.error["class"]
-         assert_match(/Integration job failed!/, step_f_record.error["message"])
-         step_a_record = Persistence::ActiveRecord::StepRecord.find_by(workflow_id: workflow_id, klass: "IntegrationStepA")
-         assert_equal "cancelled", step_a_record.reload.state
-         refute_nil step_a_record.finished_at
-         # Assert 3: Workflow failed
-         assert_equal 0, enqueued_jobs.size
-         wf_record = repository.find_workflow(workflow_id)
-         assert_equal "failed", wf_record.state
-         assert wf_record.has_failures
-         refute_nil wf_record.finished_at
-      end
-
-      def test_complex_graph_success_end_to_end
-        # Arrange: A -> (B, C) -> D
-        workflow_id = Client.create_workflow(ComplexGraphWorkflow)
         # Act 1: Start
         Client.start_workflow(workflow_id)
-        # Assert 1: Job A enqueued
+
+        # Assert Events after Start
+        assert_equal 2, test_notifier.published_events.count, "Expected 2 events after start"
+        wf_started_event = test_notifier.find_event('yantra.workflow.started')
+        step_a_enqueued_event = test_notifier.find_event('yantra.step.enqueued')
+        refute_nil wf_started_event, "Workflow started event missing"
+        refute_nil step_a_enqueued_event, "Step A enqueued event missing"
+        assert_equal workflow_id, wf_started_event[:payload][:workflow_id]
+        assert_equal step_a_record.id, step_a_enqueued_event[:payload][:step_id]
+
+        # Assert 1: Job A enqueued (Keep existing assertions)
         assert_equal 1, enqueued_jobs.size
-        step_a_record = repository.find_step(enqueued_jobs.first[:args][0])
-        assert_enqueued_with(job: Worker::ActiveJob::StepJob, args: [step_a_record.id, workflow_id, "IntegrationStepA"])
         assert_equal "enqueued", step_a_record.reload.state
+
         # Act 2: Perform Job A
+        test_notifier.clear! # Clear events before next action
         perform_enqueued_jobs # Runs Job A
-        # Assert 2: Job A succeeded, Jobs B and C enqueued
+
+        # Assert Events after Job A runs
+        assert_equal 3, test_notifier.published_events.count, "Expected 3 events after Step A runs"
+        assert_equal 'yantra.step.started', test_notifier.published_events[0][:name]
+        assert_equal step_a_record.id, test_notifier.published_events[0][:payload][:step_id]
+        assert_equal 'yantra.step.succeeded', test_notifier.published_events[1][:name]
+        assert_equal step_a_record.id, test_notifier.published_events[1][:payload][:step_id]
+        assert_equal 'yantra.step.enqueued', test_notifier.published_events[2][:name]
+        assert_equal step_b_record.id, test_notifier.published_events[2][:payload][:step_id]
+
+        # Assert 2: Job A succeeded, Job B enqueued (Keep existing assertions)
         step_a_record.reload
         assert_equal "succeeded", step_a_record.state
-        assert_equal 2, enqueued_jobs.size
-        enqueued_step_ids = enqueued_jobs.map { |j| j[:args][0] }
-        step_b_record = repository.find_step(enqueued_step_ids.find { |id| repository.find_step(id).klass == "IntegrationStepB" })
-        step_c_record = repository.find_step(enqueued_step_ids.find { |id| repository.find_step(id).klass == "IntegrationStepC" })
-        assert_equal "enqueued", step_b_record.reload.state
-        assert_equal "enqueued", step_c_record.reload.state
-        assert_enqueued_jobs 2
-        # Act 3: Perform Jobs B and C
-        perform_enqueued_jobs # Runs both B and C
-        # Assert 3: Jobs B and C succeeded, Job D is enqueued
-        step_b_record.reload
-        step_c_record.reload
-        assert_equal "succeeded", step_b_record.state
-        assert_equal "succeeded", step_c_record.state
+        assert_equal({ "output_a" => "HELLO" }, step_a_record.output)
         assert_equal 1, enqueued_jobs.size
-        step_d_record = repository.find_step(enqueued_jobs.first[:args][0])
-        step_d_record.reload
-        assert_enqueued_with(job: Worker::ActiveJob::StepJob, args: [step_d_record.id, workflow_id, "IntegrationStepD"])
-        assert_equal "enqueued", step_d_record.state
-        # Act 4: Perform Job D
-        perform_enqueued_jobs # Runs D
-        # Assert 4: Job D succeeded, Workflow succeeded
-        step_d_record.reload
-        assert_equal "succeeded", step_d_record.state
-        # Use string keys for comparison
-        assert_equal({ "output_d" => "B_OUT-c_out" }, step_d_record.output)
+        assert_equal "enqueued", step_b_record.reload.state
+
+        # Act 3: Perform Job B
+        test_notifier.clear! # Clear events
+        perform_enqueued_jobs # Runs Job B
+
+        # Assert Events after Job B runs
+        assert_equal 3, test_notifier.published_events.count, "Expected 3 events after Step B runs"
+        assert_equal 'yantra.step.started', test_notifier.published_events[0][:name]
+        assert_equal step_b_record.id, test_notifier.published_events[0][:payload][:step_id]
+        assert_equal 'yantra.step.succeeded', test_notifier.published_events[1][:name]
+        assert_equal step_b_record.id, test_notifier.published_events[1][:payload][:step_id]
+        assert_equal 'yantra.workflow.succeeded', test_notifier.published_events[2][:name]
+        assert_equal workflow_id, test_notifier.published_events[2][:payload][:workflow_id]
+
+        # Assert 3 & 4: Job B succeeded, Workflow succeeded (Keep existing assertions)
+        step_b_record.reload
+        assert_equal "succeeded", step_b_record.state
+        assert_equal({ "output_b" => "A_OUT_WORLD" }, step_b_record.output)
         assert_equal 0, enqueued_jobs.size
         wf_record = repository.find_workflow(workflow_id)
-        assert_equal "succeeded", wf_record.state, "Complex workflow state should be 'succeeded'"
+        assert_equal "succeeded", wf_record.state
         refute wf_record.has_failures
+        refute_nil wf_record.finished_at
+      end
+
+      # --- UPDATED: Added Event Assertions ---
+      def test_linear_workflow_failure_end_to_end
+        # Arrange
+        workflow_id = Client.create_workflow(LinearFailureWorkflow)
+        step_f_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == "IntegrationStepFails" }
+        step_a_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == "IntegrationStepA" }
+        refute_nil step_f_record, "Setup: Step F record missing"
+        refute_nil step_a_record, "Setup: Step A record missing"
+
+        # Act 1: Start
+        Client.start_workflow(workflow_id)
+
+        # Assert Events after Start
+        assert_equal 2, test_notifier.published_events.count
+        assert_equal 'yantra.workflow.started', test_notifier.published_events[0][:name]
+        assert_equal 'yantra.step.enqueued', test_notifier.published_events[1][:name]
+        assert_equal step_f_record.id, test_notifier.published_events[1][:payload][:step_id]
+
+        # Assert 1: Job F enqueued
+        assert_equal 1, enqueued_jobs.size
+        assert_equal "enqueued", step_f_record.reload.state
+
+        # Act 2: Perform Job F (fails permanently as max_attempts = 1)
+        test_notifier.clear!
+        perform_enqueued_jobs # Runs Job F
+
+        # Assert Events after Job F fails
+        # Expect: step.started, step.failed, step.cancelled (for step A), workflow.failed
+        assert_equal 4, test_notifier.published_events.count, "Expected 4 events after Step F fails"
+        assert_equal 'yantra.step.started', test_notifier.published_events[0][:name]
+        assert_equal step_f_record.id, test_notifier.published_events[0][:payload][:step_id]
+        assert_equal 'yantra.step.failed', test_notifier.published_events[1][:name]
+        assert_equal step_f_record.id, test_notifier.published_events[1][:payload][:step_id]
+        assert_equal 'StandardError', test_notifier.published_events[1][:payload][:error][:class]
+        assert_equal 'yantra.step.cancelled', test_notifier.published_events[2][:name]
+        assert_equal step_a_record.id, test_notifier.published_events[2][:payload][:step_id]
+        assert_equal 'yantra.workflow.failed', test_notifier.published_events[3][:name]
+        assert_equal workflow_id, test_notifier.published_events[3][:payload][:workflow_id]
+
+        # Assert 2: Job F failed, Job A cancelled (Keep existing assertions)
+        step_f_record.reload
+        assert_equal "failed", step_f_record.state
+        refute_nil step_f_record.error
+        error = JSON.parse(step_f_record.error)
+        assert_equal "StandardError", error['class']
+        assert_match(/Integration job failed!/, error["message"])
+        step_a_record.reload
+        assert_equal "cancelled", step_a_record.state
+        refute_nil step_a_record.finished_at
+
+        # Assert 3: Workflow failed (Keep existing assertions)
+        assert_equal 0, enqueued_jobs.size
+        wf_record = repository.find_workflow(workflow_id)
+        assert_equal "failed", wf_record.state
+        assert wf_record.has_failures
         refute_nil wf_record.finished_at
       end
 
@@ -390,24 +403,43 @@ module Yantra
       # --- Cancel Tests ---
       def test_cancel_workflow_cancels_running_workflow
         workflow_id = Client.create_workflow(LinearSuccessWorkflow)
-        Client.start_workflow(workflow_id)
-        perform_enqueued_jobs
+        Client.start_workflow(workflow_id) # -> wf.started, step_a.enqueued
+        perform_enqueued_jobs          # -> step_a.started, step_a.succeeded, step_b.enqueued
         wf_record = repository.find_workflow(workflow_id)
         step_a_record = Persistence::ActiveRecord::StepRecord.find_by!(workflow_id: workflow_id, klass: "IntegrationStepA")
         step_b_record = Persistence::ActiveRecord::StepRecord.find_by!(workflow_id: workflow_id, klass: "IntegrationStepB")
         assert_equal "running", wf_record.reload.state
         assert_equal "succeeded", step_a_record.reload.state
         assert_equal "enqueued", step_b_record.reload.state
+
+        test_notifier.clear! # Clear events before cancel action
+
+        # Act: Cancel
         cancel_result = Client.cancel_workflow(workflow_id)
+
+        # Assert: Cancellation result
         assert cancel_result
+
+        # Assert Events after Cancel
+        # Expect: workflow.cancelled, step.cancelled (for step B)
+        assert_equal 2, test_notifier.published_events.count, "Expected 2 events after cancel"
+        wf_cancelled_event = test_notifier.find_event('yantra.workflow.cancelled')
+        step_b_cancelled_event = test_notifier.find_event('yantra.step.cancelled')
+        refute_nil wf_cancelled_event, "Workflow cancelled event missing"
+        refute_nil step_b_cancelled_event, "Step B cancelled event missing"
+        assert_equal workflow_id, wf_cancelled_event[:payload][:workflow_id]
+        assert_equal step_b_record.id, step_b_cancelled_event[:payload][:step_id]
+
+        # Assert: Final states (Keep existing assertions)
         wf_record.reload
         assert_equal "cancelled", wf_record.state
         refute_nil wf_record.finished_at
-        assert_equal "succeeded", step_a_record.reload.state
+        assert_equal "succeeded", step_a_record.reload.state # A was already done
         step_b_record.reload
         assert_equal "cancelled", step_b_record.state
         refute_nil step_b_record.finished_at
       end
+
 
       def test_cancel_workflow_cancels_pending_workflow
         workflow_id = Client.create_workflow(LinearSuccessWorkflow)

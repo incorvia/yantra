@@ -6,9 +6,7 @@ require_relative 'step'
 require_relative 'errors'
 require_relative 'core/orchestrator'
 require_relative 'core/state_machine'
-# --- Require the new service class ---
-require_relative 'core/workflow_retry_service'
-# --- ---
+require_relative 'core/workflow_retry_service' # Keep this require
 
 module Yantra
   # Public interface for interacting with the Yantra workflow system.
@@ -17,6 +15,7 @@ module Yantra
     # Creates and persists a new workflow instance along with its defined
     # jobs and their dependencies.
     def self.create_workflow(workflow_klass, *args, **kwargs)
+      # ... (create_workflow method remains unchanged) ...
       # 1. Validate Input
       unless workflow_klass.is_a?(Class) && workflow_klass < Yantra::Workflow
         raise ArgumentError, "#{workflow_klass} must be a Class inheriting from Yantra::Workflow"
@@ -70,6 +69,7 @@ module Yantra
 
     # Starts a previously created workflow.
     def self.start_workflow(workflow_id)
+      # ... (start_workflow method remains unchanged) ...
       puts "INFO: [Client] Requesting start for workflow #{workflow_id}..."
       orchestrator = Core::Orchestrator.new
       orchestrator.start_workflow(workflow_id)
@@ -77,117 +77,118 @@ module Yantra
 
     # Finds a workflow by its ID using the configured repository.
     def self.find_workflow(workflow_id)
+      # ... (find_workflow method remains unchanged) ...
       puts "INFO: [Client] Finding workflow #{workflow_id}..."
       Yantra.repository.find_workflow(workflow_id)
     end
 
     # Finds a job by its ID using the configured repository.
     def self.find_step(step_id)
+      # ... (find_step method remains unchanged) ...
       puts "INFO: [Client] Finding step #{step_id}..."
       Yantra.repository.find_step(step_id)
     end
 
     # Retrieves jobs associated with a workflow, optionally filtered by status.
     def self.get_workflow_steps(workflow_id, status: nil)
+      # ... (get_workflow_steps method remains unchanged) ...
       puts "INFO: [Client] Getting steps for workflow #{workflow_id} (status: #{status})..."
       Yantra.repository.get_workflow_steps(workflow_id, status: status)
     end
 
     # Attempts to cancel a workflow.
     def self.cancel_workflow(workflow_id)
-      puts "INFO: [Client.cancel_workflow] Attempting to cancel workflow #{workflow_id}..."
+      Yantra.logger.info { "[Client.cancel_workflow] Attempting to cancel workflow #{workflow_id}..." } if Yantra.logger
       repo = Yantra.repository
-      notifier = Yantra.notifier # Get notifier instance
+      notifier = Yantra.notifier
       workflow = repo.find_workflow(workflow_id)
-      finished_at_time = Time.current # Capture time for consistency
+      finished_at_time = Time.current
 
-      # 1. Validate Workflow State
       unless workflow
-        puts "WARN: [Client.cancel_workflow] Workflow #{workflow_id} not found."
+        Yantra.logger.warn { "[Client.cancel_workflow] Workflow #{workflow_id} not found." } if Yantra.logger
         return false
       end
 
       current_wf_state = workflow.state.to_sym
       if Core::StateMachine.terminal?(current_wf_state) || current_wf_state == Core::StateMachine::CANCELLED
-        puts "WARN: [Client.cancel_workflow] Workflow #{workflow_id} is already in a terminal or cancelled state (#{current_wf_state})."
-        return false # Already finished or cancelled
-      end
-
-      # 2. Mark Workflow as Cancelled
-      possible_previous_states = [Core::StateMachine::PENDING, Core::StateMachine::RUNNING]
-      update_success = false
-      possible_previous_states.each do |prev_state|
-        update_success = repo.update_workflow_attributes(
-          workflow_id,
-          { state: Core::StateMachine::CANCELLED.to_s, finished_at: finished_at_time }, # Use captured time
-          expected_old_state: prev_state
-        )
-        break if update_success
-      end
-
-      unless update_success
-        latest_state = repo.find_workflow(workflow_id)&.state || 'unknown'
-        puts "WARN: [Client.cancel_workflow] Failed to update workflow #{workflow_id} state to cancelled (maybe state changed concurrently? Current state: #{latest_state})."
+        Yantra.logger.warn { "[Client.cancel_workflow] Workflow #{workflow_id} is already in a terminal or cancelled state (#{current_wf_state})." } if Yantra.logger
         return false
       end
 
-      puts "INFO: [Client.cancel_workflow] Workflow #{workflow_id} marked as cancelled in repository."
-
-      # --- >>> ADDED: Emit workflow.cancelled event here <<< ---
-      begin
-        # Use the already fetched workflow object or fetch again if needed
-        # Use the captured finished_at_time for the payload
-        payload = {
-          workflow_id: workflow_id,
-          klass: workflow.klass, # Get klass from the fetched record
-          state: Core::StateMachine::CANCELLED, # Use the symbol
-          finished_at: finished_at_time
-        }
-        notifier.publish('yantra.workflow.cancelled', payload)
-        puts "INFO: [Client.cancel_workflow] Published yantra.workflow.cancelled event for #{workflow_id}."
-      rescue => e
-        Yantra.logger.error { "[Client.cancel_workflow] Failed to publish yantra.workflow.cancelled event for #{workflow_id}: #{e.message}" }
+      possible_previous_states = [Core::StateMachine::PENDING, Core::StateMachine::RUNNING]
+      update_success = false
+      possible_previous_states.each do |prev_state|
+         update_success = repo.update_workflow_attributes(
+           workflow_id,
+           { state: Core::StateMachine::CANCELLED.to_s, finished_at: finished_at_time },
+           expected_old_state: prev_state
+         )
+         break if update_success
       end
-      # --- >>> END ADDED SECTION <<< ---
 
+      unless update_success
+         latest_state = repo.find_workflow(workflow_id)&.state || 'unknown'
+         Yantra.logger.warn { "[Client.cancel_workflow] Failed to update workflow #{workflow_id} state to cancelled (maybe state changed concurrently? Current state: #{latest_state})." } if Yantra.logger
+         return false
+      end
 
-      # 3. Find Pending/Enqueued Jobs for this Workflow
-      cancellable_step_states = [Core::StateMachine::PENDING, Core::StateMachine::ENQUEUED]
-      # Fetch steps *after* workflow state is updated
+      Yantra.logger.info { "[Client.cancel_workflow] Workflow #{workflow_id} marked as cancelled in repository." } if Yantra.logger
+
+      # Publish workflow.cancelled event
+      begin
+        payload = { workflow_id: workflow_id, klass: workflow.klass, state: Core::StateMachine::CANCELLED, finished_at: finished_at_time }
+        notifier.publish('yantra.workflow.cancelled', payload)
+        Yantra.logger.info { "[Client.cancel_workflow] Published yantra.workflow.cancelled event for #{workflow_id}." } if Yantra.logger
+      rescue => e
+        Yantra.logger.error { "[Client.cancel_workflow] Failed to publish yantra.workflow.cancelled event for #{workflow_id}: #{e.message}" } if Yantra.logger
+      end
+
+      # Find Pending/Enqueued Jobs for this Workflow *after* marking workflow cancelled
+      cancellable_step_states = [Core::StateMachine::PENDING.to_s, Core::StateMachine::ENQUEUED.to_s]
       steps_to_cancel = repo.get_workflow_steps(workflow_id)
-        .select { |j| cancellable_step_states.include?(j.state.to_sym) }
+                           .select { |j| cancellable_step_states.include?(j.state.to_s) } # Compare strings
 
-      # 4. Bulk Cancel Pending/Enqueued Jobs
-      if steps_to_cancel.any?
-        step_ids_to_cancel = steps_to_cancel.map(&:id)
-        puts "INFO: [Client.cancel_workflow] Cancelling #{step_ids_to_cancel.size} pending/enqueued jobs: #{step_ids_to_cancel}."
+      # Bulk Cancel Pending/Enqueued Jobs in DB
+      step_ids_to_cancel = steps_to_cancel.map(&:id)
+      Yantra.logger.debug { "[Client.cancel_workflow] Found step IDs to cancel: #{step_ids_to_cancel.inspect}"} if Yantra.logger
+
+      if step_ids_to_cancel.any?
+        Yantra.logger.info { "[Client.cancel_workflow] Cancelling #{step_ids_to_cancel.size} pending/enqueued jobs in DB: #{step_ids_to_cancel}." } if Yantra.logger
         begin
           cancelled_count = repo.cancel_steps_bulk(step_ids_to_cancel)
-          puts "INFO: [Client.cancel_workflow] Repository confirmed cancellation update for #{cancelled_count} jobs."
-          # Note: yantra.step.cancelled events are published by the Orchestrator's
-          # cancel_downstream_pending method if cancellation cascades from a failure,
-          # but not currently during this direct Client.cancel_workflow bulk update.
-          # This could be added here if desired, iterating through step_ids_to_cancel.
+          Yantra.logger.debug { "[Client.cancel_workflow] cancel_steps_bulk returned count: #{cancelled_count.inspect}"} if Yantra.logger
+          Yantra.logger.info { "[Client.cancel_workflow] Repository confirmed DB cancellation update for #{cancelled_count} jobs." } if Yantra.logger
+
+          # --- ADDED: Publish step.cancelled event for each cancelled step ---
+          # Publish event even if DB count was 0, based on IDs found *before* bulk update
+          Yantra.logger.info { "[Client.cancel_workflow] Publishing yantra.step.cancelled events for steps: #{step_ids_to_cancel}..." } if Yantra.logger
+          step_ids_to_cancel.each do |step_id|
+             Yantra.logger.debug { "[Client.cancel_workflow] Publishing step.cancelled for step_id: #{step_id}"} if Yantra.logger
+             begin
+                payload = { step_id: step_id, workflow_id: workflow_id }
+                notifier.publish('yantra.step.cancelled', payload)
+             rescue => e
+                Yantra.logger.error { "[Client.cancel_workflow] Failed to publish yantra.step.cancelled event for step #{step_id}: #{e.message}" } if Yantra.logger
+             end
+          end
+          # --- END ADDED SECTION ---
+
         rescue Yantra::Errors::PersistenceError => e
-          puts "ERROR: [Client.cancel_workflow] Failed during bulk job cancellation for workflow #{workflow_id}: #{e.message}"
+          Yantra.logger.error { "[Client.cancel_workflow] Failed during bulk job cancellation for workflow #{workflow_id}: #{e.message}" } if Yantra.logger
         end
       else
-        puts "INFO: [Client.cancel_workflow] No pending or enqueued jobs found to cancel for workflow #{workflow_id}."
+        Yantra.logger.info { "[Client.cancel_workflow] No pending or enqueued jobs found to cancel for workflow #{workflow_id}." } if Yantra.logger
       end
 
-      true # Cancellation process initiated successfully
+      true # Indicate cancellation process was initiated
     rescue StandardError => e
-      puts "ERROR: [Client.cancel_workflow] Unexpected error for workflow #{workflow_id}: #{e.class} - #{e.message}\n#{e.backtrace.take(5).join("\n")}"
+      Yantra.logger.error { "[Client.cancel_workflow] Unexpected error for workflow #{workflow_id}: #{e.class} - #{e.message}\n#{e.backtrace.take(5).join("\n")}" } if Yantra.logger
       false
     end
 
-    # --- REFACTORED METHOD: retry_failed_steps ---
     # Attempts to retry all failed jobs within a failed workflow.
-    # Delegates the core re-enqueuing logic to WorkflowRetryService.
-    # @param workflow_id [String] The UUID of the workflow to retry.
-    # @return [Integer, false] The number of jobs re-enqueued for retry, or false if the
-    #   workflow was not found, not in a failed state, or failed to reset state.
     def self.retry_failed_steps(workflow_id)
+      # ... (retry_failed_steps method remains unchanged) ...
       puts "INFO: [Client.retry_failed_steps] Attempting to retry failed jobs for workflow #{workflow_id}..."
       repo = Yantra.repository
       worker = Yantra.worker_adapter # Get worker adapter instance
@@ -242,14 +243,9 @@ module Yantra
       puts "ERROR: [Client.retry_failed_steps] Unexpected error for workflow #{workflow_id}: #{e.class} - #{e.message}\n#{e.backtrace.take(5).join("\n")}"
       false
     end
-    # --- END REFACTORED retry_failed_steps ---
-
 
     # --- Placeholder for Other Client Methods ---
-
-    # def self.list_workflows(status: nil, limit: 50, offset: 0) ... end
-    # def self.retry_job(step_id) ... end # Might call retry_failed_steps internally after finding workflow?
-    # ... etc ...
+    # ...
 
   end
 end
