@@ -1,7 +1,7 @@
 # Yantra
 
 [![Gem Version](https://badge.fury.io/rb/yantra.svg)](https://badge.fury.io/rb/yantra)
-[![Build Status](https://github.com/incorvia/yantra/actions/workflows/ci.yml/badge.svg)](https://github.com/your_github/yantra/actions/workflows/ci.yml)
+[![Build Status](https://github.com/incorvia/yantra/actions/workflows/ci.yml/badge.svg)](https://github.com/incorvia/yantra/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Yantra is a robust, backend-agnostic workflow engine for Ruby applications. Define complex workflows as Directed Acyclic Graphs (DAGs) of individual steps (jobs), run them reliably via background workers, and gain insight through a built-in event system.
@@ -319,7 +319,7 @@ To install this gem onto your local machine, run `bundle exec rake install`. To 
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/your_github/yantra. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [code of conduct](link/to/your/CODE_OF_CONDUCT.md).
+Bug reports and pull requests are welcome on GitHub at https://github.com/incorvia/yantra. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [code of conduct](link/to/your/CODE_OF_CONDUCT.md).
 
 ## License
 
