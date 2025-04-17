@@ -56,7 +56,7 @@ module Yantra
 
       # Updates step state to failed, records error, sets workflow flag, and publishes event.
       def fail_permanently!
-        puts "INFO: [RetryHandler] Job #{step_record.id} reached max attempts (#{get_max_attempts}). Marking as failed."
+
         finished_at_time = Time.current # Capture time
         final_attrs = {
           state: Yantra::Core::StateMachine::FAILED.to_s,
@@ -73,7 +73,7 @@ module Yantra
             # --- UPDATED: Use instance variable @notifier ---
             notifier = @notifier # Use the injected notifier
             unless notifier # Safety check if somehow nil was injected
-               puts "ERROR: [RetryHandler] Notifier not available, cannot publish yantra.step.failed event."
+
                return # Exit early if no notifier
             end
 
@@ -87,28 +87,28 @@ module Yantra
               retries: step_record.retries
             }
             notifier.publish('yantra.step.failed', payload)
-            puts "INFO: [RetryHandler] Published yantra.step.failed event for #{step_record.id}."
+
           rescue => e
             log_msg = "[RetryHandler] Failed to publish yantra.step.failed event for #{step_record.id}: #{e.message}"
             # Log error using Yantra logger if available
             if defined?(Yantra.logger) && Yantra.logger
                Yantra.logger.error { log_msg }
             else
-               puts "ERROR: #{log_msg}"
+
             end
           end
           # --- END Publish Event Section ---
 
         else
           latest_state = repository.find_step(step_record.id)&.state || 'unknown'
-          puts "WARN: [RetryHandler] Failed to update job #{step_record.id} state to failed (maybe already changed? Current state: #{latest_state}). Event not published."
+
         end
       end
 
       # Increments retry count and records the error for a retry attempt.
       def prepare_for_retry!
         # ... (logic remains the same) ...
-        puts "INFO: [RetryHandler] Job #{step_record.id} failed, allowing retry (attempt #{executions}/#{get_max_attempts}). Re-raising error for backend."
+
         repository.increment_step_retries(step_record.id)
         repository.record_step_error(step_record.id, @error)
       end

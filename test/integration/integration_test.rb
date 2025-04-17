@@ -47,24 +47,24 @@ class IntegrationJobRetry < Yantra::Step
     attempt_key = self.id || SecureRandom.uuid
     @@retry_test_attempts[attempt_key] = @@retry_test_attempts[attempt_key].to_i + 1
     current_attempt = @@retry_test_attempts[attempt_key]
-    puts "INTEGRATION_TEST: Job Retry running (Attempt #{current_attempt}) for job #{self.id}"
+
     if current_attempt < 2
       raise StandardError, "Integration job failed on attempt #{current_attempt}!"
     else
-      puts "INTEGRATION_TEST: Job Retry succeeding on attempt #{current_attempt}"
+
       { output_retry: "Success on attempt #{current_attempt}" }
     end
   end
 end
 class PipeProducer < Yantra::Step
   def perform(value:)
-    puts "INTEGRATION_TEST: PipeProducer running"
+
     { produced_data: "PRODUCED_#{value.upcase}" }
   end
 end
 class PipeConsumer < Yantra::Step
   def perform()
-    puts "INTEGRATION_TEST: PipeConsumer running"
+
     parent_data = parent_outputs
     # Find the output from the known parent (PipeProducer)
     producer_output_hash = parent_data.values.find { |output| output&.key?('produced_data') }

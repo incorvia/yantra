@@ -28,7 +28,7 @@ module Yantra
             event_name_str = event_name.to_s
             ::ActiveSupport::Notifications.instrument(event_name_str, payload)
           rescue => e
-            puts "ERROR: [Yantra AS::NotificationsAdapter] Failed to instrument event '#{event_name_str}': #{e.class} - #{e.message}"
+
           end
         end
 

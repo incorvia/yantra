@@ -6,7 +6,7 @@ begin
   # Make sure this path matches the actual filename if you renamed it
   require_relative 'step_job'
 rescue LoadError
-  puts "WARN: Could not load Yantra ActiveJob StepJob. ActiveJob adapter may not function."
+
 end
 
 # Require Yantra's custom errors if needed for rescue block
@@ -40,13 +40,13 @@ module Yantra
           # If defined, get the class constant
           step_class_to_enqueue = step_class_module.const_get(step_const_name)
 
-          puts "INFO: [ActiveJob::Adapter] Enqueuing job #{step_id} (Klass: #{step_klass_name}, WF: #{workflow_id}) to queue '#{queue_name}'"
+
           begin
             # Use .set to specify the queue, then enqueue the job with necessary args
             step_class_to_enqueue.set(queue: queue_name).perform_later(step_id, workflow_id, step_klass_name)
           rescue StandardError => e
             # Catch potential errors during enqueueing (e.g., AJ backend misconfiguration)
-            puts "ERROR: [ActiveJob::Adapter] Failed to enqueue job #{step_id} via ActiveJob: #{e.message}"
+
             # Wrap in a Yantra-specific error
             raise Yantra::Errors::WorkerError, "ActiveJob enqueuing failed: #{e.message}"
           end

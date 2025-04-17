@@ -308,16 +308,16 @@ module Yantra
           step = repository.find_step(sid)
           # === HYPER-FOCUSED LOGGING ===
           if step
-            puts "ORCH DETAIL DEBUG: Comparing step state: '#{step.state.to_s}' with StateMachine::PENDING.to_s: '#{StateMachine::PENDING.to_s}'"
+
           else
-            puts "ORCH DETAIL DEBUG: Step not found for id: #{sid}"
+
           end
           # =============================
           # FIX: Compare states as strings
           pending_dependents_to_cancel << sid if step&.state.to_s == StateMachine::PENDING.to_s
         end
         # === TARGETED LOGGING ===
-        puts "ORCH DEBUG: cancel_downstream_pending: pending_dependents_to_cancel=#{pending_dependents_to_cancel.inspect}. empty?=#{pending_dependents_to_cancel.empty?}"
+
         # ========================
         return if pending_dependents_to_cancel.empty? # <<< Should NOT return if comparison works
 

@@ -20,7 +20,7 @@ module Yantra
 
       # The main method executed by the generator.
       def create_migration_files
-        puts "Copying Yantra ActiveRecord migrations..."
+
 
         # Use migration_template to copy each migration file.
         # Rails handles timestamping and conflict checking (by class name).
@@ -28,7 +28,7 @@ module Yantra
         migration_template "create_yantra_steps.rb",              "db/migrate/create_yantra_steps.rb"
         migration_template "create_yantra_step_dependencies.rb",  "db/migrate/create_yantra_step_dependencies.rb"
 
-        puts "Yantra migrations copied. Please run 'rails db:migrate'."
+
       end
     end
   end

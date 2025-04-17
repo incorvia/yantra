@@ -11,13 +11,13 @@ namespace :yantra do
       # Default to deleting workflows older than 30 days if no argument is provided
       days_ago = args[:days_ago]&.to_i || 30
       if days_ago <= 0
-        puts "❌ Error: days_ago must be a positive integer."
+
         exit(1) # Exit with an error code
       end
 
       # Calculate the cutoff timestamp
       cutoff_timestamp = days_ago.days.ago
-      puts "ℹ️ Deleting Yantra workflows that finished before #{cutoff_timestamp} (#{days_ago} days ago)..."
+
 
       begin
         # --- Get Repository Adapter ---
@@ -42,13 +42,13 @@ namespace :yantra do
         duration = end_time - start_time
 
         # --- Report Results ---
-        puts "✅ Successfully deleted #{deleted_count} expired workflow(s)."
-        puts "⏱️ Cleanup took #{duration.round(2)} seconds."
+
+
 
       rescue => e
         # --- Error Handling ---
-        puts "❌ Error during workflow cleanup: #{e.message}"
-        puts e.backtrace.join("\n")
+
+
         exit(1) # Exit with an error code
       end
     end

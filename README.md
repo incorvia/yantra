@@ -158,10 +158,10 @@ class FetchUserDataStep < Yantra::Step
   def queue_name; 'api_intensive'; end
 
   def perform(user_id:)
-    puts "Fetching data for user #{user_id}"
+
     # ... fetch logic ...
     result = { user_name: "User #{user_id}", fetched_at: Time.now }
-    puts "Fetched: #{result}"
+
     result # Return output hash (must be JSON-serializable)
   end
 end
@@ -173,10 +173,10 @@ class GenerateReportStep < Yantra::Step
   # Arguments passed via `params:` in the workflow `run` call are available here.
   # Output from parent steps needs to be accessed via `parent_outputs` (see Pipelining section).
   def perform(user_name:, report_format:) # Changed: Expect user_name directly
-    puts "Generating #{report_format} report for #{user_name}"
+
     # ... report generation ...
     report_url = "report_url_for_#{user_name}.#{report_format}"
-    puts "Generated: #{report_url}"
+
     { report_url: report_url } # Return output
   end
 end
@@ -184,7 +184,7 @@ end
 # app/workflows/steps/notify_admin_step.rb
 class NotifyAdminStep < Yantra::Step
   def perform(report_url:, user_id:) # Changed: Expect report_url directly
-    puts "Notifying admin about report for user #{user_id}: #{report_url}"
+
     # ... notification logic ...
     { notified_at: Time.now }
   end
@@ -256,12 +256,12 @@ workflow_id = Yantra::Client.create_workflow(
   format: 'csv'
 )
 
-puts "Created workflow with ID: #{workflow_id}"
+
 
 # Start the workflow (enqueues initial steps with no dependencies via Orchestrator)
 Yantra::Client.start_workflow(workflow_id)
 
-puts "Workflow #{workflow_id} started."
+
 ```
 
 **4. Monitor Workflows and Steps:**
@@ -271,21 +271,21 @@ puts "Workflow #{workflow_id} started."
 workflow_record = Yantra::Client.find_workflow(workflow_id)
 # => #<Yantra::Persistence::ActiveRecord::WorkflowRecord id: "...", klass: "...", state: "running", ...>
 if workflow_record
-  puts workflow_record.state # => "pending", "running", "succeeded", "failed", "cancelled"
-  puts workflow_record.created_at
-  puts workflow_record.finished_at
+
+
+
 end
 
 # Get all step records for a workflow
 step_records = Yantra::Client.get_workflow_steps(workflow_id)
 step_records.each do |step_record|
-  puts "#{step_record.klass} (#{step_record.id}): #{step_record.state}"
+
   # => "FetchUserDataStep (uuid...): succeeded"
   # => "GenerateReportStep (uuid...): running"
   # => "NotifyAdminStep (uuid...): enqueued"
-  puts "  Output: #{step_record.output}" if step_record.output
-  puts "  Error: #{step_record.error}" if step_record.error
-  puts "  Retries: #{step_record.retries}"
+
+
+
 end
 
 # Find a specific step record by its UUID
@@ -334,7 +334,7 @@ class StepTwo < Yantra::Step
   def perform # Takes no direct arguments from workflow params
     # Access the outputs from parent steps
     outputs = parent_outputs # Returns hash like: {"uuid-of-step-one" => {"step_one_result"=>"Processed_value123"}}
-    puts "DEBUG: Received parent outputs: #{outputs.inspect}"
+
 
     # Assuming StepOne is the only parent
     # Parent IDs are available via the @parent_ids instance variable if needed
@@ -345,11 +345,11 @@ class StepTwo < Yantra::Step
     # Access using strings for safety unless you handle symbolization.
     if parent_output_data && parent_output_data['step_one_result']
       result_from_one = parent_output_data['step_one_result']
-      puts "StepTwo using data from StepOne: #{result_from_one}"
+
       # ... use result_from_one ...
       { final_output: "Used_#{result_from_one}" }
     else
-      puts "WARN: StepTwo did not find expected output key 'step_one_result' from StepOne. Output received: #{parent_output_data.inspect}"
+
       { final_output: "Default output" }
     end
   end

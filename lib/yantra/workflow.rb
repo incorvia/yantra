@@ -42,7 +42,7 @@ module Yantra
       # Rehydrate state if loaded from persistence
       if internal_state[:persisted]
         # Note: steps/Deps are NOT loaded by default anymore
-        puts "INFO: Rehydrated workflow #{@id} (State: #{@state}). steps/Deps not loaded into memory."
+
       end
 
       # Run perform and calculate terminal status ONLY on initial creation,

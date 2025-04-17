@@ -22,9 +22,9 @@ module Yantra
       end
 
       # 2. Instantiate Workflow & Build Graph & Calculate Terminal Status
-      puts "INFO: Instantiating workflow #{workflow_klass}..."
+
       wf_instance = workflow_klass.new(*args, **kwargs)
-      puts "INFO: Workflow instance created and processed with #{wf_instance.steps.count} jobs and #{wf_instance.dependencies.keys.count} jobs having dependencies."
+
 
       # 3. Get the configured repository adapter instance
       repo = Yantra.repository
@@ -33,20 +33,20 @@ module Yantra
       # TODO: Consider wrapping these steps in a transaction
 
       # 4. Persist the Workflow record itself
-      puts "INFO: Persisting workflow record (ID: #{wf_instance.id})..."
+
       unless repo.persist_workflow(wf_instance) # Pass instance directly
          raise Yantra::Errors::PersistenceError, "Failed to persist workflow record for ID: #{wf_instance.id}"
       end
-      puts "INFO: Workflow record persisted."
+
 
       # 5. Persist the Jobs (using bulk method)
       jobs_to_persist = wf_instance.steps
       if jobs_to_persist.any?
-        puts "INFO: Persisting #{jobs_to_persist.count} job records via bulk..."
+
         unless repo.persist_steps_bulk(jobs_to_persist)
           raise Yantra::Errors::PersistenceError, "Failed to bulk persist job records for workflow ID: #{wf_instance.id}"
         end
-        puts "INFO: Job records persisted."
+
       end
 
       # 6. Persist the Dependencies (using bulk method)
@@ -55,22 +55,22 @@ module Yantra
         links_array = dependencies_hash.flat_map do |step_id, dep_ids|
           dep_ids.map { |dep_id| { step_id: step_id, depends_on_step_id: dep_id } }
         end
-        puts "INFO: Persisting #{links_array.count} dependency links via bulk..."
+
         unless repo.add_step_dependencies_bulk(links_array)
            raise Yantra::Errors::PersistenceError, "Failed to persist dependency links for workflow ID: #{wf_instance.id}"
         end
-        puts "INFO: Dependency links persisted."
+
       end
 
       # 7. Return the Workflow ID
-      puts "INFO: Workflow #{wf_instance.id} created successfully."
+
       wf_instance.id
     end
 
     # Starts a previously created workflow.
     def self.start_workflow(workflow_id)
       # ... (start_workflow method remains unchanged) ...
-      puts "INFO: [Client] Requesting start for workflow #{workflow_id}..."
+
       orchestrator = Core::Orchestrator.new
       orchestrator.start_workflow(workflow_id)
     end
@@ -78,21 +78,21 @@ module Yantra
     # Finds a workflow by its ID using the configured repository.
     def self.find_workflow(workflow_id)
       # ... (find_workflow method remains unchanged) ...
-      puts "INFO: [Client] Finding workflow #{workflow_id}..."
+
       Yantra.repository.find_workflow(workflow_id)
     end
 
     # Finds a job by its ID using the configured repository.
     def self.find_step(step_id)
       # ... (find_step method remains unchanged) ...
-      puts "INFO: [Client] Finding step #{step_id}..."
+
       Yantra.repository.find_step(step_id)
     end
 
     # Retrieves jobs associated with a workflow, optionally filtered by status.
     def self.get_workflow_steps(workflow_id, status: nil)
       # ... (get_workflow_steps method remains unchanged) ...
-      puts "INFO: [Client] Getting steps for workflow #{workflow_id} (status: #{status})..."
+
       Yantra.repository.get_workflow_steps(workflow_id, status: status)
     end
 
@@ -189,7 +189,7 @@ module Yantra
     # Attempts to retry all failed jobs within a failed workflow.
     def self.retry_failed_steps(workflow_id)
       # ... (retry_failed_steps method remains unchanged) ...
-      puts "INFO: [Client.retry_failed_steps] Attempting to retry failed jobs for workflow #{workflow_id}..."
+
       repo = Yantra.repository
       worker = Yantra.worker_adapter # Get worker adapter instance
       notifier = Yantra.notifier # Get worker adapter instance
@@ -197,11 +197,11 @@ module Yantra
       # 1. Validate Workflow State
       workflow = repo.find_workflow(workflow_id)
       unless workflow
-        puts "WARN: [Client.retry_failed_steps] Workflow #{workflow_id} not found."
+
         return false
       end
       unless workflow.state.to_sym == Core::StateMachine::FAILED
-        puts "WARN: [Client.retry_failed_steps] Workflow #{workflow_id} is not in 'failed' state (current: #{workflow.state}). Cannot retry."
+
         return false
       end
 
@@ -221,10 +221,10 @@ module Yantra
       unless workflow_update_success
         # Reload to check the actual current state if update failed
         latest_state = repo.find_workflow(workflow_id)&.state || 'unknown'
-        puts "WARN: [Client.retry_failed_steps] Failed to reset workflow #{workflow_id} state to running (maybe state changed concurrently? Current state: #{latest_state})."
+
         return false
       end
-      puts "INFO: [Client.retry_failed_steps] Workflow #{workflow_id} state reset to running."
+
       # TODO: Emit workflow.retrying event?
 
       # 3. Delegate Job Re-enqueuing to Service Class
@@ -237,12 +237,12 @@ module Yantra
       )
       reenqueued_count = retry_service.call
 
-      puts "INFO: [Client.retry_failed_steps] Finished. Service reported #{reenqueued_count} jobs re-enqueued."
+
       reenqueued_count # Return the count from the service
 
     rescue StandardError => e
       # Catch unexpected errors during the process
-      puts "ERROR: [Client.retry_failed_steps] Unexpected error for workflow #{workflow_id}: #{e.class} - #{e.message}\n#{e.backtrace.take(5).join("\n")}"
+
       false
     end
 
