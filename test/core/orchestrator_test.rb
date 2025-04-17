@@ -608,6 +608,105 @@ end
           # Assert: Verification of expects happens automatically via Mocha teardown
         end
       end
+
+        # --- Test step_starting ---
+      def test_step_starting_publishes_event_on_success
+        mocks = setup_mocha_mocks_and_orchestrator
+        repo = mocks[:repo]; notifier = mocks[:notifier]; orchestrator = mocks[:orchestrator]
+        sequence = Mocha::Sequence.new('step_starting_publishes_event')
+
+        Time.stub :current, @frozen_time do
+          # Mock step record found initially (in enqueued state)
+          step_enqueued = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'enqueued')
+          # Mock step record found *after* successful update (for event payload)
+          step_running = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'running', started_at: @frozen_time)
+
+          # --- Mocha Expectations ---
+          # 1. Expect find_step (first check in step_starting)
+          repo.expects(:find_step).with(@step_a_id).returns(step_enqueued).in_sequence(sequence)
+          # 2. Expect update_step_attributes to running
+          repo.expects(:update_step_attributes).with(
+            @step_a_id,
+            has_entries(state: StateMachine::RUNNING.to_s, started_at: @frozen_time),
+            { expected_old_state: StateMachine::ENQUEUED }
+          ).returns(true).in_sequence(sequence)
+          # 3. Expect find_step again (to get payload for event)
+          repo.expects(:find_step).with(@step_a_id).returns(step_running).in_sequence(sequence)
+          # 4. *** Expect the notifier publish call ***
+          notifier.expects(:publish).with(
+            'yantra.step.started',
+            has_entries(
+              step_id: @step_a_id,
+              workflow_id: @workflow_id,
+              klass: "StepA",
+              started_at: @frozen_time
+            )
+          ).returns(nil).in_sequence(sequence)
+          # --- End Mocha Expectations ---
+
+          # Act
+          result = orchestrator.step_starting(@step_a_id)
+
+          # Assert
+          assert result, "step_starting should return true on success"
+          # Mocha verifies the expectations automatically upon teardown
+        end
+      end
+
+      def test_step_starting_does_not_publish_if_update_fails
+        mocks = setup_mocha_mocks_and_orchestrator
+        repo = mocks[:repo]; notifier = mocks[:notifier]; orchestrator = mocks[:orchestrator]
+        sequence = Mocha::Sequence.new('step_starting_no_publish_on_fail')
+
+        Time.stub :current, @frozen_time do
+          step_enqueued = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'enqueued')
+
+          # --- Mocha Expectations ---
+          repo.expects(:find_step).with(@step_a_id).returns(step_enqueued).in_sequence(sequence)
+          repo.expects(:update_step_attributes).with(
+            @step_a_id,
+            has_entries(state: StateMachine::RUNNING.to_s),
+            { expected_old_state: StateMachine::ENQUEUED }
+          ).returns(false).in_sequence(sequence) # Simulate update failure
+          # *** Crucially, do NOT expect notifier.publish ***
+          # --- End Mocha Expectations ---
+
+          # Act
+          result = orchestrator.step_starting(@step_a_id)
+
+          # Assert
+          refute result, "step_starting should return false if update fails"
+        end
+      end
+
+      def test_step_starting_does_not_publish_if_already_running
+        mocks = setup_mocha_mocks_and_orchestrator
+        repo = mocks[:repo]; notifier = mocks[:notifier]; orchestrator = mocks[:orchestrator]
+        # No sequence needed here as the order is simple and we're primarily testing absence of calls
+        # sequence = Mocha::Sequence.new('step_starting_already_running_no_publish')
+
+        Time.stub :current, @frozen_time do
+          step_already_running = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'running', started_at: @frozen_time - 10)
+
+          # --- Mocha Expectations ---
+          # 1. Expect find_step the FIRST time (at the beginning of step_starting)
+          repo.expects(:find_step).with(@step_a_id).returns(step_already_running) # No .in_sequence needed
+
+          # Note: update_step_attributes should NOT be called.
+          # Note: Second find_step should NOT be called (moved inside 'if').
+          # Note: *** notifier.publish should NOT be called ***
+          # Mocha verifies unexpected calls, so we don't need an explicit `expects(...).never`
+
+          # --- End Mocha Expectations ---
+
+          # Act
+          result = orchestrator.step_starting(@step_a_id)
+
+          # Assert
+          assert result, "step_starting should still return true if already running"
+          # Mocha verifies the *absence* of unexpected calls (like publish) during teardown
+        end
+      end
     end
   end
 end

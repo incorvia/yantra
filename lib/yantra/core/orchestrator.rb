@@ -69,6 +69,7 @@ module Yantra
       end
 
       # Called by the worker job just before executing the step's perform method.
+       # Called by the worker job just before executing the step's perform method.
       def step_starting(step_id)
         Yantra.logger.info { "[Orchestrator] Starting job #{step_id}" }
         step = repository.find_step(step_id)
@@ -80,6 +81,7 @@ module Yantra
            return false
         end
 
+        # Only transition state and publish event if moving from enqueued
         if step.state.to_s == StateMachine::ENQUEUED.to_s # FIX: Compare strings
           update_success = repository.update_step_attributes(
             step_id,
@@ -90,19 +92,27 @@ module Yantra
              Yantra.logger.warn { "[Orchestrator] Failed to update step #{step_id} state to running before execution (maybe state changed concurrently?)." }
              return false
           end
+
+          # --- Publish yantra.step.started event ONLY after successful transition ---
+          begin
+            # Fetch again to get the timestamp set by the update
+            step_record = repository.find_step(step_id)
+            payload = { step_id: step_id, workflow_id: step_record&.workflow_id, klass: step_record&.klass, started_at: step_record&.started_at }
+            @notifier.publish('yantra.step.started', payload)
+          rescue => e
+             Yantra.logger.error { "[Orchestrator] Failed to publish yantra.step.started event for #{step_id}: #{e.message}" }
+          end
+          # --- END Event Publishing Block ---
+
+        elsif step.state.to_s == StateMachine::RUNNING.to_s
+          # State is already running (retry/recovery scenario).
+          # Do NOT update state or publish the 'started' event again.
+          # Allow the StepJob to proceed with the perform attempt.
+          Yantra.logger.info { "[Orchestrator] Step #{step_id} already running, proceeding with execution attempt without state change or start event." }
         end
 
-        # Publish yantra.step.started event
-        begin
-           step_record = repository.find_step(step_id) # Fetch potentially updated record
-           payload = { step_id: step_id, workflow_id: step_record&.workflow_id, klass: step_record&.klass, started_at: step_record&.started_at }
-           @notifier.publish('yantra.step.started', payload)
-        rescue => e
-            Yantra.logger.error { "[Orchestrator] Failed to publish yantra.step.started event for #{step_id}: #{e.message}" }
-        end
-        true
+        true # Allow StepJob#perform to execute
       end
-
 
       # Called by the worker job after the step's perform method completes successfully.
       def step_succeeded(step_id, result)
