@@ -53,6 +53,8 @@ Yantra aims to be a robust, developer-friendly solution for managing background 
   spec.add_development_dependency "minitest", "~> 5.0" 
   spec.add_development_dependency "minitest-focus"
   spec.add_development_dependency "database_cleaner-active_record"
+  spec.add_development_dependency "mocha"
+  spec.add_development_dependency "pry"
 
   # spec.add_development_dependency "database_cleaner-active_record" # If using DatabaseCleaner
 end
