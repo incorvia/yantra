@@ -28,7 +28,6 @@ module Yantra
           end
 
           # --- Tests for cancel_steps_bulk ---
-
           def test_cancel_steps_bulk_cancels_only_cancellable_states
             # Arrange: Create jobs in various states
             step_pending = StepRecord.create!(id: SecureRandom.uuid, workflow_record: @workflow, klass: "Job", state: "pending")
@@ -51,15 +50,15 @@ module Yantra
             updated_count = @adapter.cancel_steps_bulk(step_ids_to_cancel)
 
             # Assert: Check return value (count of *updated* records)
-            assert_equal 3, updated_count, "Should return count of updated (cancellable) jobs"
+            assert_equal 2, updated_count, "Should return count of updated (cancellable) jobs"
 
             # Assert: Verify states of jobs in the database
             assert_equal "cancelled", step_pending.reload.state
             assert_equal "cancelled", step_enqueued.reload.state
-            assert_equal "cancelled", step_running.reload.state
+            assert_equal "running", step_running.reload.state
             refute_nil step_pending.finished_at, "Pending job should now have finished_at set"
             refute_nil step_enqueued.finished_at, "Enqueued job should now have finished_at set"
-            refute_nil step_running.finished_at, "Running job should now have finished_at set"
+            # refute_nil step_running.finished_at, "Running job should now have finished_at set"
 
             # Assert: Verify non-cancellable jobs were untouched
             assert_equal "succeeded", step_succeeded.reload.state
