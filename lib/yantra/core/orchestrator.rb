@@ -1,21 +1,15 @@
 # lib/yantra/core/orchestrator.rb
 
-require_relative '../errors' # Ensure Errors module is required
-require_relative '../step'
 require_relative 'state_machine'
-require_relative '../persistence/repository_interface'
-require_relative '../worker/enqueuing_interface'
-require_relative '../events/notifier_interface'
+require_relative '../errors'
 
 module Yantra
   module Core
-    # Orchestrates the execution flow of a workflow based on step dependencies and states.
-    # Interacts with the Repository for persistence and the WorkerAdapter for enqueuing jobs.
+    # Responsible for managing the state transitions and execution flow of a workflow.
     class Orchestrator
       attr_reader :repository, :worker_adapter, :notifier
 
-      # Initializes the orchestrator with repository, worker adapter, and notifier instances.
-      # Falls back to globally configured adapters if none are provided.
+      # Initializer without respond_to? checks
       def initialize(repository: nil, worker_adapter: nil, notifier: nil)
         @repository = repository || Yantra.repository
         @worker_adapter = worker_adapter || Yantra.worker_adapter
@@ -33,314 +27,190 @@ module Yantra
         end
       end
 
+
       # Starts a workflow if it's in a pending state.
       def start_workflow(workflow_id)
-        Yantra.logger.info { "[Orchestrator] Attempting to start workflow #{workflow_id}" }
-        update_success = repository.update_workflow_attributes(
-          workflow_id,
-          { state: StateMachine::RUNNING.to_s, started_at: Time.current },
-          expected_old_state: StateMachine::PENDING
-        )
-
-        if update_success
-          Yantra.logger.info { "[Orchestrator] Workflow #{workflow_id} state set to RUNNING." }
-          # Publish yantra.workflow.started event
-          begin
-            wf_record = repository.find_workflow(workflow_id)
-            payload = { workflow_id: workflow_id, klass: wf_record&.klass, started_at: wf_record&.started_at, state: StateMachine::RUNNING }
-            @notifier.publish('yantra.workflow.started', payload)
-          rescue => e
-             Yantra.logger.error { "[Orchestrator] Failed to publish yantra.workflow.started event for #{workflow_id}: #{e.message}" }
-          end
-
-          find_and_enqueue_ready_jobs(workflow_id)
-          true
-        else
-          current_workflow = repository.find_workflow(workflow_id)
-          if current_workflow.nil?
-             Yantra.logger.warn { "[Orchestrator] Workflow #{workflow_id} not found during start attempt." }
-          elsif current_workflow.state != StateMachine::PENDING.to_s
-             Yantra.logger.warn { "[Orchestrator] Workflow #{workflow_id} cannot start; already in state :#{current_workflow.state}." }
-          else
-             Yantra.logger.warn { "[Orchestrator] Failed to update workflow #{workflow_id} state to RUNNING (maybe state changed concurrently?)." }
-          end
-          false
-        end
+        Yantra.logger.info { "[Orchestrator] Attempting to start workflow #{workflow_id}" } if Yantra.logger
+        update_success = repository.update_workflow_attributes(workflow_id, { state: StateMachine::RUNNING.to_s, started_at: Time.current }, expected_old_state: StateMachine::PENDING)
+        unless update_success; current_state = repository.find_workflow(workflow_id)&.state || 'not_found'; Yantra.logger.warn { "[Orchestrator] Workflow #{workflow_id} could not be started. Expected state 'pending', found '#{current_state}'." } if Yantra.logger; return false; end
+        Yantra.logger.info { "[Orchestrator] Workflow #{workflow_id} state set to RUNNING." } if Yantra.logger
+        begin; wf_record = repository.find_workflow(workflow_id); payload = { workflow_id: workflow_id, klass: wf_record&.klass, started_at: wf_record&.started_at }; @notifier&.publish('yantra.workflow.started', payload); rescue => e; Yantra.logger.error { "[Orchestrator] Failed to publish yantra.workflow.started event for #{workflow_id}: #{e.message}" } if Yantra.logger; end
+        find_and_enqueue_ready_steps(workflow_id)
+        true
       end
 
       # Called by the worker job just before executing the step's perform method.
-       # Called by the worker job just before executing the step's perform method.
       def step_starting(step_id)
-        Yantra.logger.info { "[Orchestrator] Starting job #{step_id}" }
+        Yantra.logger.info { "[Orchestrator] Starting job #{step_id}" } if Yantra.logger
         step = repository.find_step(step_id)
         return false unless step
-
         allowed_start_states = [StateMachine::ENQUEUED.to_s, StateMachine::RUNNING.to_s]
-        unless allowed_start_states.include?(step.state.to_s) # FIX: Compare strings
-           Yantra.logger.warn { "[Orchestrator] Step #{step_id} cannot start; not in enqueued or running state (current: #{step.state})." }
-           return false
-        end
-
-        # Only transition state and publish event if moving from enqueued
-        if step.state.to_s == StateMachine::ENQUEUED.to_s # FIX: Compare strings
-          update_success = repository.update_step_attributes(
-            step_id,
-            { state: StateMachine::RUNNING.to_s, started_at: Time.current },
-            expected_old_state: StateMachine::ENQUEUED
-          )
-          unless update_success
-             Yantra.logger.warn { "[Orchestrator] Failed to update step #{step_id} state to running before execution (maybe state changed concurrently?)." }
-             return false
-          end
-
-          # --- Publish yantra.step.started event ONLY after successful transition ---
-          begin
-            # Fetch again to get the timestamp set by the update
-            step_record = repository.find_step(step_id)
-            payload = { step_id: step_id, workflow_id: step_record&.workflow_id, klass: step_record&.klass, started_at: step_record&.started_at }
-            @notifier.publish('yantra.step.started', payload)
-          rescue => e
-             Yantra.logger.error { "[Orchestrator] Failed to publish yantra.step.started event for #{step_id}: #{e.message}" }
-          end
-          # --- END Event Publishing Block ---
-
+        unless allowed_start_states.include?(step.state.to_s); Yantra.logger.warn { "[Orchestrator] Step #{step_id} cannot start; not in enqueued or running state (current: #{step.state})." } if Yantra.logger; return false; end
+        if step.state.to_s == StateMachine::ENQUEUED.to_s
+          update_success = repository.update_step_attributes(step_id, { state: StateMachine::RUNNING.to_s, started_at: Time.current }, expected_old_state: StateMachine::ENQUEUED)
+          unless update_success; Yantra.logger.warn { "[Orchestrator] Failed to update step #{step_id} state to running before execution (maybe state changed concurrently?)." } if Yantra.logger; return false; end
+          begin; step_record = repository.find_step(step_id); payload = { step_id: step_id, workflow_id: step_record&.workflow_id, klass: step_record&.klass, started_at: step_record&.started_at }; @notifier&.publish('yantra.step.started', payload); rescue => e; Yantra.logger.error { "[Orchestrator] Failed to publish yantra.step.started event for #{step_id}: #{e.message}" } if Yantra.logger; end
         elsif step.state.to_s == StateMachine::RUNNING.to_s
-          # State is already running (retry/recovery scenario).
-          # Do NOT update state or publish the 'started' event again.
-          # Allow the StepJob to proceed with the perform attempt.
-          Yantra.logger.info { "[Orchestrator] Step #{step_id} already running, proceeding with execution attempt without state change or start event." }
+          Yantra.logger.info { "[Orchestrator] Step #{step_id} already running, proceeding with execution attempt without state change or start event." } if Yantra.logger
         end
-
-        true # Allow StepJob#perform to execute
+        true
       end
 
-      # Called by the worker job after the step's perform method completes successfully.
-      def step_succeeded(step_id, result)
-        Yantra.logger.info { "[Orchestrator] Job #{step_id} succeeded." }
-        final_attrs = {
-          state: StateMachine::SUCCEEDED.to_s,
-          finished_at: Time.current,
-          output: result
-        }
-        update_success = repository.update_step_attributes(
-          step_id,
-          final_attrs,
-          expected_old_state: StateMachine::RUNNING
-        )
-
-        if update_success
-          # Publish Event on Success
-          begin
-            step_record = repository.find_step(step_id)
-            if step_record
-              payload = { step_id: step_id, workflow_id: step_record.workflow_id, klass: step_record.klass, finished_at: step_record.finished_at, output: step_record.output }
-              @notifier.publish('yantra.step.succeeded', payload)
-            else
-               Yantra.logger.warn { "[Orchestrator] Could not find step #{step_id} after success update to publish event." }
-            end
-          rescue => e
-             Yantra.logger.error { "[Orchestrator] Failed to publish yantra.step.succeeded event for #{step_id}: #{e.message}" }
-          end
-          step_finished(step_id) # Proceed to next steps
-        else
-           Yantra.logger.warn { "[Orchestrator] Failed to update job #{step_id} state to succeeded (maybe already changed?). Still proceeding with step_finished logic." }
-           step_finished(step_id)
-        end
-      end
-
-      # Called by the worker job when a step fails permanently (after retries).
-      def step_failed(step_id)
-        Yantra.logger.info { "[Orchestrator] Job #{step_id} failed permanently." }
-        # Event 'yantra.step.failed' should be published by RetryHandler
+      # Called by the worker job after step execution succeeds.
+      def step_succeeded(step_id, output)
+        Yantra.logger.info { "[Orchestrator] Job #{step_id} succeeded." } if Yantra.logger
+        update_success = repository.update_step_attributes(step_id, { state: StateMachine::SUCCEEDED.to_s, finished_at: Time.current }, expected_old_state: StateMachine::RUNNING)
+        repository.record_step_output(step_id, output)
+        unless update_success; current_state = repository.find_step(step_id)&.state || 'not_found'; Yantra.logger.warn { "[Orchestrator] Failed to update step #{step_id} state to succeeded (expected 'running', found '#{current_state}'). Output recorded anyway." } if Yantra.logger; end
+        if update_success; begin; step_record = repository.find_step(step_id); payload = { step_id: step_id, workflow_id: step_record&.workflow_id, klass: step_record&.klass, finished_at: step_record&.finished_at, output: step_record&.output }; @notifier&.publish('yantra.step.succeeded', payload); rescue => e; Yantra.logger.error { "[Orchestrator] Failed to publish yantra.step.succeeded event for #{step_id}: #{e.message}" } if Yantra.logger; end; end
         step_finished(step_id)
       end
 
-      # Common logic executed after a step finishes (succeeded or failed).
-      def step_finished(finished_step_id)
-        Yantra.logger.info { "[Orchestrator] Handling post-finish logic for job #{finished_step_id}." }
-        finished_step = repository.find_step(finished_step_id)
-        unless finished_step
-          Yantra.logger.warn { "[Orchestrator] Cannot find finished step #{finished_step_id} during step_finished." }
-          return
-        end
-        workflow_id = finished_step.workflow_id
-        # Convert state string from DB to symbol for internal logic
-        finished_state = finished_step.state.to_sym rescue :unknown
-        Yantra.logger.debug { "[Orchestrator] step_finished: derived finished_state=#{finished_state.inspect}"}
-
-        process_dependents(finished_step_id, finished_state, workflow_id)
-        check_workflow_completion(workflow_id)
+      # Common logic after a step finishes
+      def step_finished(step_id)
+        Yantra.logger.info { "[Orchestrator] Handling post-finish logic for job #{step_id}." } if Yantra.logger
+        finished_step = repository.find_step(step_id)
+        return unless finished_step
+        process_dependents(step_id, finished_step.state.to_sym)
+        check_workflow_completion(finished_step.workflow_id)
       end
 
       private
 
-      # Finds jobs in the workflow that have no unsatisfied dependencies and enqueues them.
-      def find_and_enqueue_ready_jobs(workflow_id)
+      # Finds steps whose dependencies are met and enqueues them.
+      def find_and_enqueue_ready_steps(workflow_id)
         ready_step_ids = repository.find_ready_steps(workflow_id)
-        Yantra.logger.info { "[Orchestrator] Found ready steps for workflow #{workflow_id}: #{ready_step_ids}" }
-        ready_step_ids.each do |step_id|
-          enqueue_step(step_id, workflow_id)
-        end
+        Yantra.logger.info { "[Orchestrator] Found ready steps for workflow #{workflow_id}: #{ready_step_ids}" } if Yantra.logger
+        ready_step_ids.each { |step_id| enqueue_step(step_id) }
       end
 
-      # Enqueues a specific job using the configured worker adapter.
-      def enqueue_step(step_id, workflow_id)
-        Yantra.logger.info { "[Orchestrator] Entering enqueue_step with: #{workflow_id}: #{step_id}" }
-        step = repository.find_step(step_id)
-        return unless step
+      # Refactored enqueue_step
+      def enqueue_step(step_id)
+        step_record_initial = repository.find_step(step_id)
+        return unless step_record_initial
+        Yantra.logger.info { "[Orchestrator] Attempting to enqueue step #{step_id} in workflow #{step_record_initial.workflow_id}" } if Yantra.logger
+        update_success = repository.update_step_attributes(step_id, { state: StateMachine::ENQUEUED.to_s, enqueued_at: Time.current }, expected_old_state: StateMachine::PENDING)
+        unless update_success; current_state = step_record_initial.state || 'unknown'; Yantra.logger.warn { "[Orchestrator] Step #{step_id} could not be marked enqueued. Expected state 'pending', found '#{current_state}'. Skipping enqueue." } if Yantra.logger; return; end
+        step_record_for_payload = repository.find_step(step_id); unless step_record_for_payload; Yantra.logger.error { "[Orchestrator] Step #{step_id} not found after successful state update to enqueued!" } if Yantra.logger; return; end
+        Yantra.logger.info { "[Orchestrator] Step #{step_id} marked enqueued for Workflow #{step_record_for_payload.workflow_id}." } if Yantra.logger
+        begin; payload = { step_id: step_id, workflow_id: step_record_for_payload.workflow_id, klass: step_record_for_payload.klass, queue: step_record_for_payload.queue, enqueued_at: step_record_for_payload.enqueued_at }; @notifier&.publish('yantra.step.enqueued', payload); rescue => e; Yantra.logger.error { "[Orchestrator] Failed to publish yantra.step.enqueued event for #{step_id}: #{e.message}" } if Yantra.logger; end
+        begin; worker_adapter.enqueue(step_id, step_record_for_payload.workflow_id, step_record_for_payload.klass, step_record_for_payload.queue); rescue => e; Yantra.logger.error { "[Orchestrator] Failed to enqueue job #{step_id} via worker adapter: #{e.message}. Attempting to mark step as failed." } if Yantra.logger; repository.update_step_attributes(step_id, { state: StateMachine::FAILED.to_s, error: { class: e.class.name, message: "Failed to enqueue: #{e.message}" }, finished_at: Time.current }); repository.set_workflow_has_failures_flag(step_record_for_payload.workflow_id); check_workflow_completion(step_record_for_payload.workflow_id); end
+      end
 
-        update_success = repository.update_step_attributes(
-          step_id,
-          { state: StateMachine::ENQUEUED.to_s, enqueued_at: Time.current },
-          expected_old_state: StateMachine::PENDING
-        )
+      # Checks dependents of a finished step and enqueues or cancels them.
+      def process_dependents(finished_step_id, finished_step_state)
+        # Fetch IDs of steps that depend on the one that just finished
+        dependents = repository.get_step_dependents(finished_step_id)
+        return if dependents.empty? # No dependents, nothing to do
 
-        if update_success
-          begin
-            @worker_adapter.enqueue(step_id, workflow_id, step.klass, step.queue)
-             # Publish yantra.step.enqueued event
-             begin
-               Yantra.logger.info { "[Orchestrator] After update_success: #{workflow_id}: #{step_id}" }
-               step_record = repository.find_step(step_id) # Fetch record for timestamp
-               Yantra.logger.info { "[Orchestrator] After find_step (2): #{workflow_id}: #{step_id}" }
-               payload = { step_id: step_id, workflow_id: workflow_id, klass: step.klass, queue: step.queue, enqueued_at: step_record&.enqueued_at }
-               @notifier.publish('yantra.step.enqueued', payload)
-             rescue => e
-                Yantra.logger.error { "[Orchestrator] Failed to publish yantra.step.enqueued event for #{step_id}: #{e.message}" }
-             end
-          rescue => e
-            Yantra.logger.error { "[Orchestrator] Failed to enqueue job #{step_id} via worker adapter: #{e.message}. Reverting state to pending." }
-            repository.update_step_attributes(step_id, { state: StateMachine::PENDING.to_s, enqueued_at: nil })
-            repository.set_workflow_has_failures_flag(workflow_id)
-          end
+        Yantra.logger.debug { "[Orchestrator] Processing dependents for finished step #{finished_step_id} (state: #{finished_step_state}): #{dependents}" } if Yantra.logger
+
+        # --- Optimization Part 1: Bulk Fetch Dependencies ---
+        parent_map = {} # Store { dependent_id => [parent_ids] }
+        all_parent_ids_needed = []
+        # Check if the repository supports bulk fetching dependencies
+        if repository.respond_to?(:get_step_dependencies_multi)
+          parent_map = repository.get_step_dependencies_multi(dependents)
+          # Ensure all dependents are keys in the map, even if they have no parents
+          dependents.each { |dep_id| parent_map[dep_id] ||= [] }
+          all_parent_ids_needed = parent_map.values.flatten.uniq
         else
-           Yantra.logger.warn { "[Orchestrator] Failed to update job #{step_id} state to enqueued before enqueuing." }
+          # Fallback to N+1 if adapter doesn't support bulk fetch
+          Yantra.logger.warn {"[Orchestrator] Repository does not support get_step_dependencies_multi, dependency check might be inefficient."} if Yantra.logger
+          dependents.each do |dep_id|
+             parent_ids = repository.get_step_dependencies(dep_id) # N+1 Call
+             parent_map[dep_id] = parent_ids
+             all_parent_ids_needed.concat(parent_ids)
+          end
+          all_parent_ids_needed.uniq!
+        end
+        # --- End Optimization Part 1 ---
+
+        # --- Optimization Part 2: Bulk Fetch Parent States ---
+        parent_states_hash = {}
+        if all_parent_ids_needed.any? && repository.respond_to?(:fetch_step_states)
+           parent_states_hash = repository.fetch_step_states(all_parent_ids_needed)
+        else
+           Yantra.logger.warn {"[Orchestrator] Repository does not support fetch_step_states, readiness check might be inefficient."} if Yantra.logger && all_parent_ids_needed.any?
+           # Fallback logic within is_ready_to_start? will handle this
+        end
+        # --- End Optimization Part 2 ---
+
+        # --- Process each dependent ---
+        dependents.each do |dep_id|
+          if finished_step_state == StateMachine::SUCCEEDED
+            # Pass the specific parents for this dependent (from parent_map)
+            # and the hash containing all potentially relevant parent states
+            parents_for_dep = parent_map.fetch(dep_id, []) # Use fetch with default
+            if is_ready_to_start?(dep_id, parents_for_dep, parent_states_hash)
+              enqueue_step(dep_id)
+            else
+               Yantra.logger.debug { "[Orchestrator] Dependent #{dep_id} not ready yet." } if Yantra.logger
+            end
+          else # Finished step failed or was cancelled
+            cancel_downstream_pending(dep_id)
+          end
         end
       end
 
-      # Checks if all dependencies for a given step are met.
-      def dependencies_met?(step_id)
-        parent_ids = repository.get_step_dependencies(step_id)
+
+      # Checks if a given step is ready to start
+      def is_ready_to_start?(step_id, parent_ids, parent_states_hash)
+        step = repository.find_step(step_id)
+        return false unless step && step.state.to_sym == StateMachine::PENDING
         return true if parent_ids.empty?
-        parent_steps = parent_ids.map { |pid| repository.find_step(pid) }.compact
-        # Ensure all parents were found AND all succeeded
-        # FIX: Compare states as strings
-        parent_steps.length == parent_ids.length && parent_steps.all? { |p| p.state.to_s == StateMachine::SUCCEEDED.to_s }
+        all_succeeded = parent_ids.all? do |parent_id|
+          state = parent_states_hash[parent_id]
+          unless state
+             Yantra.logger.debug {"[Orchestrator#is_ready_to_start?] Falling back to individual fetch for parent #{parent_id}"} if Yantra.logger
+             parent_step = repository.find_step(parent_id)
+             state = parent_step&.state
+          end
+          state == StateMachine::SUCCEEDED.to_s
+        end
+        all_succeeded
       end
 
-      # Checks if a workflow has completed.
+      # Recursively cancels downstream steps that are pending.
+      def cancel_downstream_pending(step_id)
+        step = repository.find_step(step_id)
+        return unless step && step.state.to_sym == StateMachine::PENDING
+        Yantra.logger.debug { "[Orchestrator] Recursively cancelling pending step #{step_id}" } if Yantra.logger
+        update_success = repository.update_step_attributes(step_id, { state: StateMachine::CANCELLED.to_s, finished_at: Time.current }, expected_old_state: StateMachine::PENDING)
+        if update_success
+          begin; cancelled_step_record = repository.find_step(step_id); payload = { step_id: step_id, workflow_id: cancelled_step_record&.workflow_id, klass: cancelled_step_record&.klass }; @notifier&.publish('yantra.step.cancelled', payload); rescue => e; Yantra.logger.error { "[Orchestrator] Failed to publish yantra.step.cancelled event during cascade for #{step_id}: #{e.message}" } if Yantra.logger; end
+        else
+           Yantra.logger.warn { "[Orchestrator] Failed to update state to cancelled for downstream step #{step_id} during cascade." } if Yantra.logger
+           return
+        end
+        repository.get_step_dependents(step_id).each { |dep_id| cancel_downstream_pending(dep_id) }
+      end
+
+      # Checks if a workflow has completed and updates its state.
       def check_workflow_completion(workflow_id)
         running_count = repository.running_step_count(workflow_id)
+        Yantra.logger.debug { "[Orchestrator] Checking workflow completion for #{workflow_id}. Running count: #{running_count}" } if Yantra.logger
         enqueued_count = repository.enqueued_step_count(workflow_id)
-        Yantra.logger.debug { "[Orchestrator] Checking workflow completion for #{workflow_id}. Running: #{running_count}, Enqueued: #{enqueued_count}" }
+        Yantra.logger.debug { "[Orchestrator] Checking workflow completion for #{workflow_id}. Enqueued count: #{enqueued_count}" } if Yantra.logger
 
-        if running_count == 0 && enqueued_count == 0
+        if running_count.zero? && enqueued_count.zero?
+          current_wf = repository.find_workflow(workflow_id)
+          return if current_wf.nil? || StateMachine.terminal?(current_wf.state.to_sym)
           has_failures = repository.workflow_has_failures?(workflow_id)
           final_state = has_failures ? StateMachine::FAILED : StateMachine::SUCCEEDED
-          Yantra.logger.info { "[Orchestrator] Workflow #{workflow_id} appears complete. Setting state to #{final_state}." }
-
-          update_success = repository.update_workflow_attributes(
-            workflow_id,
-            { state: final_state.to_s, finished_at: Time.current },
-            expected_old_state: StateMachine::RUNNING
-          )
-
+          finished_at_time = Time.current
+          Yantra.logger.info { "[Orchestrator] Workflow #{workflow_id} appears complete. Setting state to #{final_state}." } if Yantra.logger
+          update_success = repository.update_workflow_attributes(workflow_id, { state: final_state.to_s, finished_at: finished_at_time }, expected_old_state: StateMachine::RUNNING)
           if update_success
-             Yantra.logger.info { "[Orchestrator] Workflow #{workflow_id} successfully set to #{final_state}." }
-            # Publish Event on Workflow Completion
-            begin
-              wf_record = repository.find_workflow(workflow_id)
-              if wf_record
-                event_name = has_failures ? 'yantra.workflow.failed' : 'yantra.workflow.succeeded'
-                # Use symbol state from constant for consistency in payload if desired, or string from DB
-                payload = { workflow_id: workflow_id, klass: wf_record.klass, finished_at: wf_record.finished_at, state: final_state }
-                @notifier.publish(event_name, payload)
-              else
-                 Yantra.logger.warn { "[Orchestrator] Could not find workflow #{workflow_id} after final state update to publish event." }
-              end
-            rescue => e
-               Yantra.logger.error { "[Orchestrator] Failed to publish workflow completion event for #{workflow_id}: #{e.message}" }
-            end
+            Yantra.logger.info { "[Orchestrator] Workflow #{workflow_id} successfully set to #{final_state}." } if Yantra.logger
+             begin; final_wf_record = repository.find_workflow(workflow_id); event_name = final_state == StateMachine::FAILED ? 'yantra.workflow.failed' : 'yantra.workflow.succeeded'; payload = { workflow_id: workflow_id, klass: final_wf_record&.klass, state: final_state, finished_at: final_wf_record&.finished_at }; @notifier&.publish(event_name, payload); rescue => e; Yantra.logger.error { "[Orchestrator] Failed to publish workflow completion event for #{workflow_id}: #{e.message}" } if Yantra.logger; end
           else
-             # Log if update failed - check current state
-             current_workflow = repository.find_workflow(workflow_id)
-             # FIX: Convert DB state to symbol for terminal_state? check
-             if current_workflow && StateMachine.terminal_state?(current_workflow.state.to_sym)
-                Yantra.logger.warn { "[Orchestrator] Failed to update workflow #{workflow_id} final state to #{final_state}, but it was already in terminal state :#{current_workflow.state}." }
-             else
-                Yantra.logger.error { "[Orchestrator] Failed to update workflow #{workflow_id} final state to #{final_state}. Current state: :#{current_workflow&.state || 'nil'}." }
-             end
+             latest_state = repository.find_workflow(workflow_id)&.state || 'unknown'
+             Yantra.logger.warn { "[Orchestrator] Failed to set final state for workflow #{workflow_id} (expected 'running', found '#{latest_state}')." } if Yantra.logger
           end
         end
       end
 
-      # Processes steps that depend on a finished step.
-      def process_dependents(finished_step_id, finished_state, workflow_id)
-        Yantra.logger.debug { "ORCH DEBUG: process_dependents called. finished_step_id=#{finished_step_id}, finished_state=#{finished_state.inspect}" }
-        dependent_ids = repository.get_step_dependents(finished_step_id)
-        return if dependent_ids.empty?
-
-        if finished_state == StateMachine::SUCCEEDED
-          Yantra.logger.debug { "ORCH DEBUG: process_dependents: Entered SUCCEEDED block." }
-          dependent_ids.each do |dep_id|
-            dependent_step = repository.find_step(dep_id)
-            # Check state *before* checking dependencies
-            # FIX: Compare states as strings
-            if dependent_step&.state.to_s == StateMachine::PENDING.to_s
-              if dependencies_met?(dep_id)
-                enqueue_step(dep_id, workflow_id)
-              end
-            end
-          end
-        elsif [StateMachine::FAILED, StateMachine::CANCELLED].include?(finished_state)
-          Yantra.logger.debug { "ORCH DEBUG: process_dependents: Entered FAILED/CANCELLED block." }
-          cancel_downstream_pending(dependent_ids, workflow_id)
-        else
-           Yantra.logger.debug { "ORCH DEBUG: process_dependents: finished_state #{finished_state.inspect} did not match SUCCEEDED or FAILED/CANCELLED." }
-        end
-      end
-
-      # Recursively finds and cancels pending dependents.
-      def cancel_downstream_pending(step_ids, workflow_id)
-        Yantra.logger.debug { "ORCH DEBUG: cancel_downstream_pending called for step_ids=#{step_ids.inspect}" }
-        pending_dependents_to_cancel = []
-        step_ids.each do |sid|
-          step = repository.find_step(sid)
-          # === HYPER-FOCUSED LOGGING ===
-          if step
-
-          else
-
-          end
-          # =============================
-          # FIX: Compare states as strings
-          pending_dependents_to_cancel << sid if step&.state.to_s == StateMachine::PENDING.to_s
-        end
-        # === TARGETED LOGGING ===
-
-        # ========================
-        return if pending_dependents_to_cancel.empty? # <<< Should NOT return if comparison works
-
-        Yantra.logger.info { "[Orchestrator] Attempting to bulk cancel #{pending_dependents_to_cancel.size} downstream jobs: #{pending_dependents_to_cancel}." }
-        cancelled_count = repository.cancel_steps_bulk(pending_dependents_to_cancel)
-        Yantra.logger.info { "[Orchestrator] Bulk cancellation request processed for #{cancelled_count} jobs." }
-        next_level_dependents = []
-        pending_dependents_to_cancel.each do |cancelled_id|
-           # Publish event for each cancelled step
-           begin
-             payload = { step_id: cancelled_id, workflow_id: workflow_id }
-             @notifier.publish('yantra.step.cancelled', payload)
-           rescue => e
-              Yantra.logger.error { "[Orchestrator] Failed to publish yantra.step.cancelled event for #{cancelled_id}: #{e.message}" }
-           end
-           # Find next level
-           next_level_dependents.concat(repository.get_step_dependents(cancelled_id))
-        end
-        cancel_downstream_pending(next_level_dependents.uniq, workflow_id) unless next_level_dependents.empty?
-      end
-
-
-    end
-  end
-end
-
+    end # class Orchestrator
+  end # module Core
+end # module Yantra

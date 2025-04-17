@@ -13,13 +13,13 @@ class CreateYantraSteps < ActiveRecord::Migration[<%= ActiveRecord::Migration.cu
 
       # Basic step information
       t.string :klass, null: false        # Stores the class name of the user-defined step.
-      t.json :arguments                   # Stores the arguments passed to the step's perform method (use :text if :json type not supported).
+      t.jsonb :arguments                   # Stores the arguments passed to the step's perform method (use :text if :json type not supported).
       t.string :state, null: false, index: true # Stores the current state of the step. Indexed.
       t.string :queue                     # Stores the name of the background queue this step should run on.
       t.integer :retries, default: 0, null: false # Counter for how many times this step has been retried.
       t.integer :max_attempts, default: 3, null: false # Stores the maximum number of attempts allowed for this step instance.
-      t.json :output                    # Stores the return value of the step's perform method upon success (use :text if :json type not supported).
-      t.json :error                     # Stores information about the last error if the step failed (use :text if :json type not supported).
+      t.jsonb :output                    # Stores the return value of the step's perform method upon success (use :text if :json type not supported).
+      t.jsonb :error                     # Stores information about the last error if the step failed (use :text if :json type not supported).
 
       # Timestamps (using t.timestamp)
       t.timestamp :created_at, null: false # Timestamp for when the step record was created.

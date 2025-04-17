@@ -7,6 +7,7 @@ require "securerandom" # Needed for generating IDs in tests
 require "logger"       # Needed for logger below
 require 'mocha/minitest'
 require 'minitest/focus'
+require File.expand_path('dummy/config/environment', __dir__)
 
 
 
@@ -15,7 +16,6 @@ require 'minitest/focus'
 # Attempt to load ActiveRecord and SQLite3, set a flag indicating success.
 AR_LOADED = begin
   require 'active_record'
-  require 'sqlite3'
   require 'database_cleaner/active_record' # Require DatabaseCleaner here too
   true # Indicates successful loading
 rescue LoadError # <<< CHANGED: No longer assigns to unused 'e'
@@ -27,10 +27,32 @@ end
 
 # Only proceed with AR setup if the gems were loaded successfully
 if AR_LOADED
+  begin
+    # Ensure the connection pool is established using the config loaded by Rails env
+    # Accessing .connection forces initialization.
+    ActiveRecord::Base.connection
+    puts "INFO: ActiveRecord connected successfully using database.yml."
 
+    # Configure Database Cleaner (example, if you use it)
+    DatabaseCleaner.strategy = :transaction
+    DatabaseCleaner.clean_with(:truncation)
+
+  rescue ActiveRecord::NoDatabaseError => e
+    puts "\nERROR: Test database specified in database.yml does not exist."
+    puts "Please run the following command from the 'test/dummy' directory:"
+    puts "  bundle exec rails db:create RAILS_ENV=test"
+    raise e
+  rescue ActiveRecord::ConnectionNotEstablished, PG::ConnectionBad => e
+    puts "\nERROR: Could not connect to PostgreSQL database specified in database.yml."
+    puts "Ensure PostgreSQL server is running and accessible with the configured credentials."
+    puts "Config used: #{Rails.application.config.database_configuration[Rails.env].inspect}"
+    raise e
+  rescue => e
+    puts "\nERROR: An unexpected error occurred during ActiveRecord setup: #{e.message}"
+    raise e
+  end
 
   ActiveRecord::Base.logger = Logger.new(IO::NULL)
-  ActiveRecord::Base.establish_connection(adapter: 'sqlite3', database: ':memory:')
 
   # Helper method to load the database schema from a schema.rb file.
   def load_yantra_schema
