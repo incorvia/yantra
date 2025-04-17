@@ -27,10 +27,10 @@ module Yantra
             @workflow = WorkflowRecord.create!(id: SecureRandom.uuid, klass: "Wf", state: "running")
           end
 
-          # --- Tests for cancel_jobs_bulk ---
+          # --- Tests for cancel_steps_bulk ---
 
           # --- UPDATED: Changed expected count from 3 to 2 ---
-          def test_cancel_jobs_bulk_cancels_only_cancellable_states
+          def test_cancel_steps_bulk_cancels_only_cancellable_states
             # Arrange: Create jobs in various states
             step_pending = StepRecord.create!(id: SecureRandom.uuid, workflow_record: @workflow, klass: "JobP", state: "pending")
             step_enqueued = StepRecord.create!(id: SecureRandom.uuid, workflow_record: @workflow, klass: "StepE", state: "enqueued")
@@ -49,7 +49,7 @@ module Yantra
             ]
 
             # Act: Call the method under test
-            updated_count = @adapter.cancel_jobs_bulk(step_ids_to_cancel)
+            updated_count = @adapter.cancel_steps_bulk(step_ids_to_cancel)
 
             # Assert: Check return value (count of *updated* records)
             # Expecting only pending and enqueued to be updated now.
@@ -75,28 +75,28 @@ module Yantra
           # --- END UPDATED TEST ---
 
 
-          def test_cancel_jobs_bulk_handles_empty_array
-            assert_equal 0, @adapter.cancel_jobs_bulk([]), "Should return 0 for empty array"
+          def test_cancel_steps_bulk_handles_empty_array
+            assert_equal 0, @adapter.cancel_steps_bulk([]), "Should return 0 for empty array"
           end
 
-          def test_cancel_jobs_bulk_handles_nil_input
-            assert_equal 0, @adapter.cancel_jobs_bulk(nil), "Should return 0 for nil input"
+          def test_cancel_steps_bulk_handles_nil_input
+            assert_equal 0, @adapter.cancel_steps_bulk(nil), "Should return 0 for nil input"
           end
 
-          def test_cancel_jobs_bulk_handles_non_existent_ids
+          def test_cancel_steps_bulk_handles_non_existent_ids
             # Arrange: Create one valid job
             step_pending = StepRecord.create!(id: SecureRandom.uuid, workflow_record: @workflow, klass: "Job", state: "pending")
             non_existent_id = SecureRandom.uuid
 
             # Act: Call with a mix of valid and invalid IDs
-            updated_count = @adapter.cancel_jobs_bulk([step_pending.id, non_existent_id])
+            updated_count = @adapter.cancel_steps_bulk([step_pending.id, non_existent_id])
 
             # Assert: Only the existing job in a cancellable state should be updated
             assert_equal 1, updated_count
             assert_equal "cancelled", step_pending.reload.state
           end
 
-          def test_cancel_jobs_bulk_raises_persistence_error_on_db_error
+          def test_cancel_steps_bulk_raises_persistence_error_on_db_error
              # Arrange
              step_pending = StepRecord.create!(id: SecureRandom.uuid, workflow_record: @workflow, klass: "Job", state: "pending")
              step_ids = [step_pending.id]
@@ -113,7 +113,7 @@ module Yantra
              StepRecord.stub(:where, mock_relation) do
                 # Act & Assert
                 error = assert_raises(Yantra::Errors::PersistenceError) do
-                   @adapter.cancel_jobs_bulk(step_ids)
+                   @adapter.cancel_steps_bulk(step_ids)
                 end
                 # Check the error message includes the original error
                 assert_match(/Bulk job cancellation failed: DB Update Error/, error.message)

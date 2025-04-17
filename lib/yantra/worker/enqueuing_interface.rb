@@ -25,7 +25,7 @@ module Yantra
       # @return [void]
       # @raise [StandardError] Adapters should raise an appropriate error if
       #   enqueuing fails catastrophically (e.g., cannot connect to queue backend).
-      #   The Orchestrator's `enqueue_job` method may need to handle this.
+      #   The Orchestrator's `enqueue_step` method may need to handle this.
       def enqueue(step_id, workflow_id, step_klass_name, queue_name)
         raise NotImplementedError, "#{self.class.name}#enqueue is not implemented"
       end

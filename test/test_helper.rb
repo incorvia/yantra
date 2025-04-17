@@ -5,6 +5,8 @@ require "yantra" # Make sure this matches your main gem require file
 require "minitest/autorun"
 require "securerandom" # Needed for generating IDs in tests
 require "logger"       # Needed for logger below
+require 'mocha/minitest'
+require 'minitest/focus'
 
 puts "INFO: Loading test helper..."
 

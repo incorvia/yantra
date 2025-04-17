@@ -27,10 +27,10 @@ module Yantra
       def add_step_dependencies_bulk(dependency_links_array); raise NotImplementedError; end
       def get_step_dependencies(step_id); raise NotImplementedError; end # Returns IDs of steps this step depends on (parents)
       def get_step_dependents(step_id); raise NotImplementedError; end # Returns IDs of steps that depend on this step (children)
-      def find_ready_jobs(workflow_id); raise NotImplementedError; end
+      def find_ready_steps(workflow_id); raise NotImplementedError; end
 
       # --- Bulk Operations ---
-      def cancel_jobs_bulk(step_ids); raise NotImplementedError; end
+      def cancel_steps_bulk(step_ids); raise NotImplementedError; end
 
       # --- Listing/Cleanup Methods ---
       def list_workflows(status: nil, limit: 50, offset: 0); raise NotImplementedError; end

@@ -142,7 +142,7 @@ module Yantra
         step_ids_to_cancel = steps_to_cancel.map(&:id)
         puts "INFO: [Client.cancel_workflow] Cancelling #{step_ids_to_cancel.size} pending/enqueued jobs: #{step_ids_to_cancel}."
         begin
-          cancelled_count = repo.cancel_jobs_bulk(step_ids_to_cancel)
+          cancelled_count = repo.cancel_steps_bulk(step_ids_to_cancel)
           puts "INFO: [Client.cancel_workflow] Repository confirmed cancellation update for #{cancelled_count} jobs."
         rescue Yantra::Errors::PersistenceError => e
           puts "ERROR: [Client.cancel_workflow] Failed during bulk job cancellation for workflow #{workflow_id}: #{e.message}"

@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.2].define(version: 2025_04_16_031219) do
+ActiveRecord::Schema[7.2].define(version: 2025_04_16_121554) do
   create_table "yantra_step_dependencies", id: false, force: :cascade do |t|
     t.string "step_id", limit: 36, null: false
     t.string "depends_on_step_id", limit: 36, null: false
@@ -27,6 +27,7 @@ ActiveRecord::Schema[7.2].define(version: 2025_04_16_031219) do
     t.integer "retries", default: 0, null: false
     t.json "output"
     t.json "error"
+    t.boolean "is_terminal", default: false, null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.datetime "enqueued_at"
@@ -47,6 +48,8 @@ ActiveRecord::Schema[7.2].define(version: 2025_04_16_031219) do
     t.datetime "updated_at", null: false
     t.datetime "started_at"
     t.datetime "finished_at"
+    t.index ["finished_at"], name: "index_yantra_workflows_on_finished_at"
+    t.index ["started_at"], name: "index_yantra_workflows_on_started_at"
     t.index ["state"], name: "index_yantra_workflows_on_state"
   end
 end

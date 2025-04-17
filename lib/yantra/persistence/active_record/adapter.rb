@@ -251,7 +251,7 @@ module Yantra
           StepDependencyRecord.where(depends_on_step_id: step_id).pluck(:step_id)
         end
 
-        def find_ready_jobs(workflow_id)
+        def find_ready_steps(workflow_id)
           ready_step_ids = []
           # Find pending jobs and eagerly load their dependencies' states
           StepRecord.includes(:dependencies) # Assumes `has_many :dependencies, through: :dependency_records` etc.
@@ -278,7 +278,7 @@ module Yantra
 
 
         # --- Bulk Cancellation Method ---
-        def cancel_jobs_bulk(step_ids)
+        def cancel_steps_bulk(step_ids)
            return 0 if step_ids.nil? || step_ids.empty?
            cancellable_states_query = [
              Yantra::Core::StateMachine::PENDING.to_s,

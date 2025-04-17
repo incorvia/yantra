@@ -114,6 +114,8 @@ GEM
     minitest (5.25.5)
     minitest-focus (1.4.0)
       minitest (>= 4, < 6)
+    mocha (2.7.1)
+      ruby2_keywords (>= 0.0.5)
     net-imap (0.5.6)
       date
       net-protocol
@@ -175,6 +177,7 @@ GEM
       psych (>= 4.0.0)
     reline (0.6.1)
       io-console (~> 0.5)
+    ruby2_keywords (0.0.5)
     securerandom (0.4.1)
     sqlite3 (2.6.0-arm64-darwin)
     stringio (3.1.6)
@@ -197,6 +200,7 @@ DEPENDENCIES
   database_cleaner-active_record
   minitest (~> 5.0)
   minitest-focus
+  mocha
   rails (>= 6.0)
   rake (~> 13.0)
   sqlite3 (>= 2.1)

@@ -5,7 +5,7 @@ require_relative 'state_machine'
 
 module Yantra
   module Core
-    # Service class responsible for finding failed jobs in a workflow
+    # Service class responsible for finding failed steps in a workflow
     # and re-enqueuing them.
     class WorkflowRetryService
       attr_reader :workflow_id, :repository, :worker_adapter
@@ -19,53 +19,53 @@ module Yantra
         @worker_adapter = worker_adapter
       end
 
-      # Finds failed jobs and attempts to re-enqueue them.
-      # @return [Integer] The number of jobs successfully re-enqueued.
+      # Finds failed steps and attempts to re-enqueue them.
+      # @return [Integer] The number of steps successfully re-enqueued.
       def call
         failed_steps = find_failed_steps
         if failed_steps.empty?
-          puts "INFO: [WorkflowRetryService] No jobs found in 'failed' state for workflow #{workflow_id}."
+          puts "INFO: [WorkflowRetryService] No steps found in 'failed' state for workflow #{workflow_id}."
           return 0
         end
 
-        puts "INFO: [WorkflowRetryService] Found #{failed_steps.size} failed jobs to retry: #{failed_steps.map(&:id)}."
-        reenqueue_jobs(failed_steps)
+        puts "INFO: [WorkflowRetryService] Found #{failed_steps.size} failed steps to retry: #{failed_steps.map(&:id)}."
+        reenqueue_steps(failed_steps)
       end
 
       private
 
-      # Fetches jobs in the 'failed' state for the workflow.
-      # @return [Array<Object>] Array of failed job objects from the repository.
+      # Fetches steps in the 'failed' state for the workflow.
+      # @return [Array<Object>] Array of failed step objects from the repository.
       def find_failed_steps
         repository.get_workflow_steps(workflow_id, status: :failed)
       rescue StandardError => e
-        puts "ERROR: [WorkflowRetryService] Failed to query failed jobs for workflow #{workflow_id}: #{e.message}"
+        puts "ERROR: [WorkflowRetryService] Failed to query failed steps for workflow #{workflow_id}: #{e.message}"
         [] # Return empty array on error to prevent further processing
       end
 
-      # Iterates through failed jobs and attempts to re-enqueue each one.
-      # @param jobs [Array<Object>] Array of failed job objects.
-      # @return [Integer] Count of successfully re-enqueued jobs.
-      def reenqueue_jobs(jobs)
+      # Iterates through failed steps and attempts to re-enqueue each one.
+      # @param steps [Array<Object>] Array of failed step objects.
+      # @return [Integer] Count of successfully re-enqueued steps.
+      def reenqueue_steps(steps)
         reenqueued_count = 0
-        jobs.each do |job|
-          if reenqueue_job(job)
+        steps.each do |step|
+          if reenqueue_step(step)
             reenqueued_count += 1
           end
         end
         reenqueued_count
       end
 
-      # Handles the state update and enqueuing for a single job.
-      # @param job [Object] A failed job object from the repository.
+      # Handles the state update and enqueuing for a single step.
+      # @param step [Object] A failed step object from the repository.
       # @return [Boolean] true if successfully re-enqueued, false otherwise.
-      def reenqueue_job(job)
+      def reenqueue_step(step)
         # Validate transition (failed -> enqueued)
         StateMachine.validate_transition!(:failed, :enqueued) # Let it raise if invalid
 
-        # Update job state back to enqueued (atomically)
+        # Update step state back to enqueued (atomically)
         step_update_success = repository.update_step_attributes(
-          job.id,
+          step.id,
           {
             state: Core::StateMachine::ENQUEUED.to_s,
             enqueued_at: Time.current,
@@ -76,27 +76,27 @@ module Yantra
         )
 
         if step_update_success
-          # Enqueue the job via the worker adapter
-          queue_to_use = job.queue || 'default'
-          worker_adapter.enqueue(job.id, job.workflow_id, job.klass, queue_to_use)
-          puts "INFO: [WorkflowRetryService] Job #{job.id} re-enqueued."
-          # TODO: Emit job.retrying event?
+          # Enqueue the step via the worker adapter
+          queue_to_use = step.queue || 'default'
+          worker_adapter.enqueue(step.id, step.workflow_id, step.klass, queue_to_use)
+          puts "INFO: [WorkflowRetryService] step #{step.id} re-enqueued."
+          # TODO: Emit step.retrying event?
           true
         else
-          latest_step_state = repository.find_step(job.id)&.state || 'unknown'
-          puts "WARN: [WorkflowRetryService] Failed to update job #{job.id} state to enqueued (maybe state changed concurrently? Current state: #{latest_step_state}). Skipping enqueue."
+          latest_step_state = repository.find_step(step.id)&.state || 'unknown'
+          puts "WARN: [WorkflowRetryService] Failed to update step #{step.id} state to enqueued (maybe state changed concurrently? Current state: #{latest_step_state}). Skipping enqueue."
           false
         end
 
       rescue Yantra::Errors::InvalidStateTransition => e
-        puts "ERROR: [WorkflowRetryService] Invalid state transition for job #{job.id}. #{e.message}"
+        puts "ERROR: [WorkflowRetryService] Invalid state transition for step #{step.id}. #{e.message}"
         false
       rescue Yantra::Errors::WorkerError => e
-        puts "ERROR: [WorkflowRetryService] Worker error enqueuing job #{job.id}. #{e.message}"
-        false # Failed to enqueue this specific job
+        puts "ERROR: [WorkflowRetryService] Worker error enqueuing step #{step.id}. #{e.message}"
+        false # Failed to enqueue this specific step
       rescue StandardError => e
-        puts "ERROR: [WorkflowRetryService] Unexpected error retrying job #{job.id}: #{e.class} - #{e.message}"
-        false # Failed to enqueue this specific job
+        puts "ERROR: [WorkflowRetryService] Unexpected error retrying step #{step.id}: #{e.class} - #{e.message}"
+        false # Failed to enqueue this specific step
       end
 
     end

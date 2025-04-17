@@ -38,21 +38,21 @@ module Yantra
           }
 
           # Act
-          created_job = StepRecord.create!(attributes)
+          created_step = StepRecord.create!(attributes)
 
           # Assert Creation
-          refute_nil created_job
-          assert created_job.persisted?
-          assert_equal step_id, created_job.id
-          assert_equal @workflow.id, created_job.workflow_id
+          refute_nil created_step
+          assert created_step.persisted?
+          assert_equal step_id, created_step.id
+          assert_equal @workflow.id, created_step.workflow_id
 
           # Act
-          found_job = StepRecord.find(step_id)
+          found_step = StepRecord.find(step_id)
 
           # Assert Find
-          refute_nil found_job
-          assert_equal "MyTestStep", found_job.klass
-          assert_equal "enqueued", found_job.state
+          refute_nil found_step
+          assert_equal "MyTestStep", found_step.klass
+          assert_equal "enqueued", found_step.state
         end
 
         # Test associations (belongs_to, has_many :through)
@@ -100,15 +100,15 @@ module Yantra
         # def test_validation_requires_workflow
         #   # Assumes validates :workflow_id, presence: true is active
         #   job = StepRecord.new(id: SecureRandom.uuid, klass: "Job", state: "pending") # Provide ID
-        #   refute job.valid?
-        #   assert_includes job.errors[:workflow_id], "can't be blank"
+        #   refute step.valid?
+        #   assert_includes step.errors[:workflow_id], "can't be blank"
         # end
 
         # def test_validation_requires_klass
         #   # Assumes validates :klass, presence: true is active
         #   job = StepRecord.new(id: SecureRandom.uuid, workflow_record: @workflow, state: "pending") # Provide ID
-        #   refute job.valid?
-        #   assert_includes job.errors[:klass], "can't be blank"
+        #   refute step.valid?
+        #   assert_includes step.errors[:klass], "can't be blank"
         # end
 
       end # class StepRecordTest

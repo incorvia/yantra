@@ -8,7 +8,7 @@ require_relative 'errors'
 module Yantra
   # Base class for defining Yantra workflows.
   # Subclasses should implement the #perform method to define the
-  # Directed Acyclic Graph (DAG) of jobs using the `run` DSL method.
+  # Directed Acyclic Graph (DAG) of steps using the `run` DSL method.
   class Workflow
     # Attributes accessible after initialization
     attr_reader :id, :klass, :arguments, :kwargs, :globals, :steps, :dependencies
@@ -16,12 +16,12 @@ module Yantra
     attr_reader :state
 
     # Initializes a new workflow instance.
-    # Runs the subclass's #perform method to build the job graph and then
-    # calculates terminal job statuses.
+    # Runs the subclass's #perform method to build the step graph and then
+    # calculates terminal step statuses.
     #
     # @param args [Array] Positional arguments passed to the workflow perform method (on create).
     # @param kwargs [Hash] Keyword arguments passed to the workflow perform method (on create).
-    # @option kwargs [Hash] :globals Global configuration or data accessible to all jobs.
+    # @option kwargs [Hash] :globals Global configuration or data accessible to all steps.
     # @option kwargs [Hash] :internal_state Used internally for reconstruction. Avoid manual use.
     def initialize(*args, **kwargs)
       internal_state = kwargs.delete(:internal_state) || {}
@@ -36,13 +36,13 @@ module Yantra
       # Internal tracking during DAG definition
       @steps = [] # Holds Yantra::Step instances created by `run`
       @step_lookup = {} # Maps internal DSL name/ref to Yantra::Step instance
-      @dependencies = {} # Maps job.id => [dependency_step_id, ...]
+      @dependencies = {} # Maps step.id => [dependency_step_id, ...]
       @step_name_counts = Hash.new(0) # <<< ADDED: Track counts for base names
 
       # Rehydrate state if loaded from persistence
       if internal_state[:persisted]
-        # Note: Jobs/Deps are NOT loaded by default anymore
-        puts "INFO: Rehydrated workflow #{@id} (State: #{@state}). Jobs/Deps not loaded into memory."
+        # Note: steps/Deps are NOT loaded by default anymore
+        puts "INFO: Rehydrated workflow #{@id} (State: #{@state}). steps/Deps not loaded into memory."
       end
 
       # Run perform and calculate terminal status ONLY on initial creation,
@@ -60,13 +60,13 @@ module Yantra
       raise NotImplementedError, "#{self.class.name} must implement the `perform` method."
     end
 
-    # DSL method to define a job within the workflow.
+    # DSL method to define a step within the workflow.
     #
     # @param step_klass [Class] The Yantra::Step subclass to run.
-    # @param params [Hash] Arguments/payload to pass to the job's perform method.
-    # @param after [Array<String, Symbol, Class>] References to jobs that must complete first.
-    # @param name [String, Symbol] An optional unique name/reference for this job within the workflow DSL.
-    # @return [Symbol] The unique reference symbol/name assigned to the job in the DSL.
+    # @param params [Hash] Arguments/payload to pass to the step's perform method.
+    # @param after [Array<String, Symbol, Class>] References to steps that must complete first.
+    # @param name [String, Symbol] An optional unique name/reference for this step within the workflow DSL.
+    # @return [Symbol] The unique reference symbol/name assigned to the step in the DSL.
     def run(step_klass, params: {}, after: [], name: nil)
       unless step_klass.is_a?(Class) && step_klass < Yantra::Step
         raise ArgumentError, "#{step_klass} must be a Class inheriting from Yantra::Step"
@@ -85,7 +85,7 @@ module Yantra
       while @step_lookup.key?(step_ref_name)
           current_count += 1
           step_ref_name = "#{base_ref_name}_#{current_count}"
-          # Safety break, should not happen with incrementing count unless > MAX_INT jobs
+          # Safety break, should not happen with incrementing count unless > MAX_INT steps
           break if current_count > 1_000_000
       end
       # Increment count for the base name for the *next* time it's used
@@ -94,7 +94,7 @@ module Yantra
 
 
       step_id = SecureRandom.uuid
-      job = step_klass.new(
+      step = step_klass.new(
         id: step_id,
         workflow_id: @id,
         klass: step_klass,
@@ -102,27 +102,27 @@ module Yantra
         dsl_name: step_ref_name, # Store the potentially modified, unique name
       )
 
-      @steps << job
-      @step_lookup[step_ref_name] = job # Store using the unique name
+      @steps << step
+      @step_lookup[step_ref_name] = step # Store using the unique name
 
       # Resolve dependencies based on their DSL reference names
       dependency_ids = Array(after).map do |dep_ref|
-        dep_job = find_step_by_ref(dep_ref.to_s)
-        unless dep_job
-          raise Yantra::Errors::DependencyNotFound, "Dependency '#{dep_ref}' not found for job '#{step_ref_name}'."
+        dep_step = find_step_by_ref(dep_ref.to_s)
+        unless dep_step
+          raise Yantra::Errors::DependencyNotFound, "Dependency '#{dep_ref}' not found for step '#{step_ref_name}'."
         end
-        dep_job.id
+        dep_step.id
       end
 
-      @dependencies[job.id] = dependency_ids unless dependency_ids.empty?
+      @dependencies[step.id] = dependency_ids unless dependency_ids.empty?
 
       # Return the unique reference name (as a symbol)
       step_ref_name.to_sym
     end
 
-    # Finds a job instance within this workflow based on the reference name used in the DSL.
+    # Finds a step instance within this workflow based on the reference name used in the DSL.
     # @param ref_name [String] The reference name.
-    # @return [Yantra::Step, nil] The found job instance or nil.
+    # @return [Yantra::Step, nil] The found step instance or nil.
     def find_step_by_ref(ref_name)
       @step_lookup[ref_name]
     end
