@@ -1,27 +1,56 @@
-name: Ruby
+# .github/workflows/ci.yml
 
+name: Ruby Gem CI
+
+# Controls when the workflow will run
 on:
   push:
-    branches:
-      - master
-
+    branches: [ main ] # Or your default branch (e.g., master)
   pull_request:
+    branches: [ main ] # Or your default branch
 
 jobs:
-  build:
+  test:
+    # The type of runner that the job will run on
     runs-on: ubuntu-latest
-    name: Ruby ${{ matrix.ruby }}
+
+    # Define a matrix strategy to test against multiple Ruby versions
     strategy:
       matrix:
-        ruby:
-          - '3.2.2'
+        # Specify the Ruby versions you want to support and test against
+        ruby-version: ['3.0', '3.1', '3.2', '3.3']
 
     steps:
-    - uses: actions/checkout@v3
-    - name: Set up Ruby
-      uses: ruby/setup-ruby@v1
-      with:
-        ruby-version: ${{ matrix.ruby }}
-        bundler-cache: true
-    - name: Run the default task
-      run: bundle exec rake
+      # 1. Check out repository code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. Set up Ruby environment
+      - name: Set up Ruby ${{ matrix.ruby-version }}
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby-version }}
+          # Cache gems using Bundler for faster builds
+          bundler-cache: true
+
+      # 3. Install system dependencies (SQLite for testing)
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev sqlite3
+
+      # 4. Install gem dependencies (handled by bundler-cache: true in setup-ruby)
+      #    If bundler-cache wasn't true, you'd run: bundle install --jobs 4 --retry 3
+      # - name: Install dependencies
+      #   run: bundle install --jobs 4 --retry 3
+
+      # 5. Set up the dummy app's test database
+      #    Assumes schema.rb is the source of truth. Use db:migrate if needed.
+      - name: Set up test database
+        run: bundle exec rails db:schema:load RAILS_ENV=test
+        # Run this command within the dummy app directory
+        working-directory: test/dummy
+
+      # 6. Run tests
+      - name: Run tests
+        run: bundle exec rake test
+
+
