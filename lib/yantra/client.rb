@@ -97,7 +97,9 @@ module Yantra
     def self.cancel_workflow(workflow_id)
       puts "INFO: [Client.cancel_workflow] Attempting to cancel workflow #{workflow_id}..."
       repo = Yantra.repository
+      notifier = Yantra.notifier # Get notifier instance
       workflow = repo.find_workflow(workflow_id)
+      finished_at_time = Time.current # Capture time for consistency
 
       # 1. Validate Workflow State
       unless workflow
@@ -115,27 +117,45 @@ module Yantra
       possible_previous_states = [Core::StateMachine::PENDING, Core::StateMachine::RUNNING]
       update_success = false
       possible_previous_states.each do |prev_state|
-         update_success = repo.update_workflow_attributes(
-           workflow_id,
-           { state: Core::StateMachine::CANCELLED.to_s, finished_at: Time.current },
-           expected_old_state: prev_state
-         )
-         break if update_success
+        update_success = repo.update_workflow_attributes(
+          workflow_id,
+          { state: Core::StateMachine::CANCELLED.to_s, finished_at: finished_at_time }, # Use captured time
+          expected_old_state: prev_state
+        )
+        break if update_success
       end
 
       unless update_success
-         latest_state = repo.find_workflow(workflow_id)&.state || 'unknown'
-         puts "WARN: [Client.cancel_workflow] Failed to update workflow #{workflow_id} state to cancelled (maybe state changed concurrently? Current state: #{latest_state})."
-         return false
+        latest_state = repo.find_workflow(workflow_id)&.state || 'unknown'
+        puts "WARN: [Client.cancel_workflow] Failed to update workflow #{workflow_id} state to cancelled (maybe state changed concurrently? Current state: #{latest_state})."
+        return false
       end
 
       puts "INFO: [Client.cancel_workflow] Workflow #{workflow_id} marked as cancelled in repository."
-      # TODO: Emit workflow.cancelled event here
+
+      # --- >>> ADDED: Emit workflow.cancelled event here <<< ---
+      begin
+        # Use the already fetched workflow object or fetch again if needed
+        # Use the captured finished_at_time for the payload
+        payload = {
+          workflow_id: workflow_id,
+          klass: workflow.klass, # Get klass from the fetched record
+          state: Core::StateMachine::CANCELLED, # Use the symbol
+          finished_at: finished_at_time
+        }
+        notifier.publish('yantra.workflow.cancelled', payload)
+        puts "INFO: [Client.cancel_workflow] Published yantra.workflow.cancelled event for #{workflow_id}."
+      rescue => e
+        Yantra.logger.error { "[Client.cancel_workflow] Failed to publish yantra.workflow.cancelled event for #{workflow_id}: #{e.message}" }
+      end
+      # --- >>> END ADDED SECTION <<< ---
+
 
       # 3. Find Pending/Enqueued Jobs for this Workflow
       cancellable_step_states = [Core::StateMachine::PENDING, Core::StateMachine::ENQUEUED]
+      # Fetch steps *after* workflow state is updated
       steps_to_cancel = repo.get_workflow_steps(workflow_id)
-                           .select { |j| cancellable_step_states.include?(j.state.to_sym) }
+        .select { |j| cancellable_step_states.include?(j.state.to_sym) }
 
       # 4. Bulk Cancel Pending/Enqueued Jobs
       if steps_to_cancel.any?
@@ -144,6 +164,10 @@ module Yantra
         begin
           cancelled_count = repo.cancel_steps_bulk(step_ids_to_cancel)
           puts "INFO: [Client.cancel_workflow] Repository confirmed cancellation update for #{cancelled_count} jobs."
+          # Note: yantra.step.cancelled events are published by the Orchestrator's
+          # cancel_downstream_pending method if cancellation cascades from a failure,
+          # but not currently during this direct Client.cancel_workflow bulk update.
+          # This could be added here if desired, iterating through step_ids_to_cancel.
         rescue Yantra::Errors::PersistenceError => e
           puts "ERROR: [Client.cancel_workflow] Failed during bulk job cancellation for workflow #{workflow_id}: #{e.message}"
         end
@@ -156,7 +180,6 @@ module Yantra
       puts "ERROR: [Client.cancel_workflow] Unexpected error for workflow #{workflow_id}: #{e.class} - #{e.message}\n#{e.backtrace.take(5).join("\n")}"
       false
     end
-
 
     # --- REFACTORED METHOD: retry_failed_steps ---
     # Attempts to retry all failed jobs within a failed workflow.
