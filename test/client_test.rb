@@ -127,7 +127,6 @@ module Yantra
         end
       end
 
-      focus
       def test_cancel_workflow_publishes_event_on_success
         workflow_id = SecureRandom.uuid
         mock_repo = Minitest::Mock.new
@@ -207,7 +206,6 @@ module Yantra
         mock_repo.verify
         mock_notifier.verify
       end
-
 
 
       # TODO: Add tests for persistence errors (e.g., mock repo methods to raise errors)
