@@ -2,10 +2,10 @@
 
 require 'zeitwerk'
 
-# --- Zeitwerk Setup ---
-loader = Zeitwerk::Loader.for_gem
-loader.setup
-# --- END Zeitwerk Setup ---
+# # --- Zeitwerk Setup ---
+# loader = Zeitwerk::Loader.for_gem
+# loader.setup
+# # --- END Zeitwerk Setup ---
 
 require_relative "yantra/version"
 require_relative "yantra/errors"
