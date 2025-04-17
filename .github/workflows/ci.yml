@@ -18,7 +18,7 @@ jobs:
     strategy:
       matrix:
         # Specify only one Ruby version to isolate potential issues
-        ruby-version: ['3.2']
+        ruby-version: ['3.1','3.2','3.3']
 
     steps:
       # 1. Check out repository code
