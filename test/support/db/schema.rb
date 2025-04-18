@@ -10,46 +10,52 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.2].define(version: 2025_04_16_121554) do
+ActiveRecord::Schema[7.2].define(version: 2025_04_17_192035) do
+  # These are extensions that must be enabled in order to support this database
+  enable_extension "plpgsql"
+
   create_table "yantra_step_dependencies", id: false, force: :cascade do |t|
     t.string "step_id", limit: 36, null: false
     t.string "depends_on_step_id", limit: 36, null: false
-    t.index ["depends_on_step_id"], name: "idx_step_dependencies_on_prereq"
-    t.index ["step_id", "depends_on_step_id"], name: "idx_step_dependencies_unique", unique: true
+    t.index ["depends_on_step_id"], name: "index_yantra_step_dependencies_on_depends_on_step_id"
+    t.index ["step_id", "depends_on_step_id"], name: "index_yantra_step_dependencies_on_step_and_depends_on", unique: true
   end
 
   create_table "yantra_steps", id: { type: :string, limit: 36 }, force: :cascade do |t|
     t.string "workflow_id", limit: 36, null: false
     t.string "klass", null: false
-    t.json "arguments"
+    t.jsonb "arguments"
     t.string "state", null: false
     t.string "queue"
     t.integer "retries", default: 0, null: false
-    t.json "output"
-    t.json "error"
-    t.boolean "is_terminal", default: false, null: false
-    t.datetime "created_at", null: false
-    t.datetime "updated_at", null: false
-    t.datetime "enqueued_at"
-    t.datetime "started_at"
-    t.datetime "finished_at"
+    t.integer "max_attempts", default: 3, null: false
+    t.jsonb "output"
+    t.jsonb "error"
+    t.datetime "created_at", precision: nil, null: false
+    t.datetime "updated_at", precision: nil, null: false
+    t.datetime "enqueued_at", precision: nil
+    t.datetime "started_at", precision: nil
+    t.datetime "finished_at", precision: nil
     t.index ["state"], name: "index_yantra_steps_on_state"
-    t.index ["workflow_id", "state"], name: "index_yantra_steps_on_workflow_id_and_state"
     t.index ["workflow_id"], name: "index_yantra_steps_on_workflow_id"
   end
 
   create_table "yantra_workflows", id: { type: :string, limit: 36 }, force: :cascade do |t|
     t.string "klass", null: false
-    t.json "arguments"
+    t.jsonb "arguments"
     t.string "state", null: false
-    t.json "globals"
+    t.jsonb "globals"
     t.boolean "has_failures", default: false, null: false
-    t.datetime "created_at", null: false
-    t.datetime "updated_at", null: false
-    t.datetime "started_at"
-    t.datetime "finished_at"
+    t.datetime "created_at", precision: nil, null: false
+    t.datetime "updated_at", precision: nil, null: false
+    t.datetime "started_at", precision: nil
+    t.datetime "finished_at", precision: nil
     t.index ["finished_at"], name: "index_yantra_workflows_on_finished_at"
     t.index ["started_at"], name: "index_yantra_workflows_on_started_at"
     t.index ["state"], name: "index_yantra_workflows_on_state"
   end
+
+  add_foreign_key "yantra_step_dependencies", "yantra_steps", column: "depends_on_step_id", on_delete: :cascade
+  add_foreign_key "yantra_step_dependencies", "yantra_steps", column: "step_id", on_delete: :cascade
+  add_foreign_key "yantra_steps", "yantra_workflows", column: "workflow_id", on_delete: :cascade
 end

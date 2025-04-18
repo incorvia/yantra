@@ -74,7 +74,7 @@ module Yantra
           return true if step_instances_array.nil? || step_instances_array.empty?
           current_time = Time.current
           records_to_insert = step_instances_array.map do |step_instance|
-             klass_name = step_instance.klass.is_a?(Class) ? step_instance.klass.to_s : step_instance.klass.to_s
+            klass_name = step_instance.klass.is_a?(Class) ? step_instance.klass.to_s : step_instance.klass.to_s
             { id: step_instance.id, workflow_id: step_instance.workflow_id, klass: klass_name,
               arguments: step_instance.arguments, state: 'pending', queue: step_instance.queue_name,
               retries: 0, created_at: current_time, updated_at: current_time }
@@ -128,42 +128,49 @@ module Yantra
           updated_count = StepRecord.connection.update(update_manager)
           updated_count > 0
         rescue => e
-           Yantra.logger.error { "[AR Adapter] Failed increment_step_retries for #{step_id}: #{e.message}" } if Yantra.logger
-           false # Indicate failure
+          Yantra.logger.error { "[AR Adapter] Failed increment_step_retries for #{step_id}: #{e.message}" } if Yantra.logger
+          false # Indicate failure
         end
-
 
         def record_step_output(step_id, output)
-          # Ensure output is serializable if column is JSON/JSONB
-          serializable_output = output.is_a?(String) ? output : JSON.dump(output) rescue output.to_s
-          updated_count = StepRecord.where(id: step_id).update_all(output: serializable_output)
-          updated_count > 0
+          step = StepRecord.find_by(id: step_id)
+          return false unless step
+          # Use standard update, which invokes model type casting (native or serialize)
+          step.update(output: output) # Returns true on success, false on validation failure
         end
 
-        # --- UPDATED: Return error_data hash ---
+        # --- CORRECTED: Use find + update instead of update_all ---
         def record_step_error(step_id, error)
+          step = StepRecord.find_by(id: step_id)
+          # Return error hash if step not found, consistent with returning hash on success
+          return { class: 'PersistenceError', message: "Step not found: #{step_id}" } unless step
+
           if error.is_a?(Exception)
             error_data = { class: error.class.name, message: error.message, backtrace: error.backtrace&.first(10) }
           elsif error.is_a?(Hash)
-            error_data = error.slice(:class, :message, :backtrace)
+            # Ensure keys are consistent if hash is passed directly
+            error_data = {
+              class: error[:class] || error['class'],
+              message: error[:message] || error['message'],
+              backtrace: error[:backtrace] || error['backtrace']
+            }.compact
           else
             error_data = { class: error.class.name, message: error.to_s }
           end
 
-          serializable_error = JSON.dump(error_data) rescue error_data.inspect
+          # Use standard update, which invokes model type casting (native or serialize)
+          update_success = step.update(error: error_data)
+          # Log if update failed? Optional.
+          # Yantra.logger.warn { "[AR Adapter] Failed to update error for step #{step_id}" } if !update_success && Yantra.logger
 
-          if ::ActiveRecord::Base.connection.adapter_name == 'PostgreSQL'
-            updated_count = StepRecord.where(id: step_id).update_all(["error = ?::jsonb", serializable_error])
-          else
-            updated_count = StepRecord.where(id: step_id).update_all(error: serializable_error)
-          end
-
-          # Return the formatted error data hash, regardless of update count
+          # Return the formatted error data hash
           error_data
         rescue => e
           Yantra.logger.error { "[AR Adapter] Failed record_step_error for #{step_id}: #{e.message}" } if Yantra.logger
           { class: 'PersistenceError', message: "Failed to record original error: #{e.message}" }
         end
+
+
 
         # --- END UPDATE ---
 
@@ -172,9 +179,9 @@ module Yantra
           StepDependencyRecord.create!(step_id: step_id, depends_on_step_id: dependency_step_id)
           true
         rescue ::ActiveRecord::RecordInvalid, ::ActiveRecord::RecordNotUnique => e
-           is_duplicate = e.is_a?(::ActiveRecord::RecordNotUnique) || (e.is_a?(::ActiveRecord::RecordInvalid) && e.record.errors.details.any? { |_field, errors| errors.any? { |err| err[:error] == :taken } })
-           raise Yantra::Errors::PersistenceError, "Failed to add dependency: #{e.message}" unless is_duplicate
-           true
+          is_duplicate = e.is_a?(::ActiveRecord::RecordNotUnique) || (e.is_a?(::ActiveRecord::RecordInvalid) && e.record.errors.details.any? { |_field, errors| errors.any? { |err| err[:error] == :taken } })
+          raise Yantra::Errors::PersistenceError, "Failed to add dependency: #{e.message}" unless is_duplicate
+          true
         end
 
         def add_step_dependencies_bulk(dependency_links_array)
@@ -184,8 +191,8 @@ module Yantra
             StepDependencyRecord.insert_all(dependency_links_array)
             true
           rescue ::ActiveRecord::RecordNotUnique
-             Yantra.logger.info { "[AR::Adapter#add_step_dependencies_bulk] Some dependency links already existed (ignored)." } if Yantra.logger
-             true
+            Yantra.logger.info { "[AR::Adapter#add_step_dependencies_bulk] Some dependency links already existed (ignored)." } if Yantra.logger
+            true
           rescue ::ActiveRecord::StatementInvalid, ::ActiveRecord::ActiveRecordError => e
             raise Yantra::Errors::PersistenceError, "Bulk dependency insert failed: #{e.message}"
           end
@@ -197,6 +204,17 @@ module Yantra
 
         def get_step_dependents(step_id)
           StepDependencyRecord.where(depends_on_step_id: step_id).pluck(:step_id)
+        end
+
+        def get_step_dependencies_multi(step_ids)
+          return {} if step_ids.nil? || step_ids.empty? || step_ids.all?(&:nil?)
+          # Fetch pairs of [step_id, depends_on_step_id]
+          links = StepDependencyRecord.where(step_id: step_ids).pluck(:step_id, :depends_on_step_id)
+          # Group by step_id and map to get the array of parent IDs
+          links.group_by(&:first).transform_values { |pairs| pairs.map(&:last) }
+        rescue ::ActiveRecord::ActiveRecordError => e
+          Yantra.logger.error { "[AR Adapter] Failed get_step_dependencies_multi for IDs #{step_ids.inspect}: #{e.message}" } if Yantra.logger
+          {} # Return empty hash on error
         end
 
         def find_ready_steps(workflow_id)
@@ -250,19 +268,19 @@ module Yantra
 
         # --- Bulk Cancellation Method ---
         def cancel_steps_bulk(step_ids)
-           return 0 if step_ids.nil? || step_ids.empty?
-           # Only cancel steps that are currently pending or enqueued
-           cancellable_states_query = [
-             Yantra::Core::StateMachine::PENDING.to_s,
-             Yantra::Core::StateMachine::ENQUEUED.to_s
-           ]
-           updated_count = StepRecord.where(id: step_ids, state: cancellable_states_query).update_all(
-             state: Yantra::Core::StateMachine::CANCELLED.to_s,
-             finished_at: Time.current
-           )
-           updated_count
+          return 0 if step_ids.nil? || step_ids.empty?
+          # Only cancel steps that are currently pending or enqueued
+          cancellable_states_query = [
+            Yantra::Core::StateMachine::PENDING.to_s,
+            Yantra::Core::StateMachine::ENQUEUED.to_s
+          ]
+          updated_count = StepRecord.where(id: step_ids, state: cancellable_states_query).update_all(
+            state: Yantra::Core::StateMachine::CANCELLED.to_s,
+            finished_at: Time.current
+          )
+          updated_count
         rescue ::ActiveRecord::StatementInvalid, ::ActiveRecord::ActiveRecordError => e
-           raise Yantra::Errors::PersistenceError, "Bulk job cancellation failed: #{e.message}"
+          raise Yantra::Errors::PersistenceError, "Bulk job cancellation failed: #{e.message}"
         end
 
         # --- Listing/Cleanup Methods ---
@@ -285,6 +303,15 @@ module Yantra
           count = deleted_workflows.count
           deleted_workflows.destroy_all if count > 0
           count
+        end
+
+        def fetch_step_states(step_ids)
+          return {} if step_ids.nil? || step_ids.empty? || step_ids.all?(&:nil?) # Handle empty/nil cases
+          # Use pluck for efficiency, converting results to a hash
+          StepRecord.where(id: step_ids).pluck(:id, :state).to_h
+        rescue ::ActiveRecord::ActiveRecordError => e
+          Yantra.logger.error { "[AR Adapter] Failed fetch_step_states for IDs #{step_ids.inspect}: #{e.message}" } if Yantra.logger
+          {} # Return empty hash on error
         end
 
       end

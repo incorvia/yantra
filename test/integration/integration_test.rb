@@ -267,7 +267,7 @@ module Yantra
          step_f_record.reload
          assert_equal "failed", step_f_record.state
          refute_nil step_f_record.error
-         error = JSON.parse(step_f_record.error)
+         error = step_f_record.error
          assert_equal "StandardError", error['class'] # Access deserialized hash with symbol
          step_a_record.reload
          assert_equal "cancelled", step_a_record.state
@@ -406,7 +406,7 @@ module Yantra
          assert_equal "running", step_r_record.state # State remains running during retry cycle
          assert_equal 1, step_r_record.retries
          refute_nil step_r_record.error
-         error = JSON.parse(step_r_record.error)
+         error = step_r_record.error
          assert_equal "StandardError", error['class']
          # Check that job is still enqueued for the next attempt
 

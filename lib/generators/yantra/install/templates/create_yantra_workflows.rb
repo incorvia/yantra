@@ -8,9 +8,9 @@ class CreateYantraWorkflows < ActiveRecord::Migration[<%= ActiveRecord::Migratio
 
       # Basic workflow information
       t.string :klass, null: false       # Stores the class name of the user-defined workflow.
-      t.json :arguments                  # Stores the initial arguments passed to the workflow (use :text if :json type not supported).
+      t.jsonb :arguments                  # Stores the initial arguments passed to the workflow (use :text if :json type not supported).
       t.string :state, null: false       # Stores the current state (e.g., pending, running, succeeded, failed).
-      t.json :globals                    # Optional field for storing global data (use :text if :json type not supported).
+      t.jsonb :globals                    # Optional field for storing global data (use :text if :json type not supported).
       t.boolean :has_failures, null: false, default: false # Flag indicating if any step within the workflow has failed permanently.
 
       # Timestamps (using t.timestamp for cross-db compatibility)

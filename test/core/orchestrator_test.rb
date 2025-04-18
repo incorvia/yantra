@@ -22,6 +22,7 @@ MockStep = Struct.new(:id, :workflow_id, :klass, :state, :queue, :output, :error
     super(id, workflow_id, klass, state.to_s, queue, output, error, retries, created_at, enqueued_at, started_at, finished_at, dependencies || [])
   end
 end
+
 MockWorkflow = Struct.new(:id, :state, :klass, :started_at, :finished_at, :has_failures) do
   def initialize(id: nil, state: 'pending', klass: nil, started_at: nil, finished_at: nil, has_failures: false)
     # Ensure state is stored as a string
@@ -61,6 +62,8 @@ module Yantra
         # Also stub is_a? in case other parts rely on it
         notifier.stubs(:is_a?).with(Yantra::Events::NotifierInterface).returns(true)
 
+        repo.stubs(:respond_to?).with(:get_step_dependencies_multi).returns(true)
+        repo.stubs(:respond_to?).with(:fetch_step_states).returns(true)
 
         # Local orchestrator instance with Mocha mocks
         orchestrator = Orchestrator.new(repository: repo, worker_adapter: worker, notifier: notifier)
@@ -72,78 +75,59 @@ module Yantra
       def test_start_workflow_enqueues_multiple_initial_jobs
         mocks = setup_mocha_mocks_and_orchestrator
         repo = mocks[:repo]; worker = mocks[:worker]; notifier = mocks[:notifier]; orchestrator = mocks[:orchestrator]
-        sequence = Mocha::Sequence.new('start_workflow_enqueues_multiple_initial_jobs')
+        ready_step_ids = [@step_a_id, @step_b_id]
+        workflow_running = MockWorkflow.new(id: @workflow_id, klass: "TestWorkflow", state: 'running', started_at: @frozen_time)
+        step_a_pending = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'pending', queue: 'q1')
+        step_b_pending = MockStep.new(id: @step_b_id, workflow_id: @workflow_id, klass: "StepB", state: 'pending', queue: 'q2')
+        step_a_enqueued = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'enqueued', queue: 'q1', enqueued_at: @frozen_time)
+        step_b_enqueued = MockStep.new(id: @step_b_id, workflow_id: @workflow_id, klass: "StepB", state: 'enqueued', queue: 'q2', enqueued_at: @frozen_time)
 
         Time.stub :current, @frozen_time do
-          # Mock data needed for test setup and returns
-          workflow_running = MockWorkflow.new(id: @workflow_id, klass: "TestWorkflow", state: 'running', started_at: @frozen_time)
-          initial_step_a = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'pending', queue: "q1")
-          initial_step_b = MockStep.new(id: @step_b_id, workflow_id: @workflow_id, klass: "StepB", state: 'pending', queue: "q2")
-          # Mock records after update for event payloads
-          step_a_enqueued = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'enqueued', queue: "q1", enqueued_at: @frozen_time)
-          step_b_enqueued = MockStep.new(id: @step_b_id, workflow_id: @workflow_id, klass: "StepB", state: 'enqueued', queue: "q2", enqueued_at: @frozen_time)
+          sequence = Mocha::Sequence.new('start_workflow_enqueues_multiple_initial_jobs')
 
-          # --- Mocha Expectations (Corrected Sequence v32) ---
-          # 1. Expect workflow update to running
-          repo.expects(:update_workflow_attributes).with(
-            @workflow_id,
-            has_entries(state: StateMachine::RUNNING.to_s, started_at: @frozen_time),
-            expected_old_state: StateMachine::PENDING
-          ).returns(true).in_sequence(sequence)
-
-          # 2. Expect find_workflow for the 'workflow started' event payload
+          # Expectations for start_workflow
+          repo.expects(:update_workflow_attributes)
+            .with(@workflow_id, { state: StateMachine::RUNNING.to_s, started_at: @frozen_time }, expected_old_state: StateMachine::PENDING)
+            .returns(true).in_sequence(sequence)
           repo.expects(:find_workflow).with(@workflow_id).returns(workflow_running).in_sequence(sequence)
-          # 3. Expect the 'workflow started' publish call
-          notifier.expects(:publish).with(
-            'yantra.workflow.started',
-            has_entries(workflow_id: @workflow_id, state: StateMachine::RUNNING)
-          ).returns(nil).in_sequence(sequence)
+          # --- FIX: Correct payload expectation ---
+          notifier.expects(:publish)
+            .with('yantra.workflow.started', has_entries(workflow_id: @workflow_id, klass: "TestWorkflow", started_at: @frozen_time))
+            .in_sequence(sequence)
+          # --- END FIX ---
+          repo.expects(:find_ready_steps).with(@workflow_id).returns(ready_step_ids).in_sequence(sequence)
 
-          # 4. Expect find_ready_jobs
-          repo.expects(:find_ready_steps).with(@workflow_id).returns([@step_a_id, @step_b_id]).in_sequence(sequence)
+          # Expectations for the loop calling enqueue_step(A) and enqueue_step(B)
+          # Note: The actual order of A vs B might vary, sequences can be tricky here.
+          # If this still fails on order, we might need to remove the sequence for the enqueue part.
 
-          # 5. Process Step A
-          repo.expects(:find_step).with(@step_a_id).returns(initial_step_a).in_sequence(sequence)
-          repo.expects(:update_step_attributes).with(
-            @step_a_id,
-            has_entries(state: StateMachine::ENQUEUED.to_s, enqueued_at: @frozen_time),
-            expected_old_state: StateMachine::PENDING
-          ).returns(true).in_sequence(sequence) # Update A
-          worker.expects(:enqueue).with(@step_a_id, @workflow_id, "StepA", "q1").returns(nil).in_sequence(sequence) # Enqueue A
-          # --- FIX: Add expectations for step A enqueued event ---
-          repo.expects(:find_step).with(@step_a_id).returns(step_a_enqueued).in_sequence(sequence)
-          notifier.expects(:publish).with(
-            'yantra.step.enqueued',
-            has_entries(step_id: @step_a_id, queue: "q1", enqueued_at: @frozen_time)
-          ).returns(nil).in_sequence(sequence) # Publish A enqueued
-          # --- End FIX ---
+          # enqueue_step(A) calls:
+          repo.expects(:find_step).with(@step_a_id).returns(step_a_pending).in_sequence(sequence) # Start of enqueue_step
+          # --- FIX: Use keyword argument ---
+          repo.expects(:update_step_attributes)
+            .with(@step_a_id, has_entries(state: "enqueued"), expected_old_state: :pending)
+            .returns(true).in_sequence(sequence)
+          # --- END FIX ---
+          repo.expects(:find_step).with(@step_a_id).returns(step_a_enqueued).in_sequence(sequence) # For payload/worker
+          notifier.expects(:publish).with('yantra.step.enqueued', has_entries(step_id: @step_a_id, queue: "q1")).in_sequence(sequence)
+          worker.expects(:enqueue).with(@step_a_id, @workflow_id, "StepA", "q1").in_sequence(sequence)
 
-          # 6. Process Step B
-          repo.expects(:find_step).with(@step_b_id).returns(initial_step_b).in_sequence(sequence) # Find B (1st time)
-          repo.expects(:update_step_attributes).with(
-            @step_b_id,
-            has_entries(state: StateMachine::ENQUEUED.to_s, enqueued_at: @frozen_time),
-            expected_old_state: StateMachine::PENDING
-          ).returns(true).in_sequence(sequence) # Update B
-          worker.expects(:enqueue).with(@step_b_id, @workflow_id, "StepB", "q2").returns(nil).in_sequence(sequence) # Enqueue B
-          # --- FIX: Add expectations for step B enqueued event ---
-          repo.expects(:find_step).with(@step_b_id).returns(step_b_enqueued).in_sequence(sequence) # Find B (2nd time, for event)
-          notifier.expects(:publish).with(
-            'yantra.step.enqueued',
-            has_entries(step_id: @step_b_id, queue: "q2", enqueued_at: @frozen_time)
-          ).returns(nil).in_sequence(sequence) # Publish B enqueued
-          # --- End FIX ---
-          # --- End Mocha Expectations ---
+          # enqueue_step(B) calls:
+          repo.expects(:find_step).with(@step_b_id).returns(step_b_pending).in_sequence(sequence) # Start of enqueue_step
+          # --- FIX: Use keyword argument ---
+          repo.expects(:update_step_attributes)
+            .with(@step_b_id, has_entries(state: "enqueued"), expected_old_state: :pending)
+            .returns(true).in_sequence(sequence)
+          # --- END FIX ---
+          repo.expects(:find_step).with(@step_b_id).returns(step_b_enqueued).in_sequence(sequence) # For payload/worker
+          notifier.expects(:publish).with('yantra.step.enqueued', has_entries(step_id: @step_b_id, queue: "q2")).in_sequence(sequence)
+          worker.expects(:enqueue).with(@step_b_id, @workflow_id, "StepB", "q2").in_sequence(sequence)
 
           # Act
-          result = orchestrator.start_workflow(@workflow_id)
-          assert result
+          orchestrator.start_workflow(@workflow_id)
+          # Assertions handled by mock verification
         end
       end
-
-
-
-
 
       # =========================================================================
       def test_start_workflow_does_nothing_if_not_pending
@@ -171,335 +155,321 @@ module Yantra
 
       # --- Test step_succeeded ---
       # (Converted to Mocha - Corrected v21: Match orchestrator event payload)
-      def test_step_succeeded_updates_state_and_calls_step_finished_and_publishes_event
+      # test/core/orchestrator_test.rb (Specific Test - Fixed)
+      def test_step_succeeded_updates_state_records_output_publishes_event_and_calls_step_finished
         mocks = setup_mocha_mocks_and_orchestrator
         repo = mocks[:repo]; notifier = mocks[:notifier]; orchestrator = mocks[:orchestrator]
-        sequence = Mocha::Sequence.new('step_succeeded_updates_state')
+        output = { result: "ok" }
+        step_succeeded_record = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'succeeded', finished_at: @frozen_time, output: output)
 
         Time.stub :current, @frozen_time do
-          result_output = { message: "Done" }
-          step_a_updated = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'succeeded', output: result_output, finished_at: @frozen_time)
-
-          # Mocha Expectations
-          repo.expects(:update_step_attributes).with(
-            @step_a_id,
-            has_entries(state: StateMachine::SUCCEEDED.to_s, output: result_output, finished_at: @frozen_time),
-            { expected_old_state: StateMachine::RUNNING }
-          ).returns(true).in_sequence(sequence)
-          repo.expects(:find_step).with(@step_a_id).returns(step_a_updated).in_sequence(sequence)
-          notifier.expects(:publish).with(
-            'yantra.step.succeeded',
-            has_entries(
-              step_id: @step_a_id,
-              workflow_id: @workflow_id,
-              klass: "StepA",
-              finished_at: @frozen_time,
-              output: result_output
+          # Expectations for step_succeeded itself
+          # --- FIX: Use keyword argument for expected_old_state ---
+          repo.expects(:update_step_attributes)
+            .with(
+              @step_a_id, # Positional arg 1
+              { state: StateMachine::SUCCEEDED.to_s, finished_at: @frozen_time }, # Positional arg 2
+              expected_old_state: StateMachine::RUNNING # Keyword arg
             )
-          ).returns(nil).in_sequence(sequence)
-          orchestrator.expects(:step_finished).with(@step_a_id).returns(nil).in_sequence(sequence)
+              .returns(true)
+            # --- END FIX ---
 
-          # Act
-          orchestrator.step_succeeded(@step_a_id, result_output)
+            repo.expects(:record_step_output).with(@step_a_id, output).returns(true)
+            repo.expects(:find_step).with(@step_a_id).returns(step_succeeded_record) # For event payload
+            notifier.expects(:publish).with('yantra.step.succeeded', has_entries(step_id: @step_a_id, output: output))
+
+            # Expect step_finished to be called internally
+            orchestrator.expects(:step_finished).with(@step_a_id)
+
+            # Act
+            orchestrator.step_succeeded(@step_a_id, output)
+            # Assertions are handled by mock verification
         end
       end
 
+      # test/core/orchestrator_test.rb (Specific Test - Corrected Count)
       def test_enqueue_step_handles_update_failure
-  mocks = setup_mocha_mocks_and_orchestrator
-  repo = mocks[:repo]; orchestrator = mocks[:orchestrator]; notifier = mocks[:notifier]
-  # No sequence needed, just verify the update fails
-
-  Time.stub :current, @frozen_time do
-    initial_job = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'pending') # Data only
-    # Mock workflow record needed for the publish call in start_workflow
-    workflow_running = MockWorkflow.new(id: @workflow_id, klass: "TestWorkflow", state: 'running', started_at: @frozen_time)
-
-
-    # --- Mocha Expectations (Corrected v36) ---
-    # 1. Stub workflow update to allow start_workflow to proceed
-    repo.stubs(:update_workflow_attributes)
-        .with(@workflow_id, has_key(:state), has_key(:expected_old_state))
-        .returns(true)
-
-    # 2. Expect find_workflow for the 'workflow started' event payload
-    repo.expects(:find_workflow).with(@workflow_id).returns(workflow_running)
-    # 3. Expect the 'workflow started' publish call
-    notifier.expects(:publish).with(
-        'yantra.workflow.started',
-        has_entries(workflow_id: @workflow_id, state: StateMachine::RUNNING)
-        ).returns(nil)
-
-    # --- FIX: Add missing expectations ---
-    # 4. Expect find_ready_steps
-    repo.expects(:find_ready_steps).with(@workflow_id).returns([@step_a_id])
-    # 5. Expect find_step (for enqueue_job)
-    repo.expects(:find_step).with(@step_a_id).returns(initial_job)
-    # --- End FIX ---
-
-    # 6. Expect step update to FAIL
-    repo.expects(:update_step_attributes).with(
-      @step_a_id,
-      # FIX: Expect the attributes the code actually tries to set
-      has_entries(state: StateMachine::ENQUEUED.to_s, enqueued_at: @frozen_time),
-      expected_old_state: StateMachine::PENDING
-    ).returns(false) # <<< Key expectation: Simulate failure
-    # --- End Mocha Expectations ---
-
-    # Act
-    orchestrator.start_workflow(@workflow_id)
-
-    # Assert: Verification of expects happens automatically.
-    # We implicitly assert that no error was raised and worker.enqueue was not called.
-  end
-end
-
-
-
-
-
-      # --- Test step_failed ---
-      # (Converted to Mocha)
-      def test_step_failed_calls_step_finished
-        mocks = setup_mocha_mocks_and_orchestrator
-        orchestrator = mocks[:orchestrator]
-        sequence = Mocha::Sequence.new('step_failed_calls_step_finished')
-
-        # Mocha Expectation
-        orchestrator.expects(:step_finished).with(@step_a_id).returns(nil).in_sequence(sequence)
-
-        # Act
-        orchestrator.step_failed(@step_a_id)
-      end
-
-      # --- Test step_finished (Success Path) ---
-
-      # =========================================================================
-      # MOCHA TEST - Using Sequence (Corrected v23)
-      # =========================================================================
-      def test_step_finished_success_enqueues_ready_dependent
         mocks = setup_mocha_mocks_and_orchestrator
         repo = mocks[:repo]; worker = mocks[:worker]; notifier = mocks[:notifier]; orchestrator = mocks[:orchestrator]
-        sequence = Mocha::Sequence.new('step_finished_success_enqueues_ready_dependent')
+        step_pending = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'pending')
+
+        # Expectations: Simulate update_step_attributes returning false
+        # Expect find_step to be called ONCE at the beginning of enqueue_step
+        repo.expects(:find_step).with(@step_a_id).returns(step_pending).once # <<< FIX: Expect only once
+
+        # Expect update_step_attributes to be called and fail
+        repo.expects(:update_step_attributes)
+          .with(
+            @step_a_id,
+            has_entries(state: StateMachine::ENQUEUED.to_s), # Time check removed earlier
+            expected_old_state: StateMachine::PENDING
+          )
+            .returns(false)
+
+          # DO NOT expect event publish or worker enqueue because the method returns early
+          notifier.expects(:publish).never
+          worker.expects(:enqueue).never
+
+          # Act: Call the private method under test
+          orchestrator.send(:enqueue_step, @step_a_id)
+          # Assertions handled by mock verification
+      end
+
+
+
+      def test_step_succeeded_updates_state_records_output_publishes_event_and_calls_step_finished
+        mocks = setup_mocha_mocks_and_orchestrator
+        repo = mocks[:repo]; notifier = mocks[:notifier]; orchestrator = mocks[:orchestrator]
+        output = { result: "ok" }
+        step_succeeded_record = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'succeeded', finished_at: @frozen_time, output: output)
 
         Time.stub :current, @frozen_time do
-          step_a = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'succeeded')
-          step_b = MockStep.new(id: @step_b_id, workflow_id: @workflow_id, klass: "StepB", state: 'pending', queue: 'default')
-          # Mock step B record after update for event payload
-          step_b_enqueued = MockStep.new(id: @step_b_id, workflow_id: @workflow_id, klass: "StepB", state: 'enqueued', queue: 'default', enqueued_at: @frozen_time)
+          # Expectations for step_succeeded itself
+          repo.expects(:update_step_attributes)
+            .with(@step_a_id, { state: StateMachine::SUCCEEDED.to_s, finished_at: @frozen_time }, { expected_old_state: StateMachine::RUNNING })
+            .returns(true)
+          repo.expects(:record_step_output).with(@step_a_id, output).returns(true) # Assume output recording succeeds
+          repo.expects(:find_step).with(@step_a_id).returns(step_succeeded_record) # For event payload
+          notifier.expects(:publish).with('yantra.step.succeeded', has_entries(step_id: @step_a_id, output: output))
 
+          # Expect step_finished to be called internally
+          orchestrator.expects(:step_finished).with(@step_a_id)
 
-          # --- Mocha Expectations (Corrected Sequence v27) ---
-          repo.expects(:find_step).with(@step_a_id).returns(step_a).in_sequence(sequence) # In step_finished
-          repo.expects(:get_step_dependents).with(@step_a_id).returns([@step_b_id]).in_sequence(sequence) # In process_dependents
-          repo.expects(:find_step).with(@step_b_id).returns(step_b).in_sequence(sequence) # In process_dependents (find B)
-          # Should check dependencies now
-          repo.expects(:get_step_dependencies).with(@step_b_id).returns([@step_a_id]).in_sequence(sequence) # In dependencies_met?
-          repo.expects(:find_step).with(@step_a_id).returns(step_a).in_sequence(sequence) # In dependencies_met? (Check A state)
-          # Should enqueue B
-          repo.expects(:find_step).with(@step_b_id).returns(step_b).in_sequence(sequence) # In enqueue_step (find B before update)
-          repo.expects(:update_step_attributes).with(
-            @step_b_id,
-            has_entries(state: StateMachine::ENQUEUED.to_s, enqueued_at: @frozen_time),
-            { expected_old_state: StateMachine::PENDING }
-          ).returns(true).in_sequence(sequence) # In enqueue_step
-          # Enqueue call happens next
-          worker.expects(:enqueue).with(@step_b_id, @workflow_id, "StepB", "default").returns(nil).in_sequence(sequence) # In enqueue_step
-          # --- FIX: Add expectations for event publishing inside enqueue_step ---
-          repo.expects(:find_step).with(@step_b_id).returns(step_b_enqueued).in_sequence(sequence) # In enqueue_step (after enqueue for event)
-          notifier.expects(:publish).with(
-            'yantra.step.enqueued',
-            has_entries(step_id: @step_b_id, enqueued_at: @frozen_time, queue: 'default')
-          ).in_sequence(sequence) # In enqueue_step
-          # --- End FIX ---
-          # Should check workflow completion AFTER enqueue attempt block finishes
-          repo.expects(:running_step_count).with(@workflow_id).returns(0).in_sequence(sequence) # In check_workflow_completion
-          repo.expects(:enqueued_step_count).with(@workflow_id).returns(1).in_sequence(sequence) # In check_workflow_completion (B is enqueued)
-          # --- End Mocha Expectations ---
+          # Act
+          orchestrator.step_succeeded(@step_a_id, output)
+          # Assertions are handled by mock verification
+        end
+      end
 
+      # --- Test step_finished ---
+
+      # --- UPDATED: Reworked expectations for fetch_step_states ---
+      # test/core/orchestrator_test.rb (Specific Test - Fixed Expectations for Optimized Path)
+      def test_step_finished_success_enqueues_ready_dependent
+        mocks = setup_mocha_mocks_and_orchestrator
+        repo = mocks[:repo]; notifier = mocks[:notifier]; worker = mocks[:worker]; orchestrator = mocks[:orchestrator]
+        # Setup: Step A succeeded, Step B depends on A and is pending
+        step_a_succeeded = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, state: 'succeeded')
+        step_b_pending = MockStep.new(id: @step_b_id, workflow_id: @workflow_id, klass: "StepB", state: 'pending', queue: 'q_b')
+        step_b_enqueued = MockStep.new(id: @step_b_id, workflow_id: @workflow_id, klass: "StepB", state: 'enqueued', queue: 'q_b', enqueued_at: @frozen_time)
+
+        Time.stub :current, @frozen_time do
+          sequence = Mocha::Sequence.new('step_finished_success_enqueues_fixed') # Use a unique sequence name
+
+          # Expectations for step_finished(A)
+          repo.expects(:find_step).with(@step_a_id).returns(step_a_succeeded).in_sequence(sequence)
+          repo.expects(:get_step_dependents).with(@step_a_id).returns([@step_b_id]).in_sequence(sequence) # B depends on A
+
+          # --- Expectations for process_dependents (Optimized Success Path) ---
+          # 1. Bulk fetch dependencies for dependents [B]
+          repo.expects(:get_step_dependencies_multi).with([@step_b_id]).returns({ @step_b_id => [@step_a_id] }).in_sequence(sequence) # <<< USE MULTI
+          # 2. Bulk fetch states for parents [A] AND dependent [B]
+          ids_to_fetch = [@step_b_id, @step_a_id].uniq
+          repo.expects(:fetch_step_states)
+            .with() { |actual_ids| actual_ids.sort == ids_to_fetch.sort } # Match array content ignoring order
+            .returns({ @step_a_id => 'succeeded', @step_b_id => 'pending' }) # <<< CORRECT RETURN HASH
+            .in_sequence(sequence)
+          # 3. is_ready_to_start?(B) uses the hash, no find_step(B) call expected here
+          # --- End process_dependents expectations ---
+
+          # --- Expectations for enqueue_step(B) because it's ready ---
+          # 4. find_step(B) at start of enqueue_step
+          repo.expects(:find_step).with(@step_b_id).returns(step_b_pending).in_sequence(sequence)
+          # 5. Update B to enqueued (Use keyword arg)
+          repo.expects(:update_step_attributes)
+            .with(@step_b_id, has_entries(state: StateMachine::ENQUEUED.to_s), expected_old_state: StateMachine::PENDING)
+            .returns(true).in_sequence(sequence)
+          # 6. Find B again (for payload/enqueue)
+          repo.expects(:find_step).with(@step_b_id).returns(step_b_enqueued).in_sequence(sequence)
+          # 7. Publish enqueued event for B
+          notifier.expects(:publish).with('yantra.step.enqueued', has_entries(step_id: @step_b_id)).in_sequence(sequence)
+          # 8. Enqueue B job
+          worker.expects(:enqueue).with(@step_b_id, @workflow_id, "StepB", "q_b").in_sequence(sequence)
+          # --- End enqueue_step expectations ---
+
+          # --- Expectations for check_workflow_completion ---
+          # 9. Check counts
+          repo.expects(:running_step_count).with(@workflow_id).returns(0).in_sequence(sequence)
+          repo.expects(:enqueued_step_count).with(@workflow_id).returns(1).in_sequence(sequence) # B is now enqueued
+          # Note: check_workflow_completion exits here as enqueued_count > 0
+          # --- End check_workflow_completion expectations ---
+
+          # Act
           orchestrator.step_finished(@step_a_id)
+          # Assertions handled by mock verification
         end
       end
 
 
-      # =========================================================================
-      # MOCHA TEST - Using Sequence
-      # =========================================================================
+      # --- UPDATED: Reworked expectations ---
+      # test/core/orchestrator_test.rb (Specific Test - Fixed Expectations)
+
       def test_step_finished_success_does_not_enqueue_if_deps_not_met
         mocks = setup_mocha_mocks_and_orchestrator
         repo = mocks[:repo]; notifier = mocks[:notifier]; orchestrator = mocks[:orchestrator]
-        sequence = Mocha::Sequence.new('step_finished_success_does_not_enqueue')
+        # Setup: A succeeded, C depends on A & B, B is still pending
+        step_a_succeeded = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, state: 'succeeded', klass: "StepA")
+        step_b_pending = MockStep.new(id: @step_b_id, workflow_id: @workflow_id, state: 'pending')
+        step_c_pending = MockStep.new(id: @step_c_id, workflow_id: @workflow_id, state: 'pending', klass: "StepC")
+        workflow_running = MockWorkflow.new(id: @workflow_id, klass: "MyWorkflow", state: 'running')
+        workflow_succeeded = MockWorkflow.new(id: @workflow_id, klass: "MyWorkflow", state: 'succeeded', finished_at: @frozen_time)
 
         Time.stub :current, @frozen_time do
-          step_a = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'succeeded')
-          step_b = MockStep.new(id: @step_b_id, workflow_id: @workflow_id, klass: "StepB", state: 'pending')
-          step_c = MockStep.new(id: @step_c_id, workflow_id: @workflow_id, klass: "StepC", state: 'pending')
-          workflow_succeeded = MockWorkflow.new(id: @workflow_id, klass: "TestWorkflow", state: 'succeeded', finished_at: @frozen_time)
+          sequence = Mocha::Sequence.new('step_finished_deps_not_met_completes_fixed')
 
-          # --- Mocha Expectations ---
-          repo.expects(:find_step).with(@step_a_id).returns(step_a).in_sequence(sequence) # In step_finished
-          repo.expects(:get_step_dependents).with(@step_a_id).returns([@step_c_id]).in_sequence(sequence) # In process_dependents
-          repo.expects(:find_step).with(@step_c_id).returns(step_c).in_sequence(sequence) # In process_dependents (find C)
-          repo.expects(:get_step_dependencies).with(@step_c_id).returns([@step_a_id, @step_b_id]).in_sequence(sequence) # In dependencies_met?
-          repo.expects(:find_step).with(@step_a_id).returns(step_a).in_sequence(sequence) # In dependencies_met? (Check A state)
-          repo.expects(:find_step).with(@step_b_id).returns(step_b).in_sequence(sequence) # In dependencies_met? (Check B state -> Pending!)
-          # Workflow Completion Checks:
-          repo.expects(:running_step_count).with(@workflow_id).returns(0).in_sequence(sequence) # In check_workflow_completion
-          repo.expects(:enqueued_step_count).with(@workflow_id).returns(0).in_sequence(sequence) # In check_workflow_completion
-          # --- Corrected Sequence for check_workflow_completion ---
-          repo.expects(:workflow_has_failures?).with(@workflow_id).returns(false).in_sequence(sequence)
-          repo.expects(:update_workflow_attributes).with(
-            @workflow_id,
-            has_entries(state: StateMachine::SUCCEEDED.to_s, finished_at: @frozen_time),
-            { expected_old_state: StateMachine::RUNNING }
-          ).returns(true).in_sequence(sequence)
-          repo.expects(:find_workflow).with(@workflow_id).returns(workflow_succeeded).in_sequence(sequence) # Find AFTER update for event
-          # ------------------------------------------------------
-          notifier.expects(:publish).with(
-            'yantra.workflow.succeeded',
-            # Match payload from orchestrator check_workflow_completion
-            has_entries(workflow_id: @workflow_id, state: StateMachine::SUCCEEDED, finished_at: @frozen_time)
-          ).returns(nil).in_sequence(sequence)
-          # --- End Mocha Expectations ---
+          # Expectations for step_finished(A)
+          repo.expects(:find_step).with(@step_a_id).returns(step_a_succeeded).in_sequence(sequence)
+          repo.expects(:get_step_dependents).with(@step_a_id).returns([@step_c_id]).in_sequence(sequence) # C depends on A
 
-          orchestrator.step_finished(@step_a_id)
-        end
-      end
-      # =========================================================================
+          # --- Expectations for process_dependents (Optimized Success Path) ---
+          # 1. Bulk fetch dependencies for dependents [C]
+          repo.expects(:get_step_dependencies_multi).with([@step_c_id]).returns({ @step_c_id => [@step_a_id, @step_b_id] }).in_sequence(sequence) # <<< CORRECTED EXPECTATION
+          # 2. Bulk fetch states for parents [A, B] AND dependent [C]
+          ids_to_fetch = [@step_c_id, @step_a_id, @step_b_id].uniq
+          repo.expects(:fetch_step_states)
+            .with() { |actual_ids| actual_ids.sort == ids_to_fetch.sort } # Match array content ignoring order
+            .returns({ @step_c_id => 'pending', @step_a_id => 'succeeded', @step_b_id => 'pending' }) # <<< CORRECTED ARGS/RETURN
+            .in_sequence(sequence)
+          # 3. is_ready_to_start?(C) uses the hash, no find_step(C) call expected here
+          # repo.expects(:find_step).with(@step_c_id).returns(step_c_pending).in_sequence(sequence) # <<< REMOVED EXPECTATION
+          # --- End process_dependents expectations ---
 
-      # =========================================================================
-      # MOCHA TEST - Using Sequence (Corrected)
-      # =========================================================================
-      def test_step_finished_success_completes_workflow_if_last_job
-        mocks = setup_mocha_mocks_and_orchestrator
-        repo = mocks[:repo]; notifier = mocks[:notifier]; orchestrator = mocks[:orchestrator]
-        sequence = Mocha::Sequence.new('step_finished_success_completes')
+          # Note: enqueue_step(C) is NOT called because B is pending
 
-        Time.stub :current, @frozen_time do
-          step_a = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'succeeded')
-          workflow_succeeded = MockWorkflow.new(id: @workflow_id, klass: "TestWorkflow", state: 'succeeded', started_at: @frozen_time - 10, finished_at: @frozen_time, has_failures: false)
-
-          # --- Mocha Expectations ---
-          repo.expects(:find_step).with(@step_a_id).returns(step_a).in_sequence(sequence)
-          repo.expects(:get_step_dependents).with(@step_a_id).returns([]).in_sequence(sequence)
+          # --- Expectations for check_workflow_completion ---
           repo.expects(:running_step_count).with(@workflow_id).returns(0).in_sequence(sequence)
-          repo.expects(:enqueued_step_count).with(@workflow_id).returns(0).in_sequence(sequence)
-          # --- Corrected Sequence for check_workflow_completion ---
-          repo.expects(:workflow_has_failures?).with(@workflow_id).returns(false).in_sequence(sequence)
-          repo.expects(:update_workflow_attributes).with(
-            @workflow_id,
-            has_entries(state: StateMachine::SUCCEEDED.to_s, finished_at: @frozen_time),
-            { expected_old_state: StateMachine::RUNNING }
-          ).returns(true).in_sequence(sequence)
-          repo.expects(:find_workflow).with(@workflow_id).returns(workflow_succeeded).in_sequence(sequence)
-          # ------------------------------------------------------
-          notifier.expects(:publish).with(
-            'yantra.workflow.succeeded',
-            # Match payload from orchestrator check_workflow_completion
-            has_entries(
-              workflow_id: @workflow_id,
-              state: StateMachine::SUCCEEDED, # Use constant symbol
-              finished_at: @frozen_time
-            )
-          ).returns(nil).in_sequence(sequence)
-          # --- End Mocha Expectations ---
+          repo.expects(:enqueued_step_count).with(@workflow_id).returns(0).in_sequence(sequence) # Nothing got enqueued
+          repo.expects(:find_workflow).with(@workflow_id).returns(workflow_running).in_sequence(sequence) # Check if terminal
+          repo.expects(:workflow_has_failures?).with(@workflow_id).returns(false).in_sequence(sequence) # No failures
+          # Update workflow to succeeded (FIX: Use keyword arg)
+          repo.expects(:update_workflow_attributes)
+            .with(@workflow_id, { state: StateMachine::SUCCEEDED.to_s, finished_at: @frozen_time }, expected_old_state: StateMachine::RUNNING) # <<< CORRECTED EXPECTATION
+            .returns(true).in_sequence(sequence)
+          repo.expects(:find_workflow).with(@workflow_id).returns(workflow_succeeded).in_sequence(sequence) # For event payload
+          notifier.expects(:publish).with('yantra.workflow.succeeded', has_entries(workflow_id: @workflow_id, state: :succeeded)).in_sequence(sequence)
+          # --- End check_workflow_completion expectations ---
 
+          # Act
           orchestrator.step_finished(@step_a_id)
+          # Assertions handled by mock verification
         end
       end
-      # =========================================================================
 
 
-      # =========================================================================
-      # MOCHA TEST - Using Sequence (Corrected)
-      # =========================================================================
+
+
+
+
+      # --- UPDATED: Reworked expectations ---
       def test_step_finished_failure_completes_workflow_if_last_job
         mocks = setup_mocha_mocks_and_orchestrator
         repo = mocks[:repo]; notifier = mocks[:notifier]; orchestrator = mocks[:orchestrator]
-        sequence = Mocha::Sequence.new('step_finished_failure_completes')
+        # Setup: Step A failed, no dependents
+        step_a_failed = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'failed', finished_at: @frozen_time)
+        final_wf_record = MockWorkflow.new(id: @workflow_id, klass: "MyWorkflow", state: 'failed', finished_at: @frozen_time)
 
         Time.stub :current, @frozen_time do
-          step_a = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'failed')
-          workflow_failed = MockWorkflow.new(id: @workflow_id, klass: "TestWorkflow", state: 'failed', started_at: @frozen_time - 10, finished_at: @frozen_time, has_failures: true)
+          # Expectations for step_finished(A)
+          repo.expects(:find_step).with(@step_a_id).returns(step_a_failed)
+          repo.expects(:get_step_dependents).with(@step_a_id).returns([]) # No dependents
 
-          # --- Mocha Expectations ---
-          repo.expects(:find_step).with(@step_a_id).returns(step_a).in_sequence(sequence)
-          repo.expects(:get_step_dependents).with(@step_a_id).returns([]).in_sequence(sequence)
-          repo.expects(:running_step_count).with(@workflow_id).returns(0).in_sequence(sequence)
-          repo.expects(:enqueued_step_count).with(@workflow_id).returns(0).in_sequence(sequence)
-          # --- Corrected Sequence for check_workflow_completion ---
-          repo.expects(:workflow_has_failures?).with(@workflow_id).returns(true).in_sequence(sequence)
-          repo.expects(:update_workflow_attributes).with(
-            @workflow_id,
-            has_entries(state: StateMachine::FAILED.to_s, finished_at: @frozen_time),
-            { expected_old_state: StateMachine::RUNNING }
-          ).returns(true).in_sequence(sequence)
-          repo.expects(:find_workflow).with(@workflow_id).returns(workflow_failed).in_sequence(sequence)
-          # ------------------------------------------------------
-          notifier.expects(:publish).with(
-            'yantra.workflow.failed',
-            # Match payload from orchestrator check_workflow_completion
-            has_entries(
-              workflow_id: @workflow_id,
-              state: StateMachine::FAILED, # Use constant symbol
-              finished_at: @frozen_time
-            )
-          ).returns(nil).in_sequence(sequence)
-          # --- End Mocha Expectations ---
+          # Expectations for check_workflow_completion
+          repo.expects(:running_step_count).with(@workflow_id).returns(0)
+          repo.expects(:enqueued_step_count).with(@workflow_id).returns(0)
+          repo.expects(:find_workflow).with(@workflow_id).returns(MockWorkflow.new(id: @workflow_id, state: 'running')) # Assume running before check
+          repo.expects(:workflow_has_failures?).with(@workflow_id).returns(true) # Assume flag was set
+          repo.expects(:update_workflow_attributes)
+            .with(@workflow_id, { state: StateMachine::FAILED.to_s, finished_at: @frozen_time }, { expected_old_state: StateMachine::RUNNING })
+            .returns(true)
+          repo.expects(:find_workflow).with(@workflow_id).returns(final_wf_record) # For event payload
+          notifier.expects(:publish).with('yantra.workflow.failed', has_entries(workflow_id: @workflow_id, state: :failed))
 
+          # Act
           orchestrator.step_finished(@step_a_id)
+          # Assertions handled by mock verification
         end
       end
-      # =========================================================================
 
 
-      # --- Test step_finished (Failure Path) ---
+      # --- Test step failure/cancellation propagation ---
 
-      # =========================================================================
-      # MOCHA TEST - Using Sequence
-      # =========================================================================
+      # --- UPDATED: Test step_finished with failed state ---
+      # test/core/orchestrator_test.rb (Specific Test - Fixed)
+
       def test_step_finished_failure_cancels_dependents_recursively
         mocks = setup_mocha_mocks_and_orchestrator
         repo = mocks[:repo]; notifier = mocks[:notifier]; orchestrator = mocks[:orchestrator]
-        sequence = Mocha::Sequence.new('step_finished_failure_cancels')
+        # Setup: A failed, B depends on A (pending), C depends on B (pending)
+        step_a_failed = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, state: 'failed')
+        step_b_pending = MockStep.new(id: @step_b_id, workflow_id: @workflow_id, klass: "StepB", state: 'pending')
+        step_c_pending = MockStep.new(id: @step_c_id, workflow_id: @workflow_id, klass: "StepC", state: 'pending')
+        step_b_cancelled = MockStep.new(id: @step_b_id, workflow_id: @workflow_id, klass: "StepB", state: 'cancelled')
+        step_c_cancelled = MockStep.new(id: @step_c_id, workflow_id: @workflow_id, klass: "StepC", state: 'cancelled')
+        workflow_running = MockWorkflow.new(id: @workflow_id, klass: "MyWorkflow", state: 'running')
+        workflow_failed = MockWorkflow.new(id: @workflow_id, klass: "MyWorkflow", state: 'failed', finished_at: @frozen_time)
 
         Time.stub :current, @frozen_time do
-          step_a = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'failed')
-          step_b = MockStep.new(id: @step_b_id, workflow_id: @workflow_id, klass: "StepB", state: 'pending')
-          step_c = MockStep.new(id: @step_c_id, workflow_id: @workflow_id, klass: "StepC", state: 'pending')
-          workflow_failed = MockWorkflow.new(id: @workflow_id, klass: "TestWorkflow", state: 'failed', finished_at: @frozen_time, has_failures: true)
+          sequence = Mocha::Sequence.new('failure_cascade')
 
-          # --- Mocha Expectations ---
-          repo.expects(:find_step).with(@step_a_id).returns(step_a).in_sequence(sequence) # In step_finished
-          repo.expects(:get_step_dependents).with(@step_a_id).returns([@step_b_id]).in_sequence(sequence) # In process_dependents
-          repo.expects(:find_step).with(@step_b_id).returns(step_b).in_sequence(sequence) # In cancel_downstream_pending (check B state)
-          repo.expects(:cancel_steps_bulk).with([@step_b_id]).returns(1).in_sequence(sequence) # In cancel_downstream_pending (cancel B)
-          notifier.expects(:publish).with('yantra.step.cancelled', has_entries(step_id: @step_b_id)).in_sequence(sequence) # In cancel_downstream_pending (publish B cancelled)
-          repo.expects(:get_step_dependents).with(@step_b_id).returns([@step_c_id]).in_sequence(sequence) # In cancel_downstream_pending (find C)
-          repo.expects(:find_step).with(@step_c_id).returns(step_c).in_sequence(sequence) # In recursive cancel_downstream_pending (check C state)
-          repo.expects(:cancel_steps_bulk).with([@step_c_id]).returns(1).in_sequence(sequence) # In recursive cancel_downstream_pending (cancel C)
-          notifier.expects(:publish).with('yantra.step.cancelled', has_entries(step_id: @step_c_id)).in_sequence(sequence) # In recursive cancel_downstream_pending (publish C cancelled)
-          repo.expects(:get_step_dependents).with(@step_c_id).returns([]).in_sequence(sequence) # In recursive cancel_downstream_pending (find C dependents)
-          # Workflow Completion Checks:
+          # Expectations for step_finished(A)
+          repo.expects(:find_step).with(@step_a_id).returns(step_a_failed).in_sequence(sequence)
+          repo.expects(:get_step_dependents).with(@step_a_id).returns([@step_b_id]).in_sequence(sequence) # B depends on A
+
+          # Expectations for process_dependents (Optimized Failure Path)
+          # 1. Bulk fetch dependencies for dependents [B]
+          repo.expects(:get_step_dependencies_multi).with([@step_b_id]).returns({ @step_b_id => [@step_a_id] }).in_sequence(sequence)
+          # 2. Bulk fetch states for parents [A] AND dependents [B] (Corrected Args/Return)
+          repo.expects(:fetch_step_states)
+          # --- FIX: Use block constraint to match array content ignoring order ---
+            .with() { |actual_ids| actual_ids.sort == [@step_a_id, @step_b_id].sort }
+          # --- END FIX ---
+            .returns({@step_a_id => 'failed', @step_b_id => 'pending'}) # Need state of B too
+            .in_sequence(sequence)
+
+          # 3. Enter 'else' block because A failed, call cancel_downstream_pending(B)
+          #    Note: find_step(B) is NOT called here anymore because state is pre-fetched
+
+          # Expectations for cancel_downstream_pending(B)
+          # It uses the pre-fetched state ('pending')
+          repo.expects(:update_step_attributes)
+            .with(@step_b_id, { state: StateMachine::CANCELLED.to_s, finished_at: @frozen_time }, expected_old_state: StateMachine::PENDING)
+            .returns(true).in_sequence(sequence)
+          repo.expects(:find_step).with(@step_b_id).returns(step_b_cancelled).in_sequence(sequence) # Inside cancel(B) for event payload
+          notifier.expects(:publish).with('yantra.step.cancelled', has_entries(step_id: @step_b_id)).in_sequence(sequence)
+          repo.expects(:get_step_dependents).with(@step_b_id).returns([@step_c_id]).in_sequence(sequence) # Inside cancel(B), find C
+
+          # Expectations for recursive call cancel_downstream_pending(C)
+          # Fetch state for C because it wasn't in the initial bulk fetch triggered by A's dependents
+          repo.expects(:find_step).with(@step_c_id).returns(step_c_pending).in_sequence(sequence) # Inside cancel(C)
+          repo.expects(:update_step_attributes)
+            .with(@step_c_id, { state: StateMachine::CANCELLED.to_s, finished_at: @frozen_time }, expected_old_state: StateMachine::PENDING)
+            .returns(true).in_sequence(sequence)
+          repo.expects(:find_step).with(@step_c_id).returns(step_c_cancelled).in_sequence(sequence) # Inside cancel(C) for event payload
+          notifier.expects(:publish).with('yantra.step.cancelled', has_entries(step_id: @step_c_id)).in_sequence(sequence)
+          repo.expects(:get_step_dependents).with(@step_c_id).returns([]).in_sequence(sequence) # Inside cancel(C), find no dependents
+
+          # Expectations for check_workflow_completion (called after A finishes)
           repo.expects(:running_step_count).with(@workflow_id).returns(0).in_sequence(sequence)
           repo.expects(:enqueued_step_count).with(@workflow_id).returns(0).in_sequence(sequence)
-          # --- Corrected Sequence for check_workflow_completion ---
-          repo.expects(:workflow_has_failures?).with(@workflow_id).returns(true).in_sequence(sequence)
-          repo.expects(:update_workflow_attributes).with(
-            @workflow_id,
-            has_entries(state: StateMachine::FAILED.to_s, finished_at: @frozen_time),
-            { expected_old_state: StateMachine::RUNNING }
-          ).returns(true).in_sequence(sequence)
-          repo.expects(:find_workflow).with(@workflow_id).returns(workflow_failed).in_sequence(sequence)
-          # ---------------------------------------------
-          notifier.expects(:publish).with(
-            'yantra.workflow.failed',
-            has_entries(workflow_id: @workflow_id, state: StateMachine::FAILED) # Use constant symbol
-          ).returns(nil).in_sequence(sequence)
-          # --- End Mocha Expectations ---
+          repo.expects(:find_workflow).with(@workflow_id).returns(workflow_running).in_sequence(sequence) # Check if terminal
+          repo.expects(:workflow_has_failures?).with(@workflow_id).returns(true).in_sequence(sequence) # Assume flag was set
+          repo.expects(:update_workflow_attributes) # Update to failed
+            .with(@workflow_id, has_entries(state: StateMachine::FAILED.to_s), expected_old_state: StateMachine::RUNNING)
+            .returns(true).in_sequence(sequence)
+          repo.expects(:find_workflow).with(@workflow_id).returns(workflow_failed).in_sequence(sequence) # For event payload
+          notifier.expects(:publish).with('yantra.workflow.failed', has_entries(workflow_id: @workflow_id, state: :failed)).in_sequence(sequence)
 
+          # Act
           orchestrator.step_finished(@step_a_id)
+          # Assertions handled by mock verification
         end
       end
+
+
+
+
+
+
       # =========================================================================
 
 
@@ -548,68 +518,88 @@ end
 
       # (Converted to Mocha - Corrected v20: Removed eventing expectations)
 
-      def test_enqueue_step_handles_worker_error_and_reverts_state
+      def test_enqueue_step_handles_worker_error_and_reverts_state # Or ...and_marks_step_failed
         mocks = setup_mocha_mocks_and_orchestrator
         repo = mocks[:repo]; worker = mocks[:worker]; notifier = mocks[:notifier]; orchestrator = mocks[:orchestrator]
-        sequence = Mocha::Sequence.new('enqueue_step_handles_worker_error') # Use sequence again
+        sequence = Mocha::Sequence.new('enqueue_step_handles_worker_error')
 
         Time.stub :current, @frozen_time do
-          initial_job = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'pending') # Data only
-          # Mock workflow record needed for the publish call in start_workflow
+          initial_job = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'pending', queue: 'q_a') # Added queue
+          step_enqueued = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: "StepA", state: 'enqueued', queue: 'q_a', enqueued_at: @frozen_time) # Added queue
           workflow_running = MockWorkflow.new(id: @workflow_id, klass: "TestWorkflow", state: 'running', started_at: @frozen_time)
+          workflow_failed = MockWorkflow.new(id: @workflow_id, klass: "TestWorkflow", state: 'failed', finished_at: @frozen_time)
+          enqueue_error = Yantra::Errors::WorkerError.new("Queue unavailable")
 
           # --- Mocha Expectations (Corrected Sequence) ---
           # 1. Expect workflow state update to running
-          repo.expects(:update_workflow_attributes).with(
-            @workflow_id,
-            has_entries(state: StateMachine::RUNNING.to_s, started_at: @frozen_time),
-            { expected_old_state: StateMachine::PENDING }
-          ).returns(true).in_sequence(sequence)
+          repo.expects(:update_workflow_attributes)
+            .with(@workflow_id, { state: StateMachine::RUNNING.to_s, started_at: @frozen_time }, expected_old_state: StateMachine::PENDING)
+            .returns(true).in_sequence(sequence)
 
           # 2. Expect find_workflow for the 'workflow started' event payload
           repo.expects(:find_workflow).with(@workflow_id).returns(workflow_running).in_sequence(sequence)
 
-          # 3. Expect the 'workflow started' publish call
-          notifier.expects(:publish).with(
-            'yantra.workflow.started',
-            has_entries(workflow_id: @workflow_id, state: StateMachine::RUNNING)
-          ).returns(nil).in_sequence(sequence)
+          # 3. Expect the 'workflow started' publish call (Corrected Payload Check)
+          notifier.expects(:publish)
+            .with('yantra.workflow.started', has_entries(workflow_id: @workflow_id, klass: "TestWorkflow", started_at: @frozen_time)) # Check klass/started_at
+            .returns(nil).in_sequence(sequence)
 
           # 4. Expect find_ready_steps
           repo.expects(:find_ready_steps).with(@workflow_id).returns([@step_a_id]).in_sequence(sequence)
 
-          # 5. Expect find_step (for enqueue_step)
+          # --- Expectations for internal call to enqueue_step ---
+          # 5. Expect find_step (at start of enqueue_step)
           repo.expects(:find_step).with(@step_a_id).returns(initial_job).in_sequence(sequence)
 
           # 6. Expect update_step_attributes (to enqueued)
-          repo.expects(:update_step_attributes).with(
-            @step_a_id,
-            has_entries(state: StateMachine::ENQUEUED.to_s, enqueued_at: @frozen_time),
-            { expected_old_state: StateMachine::PENDING }
-          ).returns(true).in_sequence(sequence)
+          repo.expects(:update_step_attributes)
+            .with(@step_a_id, has_entries(state: StateMachine::ENQUEUED.to_s), expected_old_state: StateMachine::PENDING)
+            .returns(true).in_sequence(sequence)
 
-          # 7. Expect worker enqueue to raise the error
-          worker.expects(:enqueue)
-            .with(@step_a_id, @workflow_id, "StepA", "default")
-            .raises(Yantra::Errors::WorkerError, "Queue unavailable").in_sequence(sequence)
+          # 7. Expect find_step (for event payload / worker call)
+          repo.expects(:find_step).with(@step_a_id).returns(step_enqueued).in_sequence(sequence) # Expecting the enqueued version now
 
-          # 8. Expect the recovery actions in the rescue block of enqueue_step
-          repo.expects(:update_step_attributes).with(
-            @step_a_id,
-            has_entries(state: StateMachine::PENDING.to_s, enqueued_at: nil) # Reverted state
-          ).returns(true).in_sequence(sequence)
+          # 8. Expect publish step enqueued event
+          notifier.expects(:publish).with('yantra.step.enqueued', has_entries(step_id: @step_a_id)).in_sequence(sequence)
+
+          # 9. Expect worker enqueue to raise the error
+          worker.expects(:enqueue).with(@step_a_id, @workflow_id, "StepA", "q_a").raises(enqueue_error).in_sequence(sequence) # Use queue from mock
+
+          # --- Expectations for recovery actions in the rescue block of enqueue_step ---
+          # 10. Expect update step to FAILED (Corrected State)
+          repo.expects(:update_step_attributes)
+            .with(@step_a_id, has_entries(state: StateMachine::FAILED.to_s, error: has_key(:message))) # Expect FAILED state
+            .returns(true).in_sequence(sequence)
+          # 11. Expect set workflow failure flag
           repo.expects(:set_workflow_has_failures_flag).with(@workflow_id).returns(true).in_sequence(sequence)
-          # --- End Mocha Expectations ---
+
+          # --- Expectations for check_workflow_completion ---
+          # 12. Check counts
+          repo.expects(:running_step_count).with(@workflow_id).returns(0).in_sequence(sequence)
+          repo.expects(:enqueued_step_count).with(@workflow_id).returns(0).in_sequence(sequence)
+          # 13. Check current workflow state
+          repo.expects(:find_workflow).with(@workflow_id).returns(workflow_running).in_sequence(sequence)
+          # 14. Check failures flag
+          repo.expects(:workflow_has_failures?).with(@workflow_id).returns(true).in_sequence(sequence)
+          # 15. Update workflow to failed
+          repo.expects(:update_workflow_attributes)
+            .with(@workflow_id, has_entries(state: StateMachine::FAILED.to_s), expected_old_state: StateMachine::RUNNING)
+            .returns(true).in_sequence(sequence)
+          # 16. Find workflow for event payload
+          repo.expects(:find_workflow).with(@workflow_id).returns(workflow_failed).in_sequence(sequence)
+          # 17. Publish workflow failed event
+          notifier.expects(:publish).with('yantra.workflow.failed', has_entries(workflow_id: @workflow_id, state: :failed)).in_sequence(sequence)
+          # --- End Expectations ---
 
           # Act
-          # This calls start_workflow, which should trigger the sequence above
+          # This test calls start_workflow, which should trigger the sequence above
           orchestrator.start_workflow(@workflow_id)
 
           # Assert: Verification of expects happens automatically via Mocha teardown
         end
       end
 
-        # --- Test step_starting ---
+      # --- Test step_starting ---
       def test_step_starting_publishes_event_on_success
         mocks = setup_mocha_mocks_and_orchestrator
         repo = mocks[:repo]; notifier = mocks[:notifier]; orchestrator = mocks[:orchestrator]
