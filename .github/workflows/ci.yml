@@ -13,13 +13,13 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        ruby-version: ['3.2', '3.3'] # Adjust as needed
+        ruby-version: ['3.0', '3.1', '3.2', '3.3'] # Adjust as needed
 
     services:
       postgres:
         image: postgres:14
         env:
-          POSTGRES_DB: yantra_test
+          POSTGRES_DB: yantra_test # Ensure this matches your dummy app's database.yml
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: password
         options: >-
@@ -28,6 +28,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
         ports:
+          # Map container port 5432 to host port 5432
           - 5432:5432
 
     steps:
@@ -38,33 +39,44 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby-version }}
-          bundler-cache: true # Runs bundle install
+          # Cache gems using bundler, runs `bundle install` from the root
+          bundler-cache: true
 
-      - name: Install system dependencies
+      - name: Install system dependencies (for pg gem)
         run: sudo apt-get update && sudo apt-get install -y libpq-dev
 
-      # Install gem dependencies (handled by bundler-cache: true)
+      # Gem dependencies installed by bundler-cache: true (runs in root)
+      # Note: If test/dummy has its own Gemfile, bundle install might need to run there too.
+      # Assuming test/dummy uses the root Gemfile for simplicity for now.
 
       - name: Set up test database
         env:
           RAILS_ENV: test
-          PGHOST: 127.0.0.1
-          PGPORT: 5432
+          # Point Rails to the service container
+          PGHOST: 127.0.0.1 # Use localhost/127.0.0.1 because of port mapping
+          PGPORT: 5432 # The host port mapped from the container
           PGUSER: postgres
           PGPASSWORD: password
-        # --- UPDATED: Use bin/rails instead of bundle exec ---
+        # --- UPDATED: Use bundle exec rails inside test/dummy ---
+        # Change directory to the dummy app first
+        working-directory: test/dummy
         run: |
-          bin/rails db:create db:schema:load RAILS_ENV=test
+          echo "Current directory: $(pwd)" # Should be test/dummy
+          # Use bundle exec to run the rails command from installed gems
+          bundle exec rails db:create
+          bundle exec rails db:schema:load
         # --- END UPDATE ---
-        working-directory: test/dummy # Keep running inside dummy app directory
 
       - name: Run tests
         env:
           RAILS_ENV: test
+          # Also ensure test environment uses the correct DB connection details
           PGHOST: 127.0.0.1
           PGPORT: 5432
           PGUSER: postgres
           PGPASSWORD: password
-        run: bundle exec rake test # Rake test likely still run from root
+        # Run tests from the project root (assuming rake tasks handle the dummy app context)
+        # If tests need to be run from test/dummy, add working-directory here too.
+        run: bundle exec rake test
 
 
