@@ -110,8 +110,43 @@ module Yantra
         check_workflow_completion(finished_step.workflow_id)
       end
 
-      # NOTE: step_failed and step_cancelled methods would likely exist here
-      #       but are not in the provided snippet.
+      def step_failed(step_id, error_info)
+        log_error "Job #{step_id} failed permanently. Error: #{error_info[:class]} - #{error_info[:message]}"
+        finished_at_time = Time.current # Capture consistent time
+
+        # Update step state to FAILED, storing error details
+        update_success = repository.update_step_attributes(
+          step_id,
+          {
+            state: StateMachine::FAILED.to_s,
+            error: error_info, # Store the provided error hash
+            finished_at: finished_at_time
+          },
+          expected_old_state: StateMachine::RUNNING # Should fail from running state
+        )
+
+        unless update_success
+          current_state = repository.find_step(step_id)&.state || 'not_found'
+          log_warn "Failed to update step #{step_id} state to failed (expected 'running', found '#{current_state}')."
+          # If update failed, step is likely already in a terminal state.
+          # Still call step_finished to ensure workflow consistency checks run.
+        end
+
+        # Set workflow failure flag (idempotent)
+        # Need workflow_id - fetch step record if update succeeded or if needed regardless
+        workflow_id = repository.find_step(step_id)&.workflow_id
+        if workflow_id
+          repository.set_workflow_has_failures_flag(workflow_id)
+        else
+          log_error "Cannot find workflow_id for failed step #{step_id} to set failure flag."
+        end
+
+        # Publish event only if state transition was successful
+        publish_step_failed_event(step_id, error_info, finished_at_time) if update_success
+
+        # Trigger downstream processing (cancel dependents, check workflow completion)
+        step_finished(step_id)
+      end
 
       private
 
@@ -429,6 +464,21 @@ module Yantra
           finished_at: final_wf_record.finished_at
         }
         publish_event(event_name, payload)
+      end
+
+      def publish_step_failed_event(step_id, error_info, finished_at_time)
+        step_record = repository.find_step(step_id) # Fetch fresh record for payload
+        return unless step_record
+        payload = {
+          step_id: step_id,
+          workflow_id: step_record.workflow_id,
+          klass: step_record.klass,
+          state: StateMachine::FAILED.to_s, # Send state as string
+          finished_at: finished_at_time,
+          error: error_info, # Include the error details
+          retries: step_record.retries # Include retry count if available
+        }
+        publish_event('yantra.step.failed', payload)
       end
 
       # Centralized event publishing with error handling.

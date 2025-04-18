@@ -1,27 +1,29 @@
-# --- lib/yantra/worker/retry_handler.rb ---
+# lib/yantra/worker/retry_handler.rb
 
 require_relative '../core/state_machine'
 require_relative '../errors'
-# Ensure NotifierInterface is available if needed for type checking (optional)
-# require_relative '../events/notifier_interface'
+# Require Orchestrator if type hinting/checking needed (optional)
+# require_relative '../core/orchestrator'
 
 module Yantra
   module Worker
     class RetryHandler
-      attr_reader :repository, :step_record, :error, :executions, :user_step_klass, :notifier # Added notifier reader
+      # --- UPDATED: Added orchestrator reader ---
+      attr_reader :repository, :step_record, :error, :executions, :user_step_klass, :notifier, :orchestrator
 
-      # --- UPDATED: Added notifier keyword argument ---
-      def initialize(repository:, step_record:, error:, executions:, user_step_klass:, notifier:)
+      # --- UPDATED: Added orchestrator keyword argument ---
+      def initialize(repository:, step_record:, error:, executions:, user_step_klass:, notifier:, orchestrator:)
         @repository = repository
         @step_record = step_record
         @error = error # Should be the original exception object
         @executions = executions
         @user_step_klass = user_step_klass
         @notifier = notifier # Store injected notifier
+        @orchestrator = orchestrator # Store injected orchestrator
 
-        # Optional: Validate notifier type
-        # unless @notifier && @notifier.respond_to?(:publish) # Or use is_a?(Yantra::Events::NotifierInterface)
-        #   raise ArgumentError, "RetryHandler requires a valid notifier instance."
+        # Optional: Validate orchestrator type
+        # unless @orchestrator&.is_a?(Yantra::Core::Orchestrator)
+        #   raise ArgumentError, "RetryHandler requires a valid orchestrator instance."
         # end
       end
 
@@ -33,7 +35,7 @@ module Yantra
         max_attempts = get_max_attempts
 
         if executions >= max_attempts
-          fail_permanently! # This method now publishes the event via @notifier
+          fail_permanently! # Call the updated method below
           return :failed # Signal permanent failure
         else
           prepare_for_retry!
@@ -54,66 +56,46 @@ module Yantra
         [default_max_attempts, 1].max
       end
 
-      # Updates step state to failed, records error, sets workflow flag, and publishes event.
+      # --- UPDATED: Calls orchestrator to handle permanent failure ---
+      # Calls the orchestrator to mark the step as failed and trigger subsequent logic.
       def fail_permanently!
-
-        finished_at_time = Time.current # Capture time
-        final_attrs = {
-          state: Yantra::Core::StateMachine::FAILED.to_s,
-          finished_at: finished_at_time
+        # Prepare error details hash for the orchestrator
+        error_details = {
+          class: @error.class.name,
+          message: @error.message,
+          # Include limited backtrace if desired and available
+          backtrace: @error.backtrace&.first(10)
         }
-        update_success = repository.update_step_attributes(step_record.id, final_attrs, expected_old_state: :running)
 
-        if update_success
-          error_details = repository.record_step_error(step_record.id, @error)
-          repository.set_workflow_has_failures_flag(step_record.workflow_id)
+        # Call the orchestrator's public method to handle the failure
+        # This centralizes state updates, flag setting, event publishing,
+        # and triggering of step_finished.
+        orchestrator.step_failed(step_record.id, error_details)
 
-          # --- Publish yantra.step.failed event using injected notifier ---
-          begin
-            # --- UPDATED: Use instance variable @notifier ---
-            notifier = @notifier # Use the injected notifier
-            unless notifier # Safety check if somehow nil was injected
-
-               return # Exit early if no notifier
-            end
-
-            payload = {
-              step_id: step_record.id,
-              workflow_id: step_record.workflow_id,
-              klass: step_record.klass,
-              state: Core::StateMachine::FAILED,
-              finished_at: finished_at_time,
-              error: error_details || { class: @error.class.name, message: @error.message, backtrace: @error.backtrace&.first(10) },
-              retries: step_record.retries
-            }
-            notifier.publish('yantra.step.failed', payload)
-
-          rescue => e
-            log_msg = "[RetryHandler] Failed to publish yantra.step.failed event for #{step_record.id}: #{e.message}"
-            # Log error using Yantra logger if available
-            if defined?(Yantra.logger) && Yantra.logger
-               Yantra.logger.error { log_msg }
-            else
-
-            end
-          end
-          # --- END Publish Event Section ---
-
-        else
-          latest_state = repository.find_step(step_record.id)&.state || 'unknown'
-
-        end
+      # Rescue potential errors during the call to the orchestrator itself
+      rescue => e
+         log_msg = "[RetryHandler] ERROR calling orchestrator.step_failed for #{step_record.id}: #{e.class} - #{e.message}\n#{e.backtrace.first(5).join("\n")}"
+         # Log error using Yantra logger if available
+         if defined?(Yantra.logger) && Yantra.logger
+           Yantra.logger.error { log_msg }
+         else
+           warn log_msg # Fallback to standard warning output
+         end
+         # Note: Depending on desired behavior, you might want to re-raise 'e' here
+         # or attempt direct repository updates as a fallback (though less ideal).
+         # Currently, it logs the error and the step might remain in 'running'.
       end
+      # --- END UPDATED METHOD ---
+
 
       # Increments retry count and records the error for a retry attempt.
       def prepare_for_retry!
         # ... (logic remains the same) ...
-
+        # Note: This still interacts directly with repository for retry prep.
         repository.increment_step_retries(step_record.id)
-        repository.record_step_error(step_record.id, @error)
+        repository.record_step_error(step_record.id, @error) # Record error for each retry attempt
       end
 
     end
   end
 end
-
