@@ -198,22 +198,22 @@ module Yantra
           end
         end
 
-        def get_step_dependencies(step_id)
+        def get_parent_ids(step_id)
           StepDependencyRecord.where(step_id: step_id).pluck(:depends_on_step_id)
         end
 
-        def get_step_dependents(step_id)
+        def get_child_ids(step_id)
           StepDependencyRecord.where(depends_on_step_id: step_id).pluck(:step_id)
         end
 
-        def get_step_dependencies_multi(step_ids)
+        def get_parent_ids_multi(step_ids)
           return {} if step_ids.nil? || step_ids.empty? || step_ids.all?(&:nil?)
           # Fetch pairs of [step_id, depends_on_step_id]
           links = StepDependencyRecord.where(step_id: step_ids).pluck(:step_id, :depends_on_step_id)
           # Group by step_id and map to get the array of parent IDs
           links.group_by(&:first).transform_values { |pairs| pairs.map(&:last) }
         rescue ::ActiveRecord::ActiveRecordError => e
-          Yantra.logger.error { "[AR Adapter] Failed get_step_dependencies_multi for IDs #{step_ids.inspect}: #{e.message}" } if Yantra.logger
+          Yantra.logger.error { "[AR Adapter] Failed get_parent_ids_multi for IDs #{step_ids.inspect}: #{e.message}" } if Yantra.logger
           {} # Return empty hash on error
         end
 

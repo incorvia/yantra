@@ -28,8 +28,8 @@ module Yantra
       # Implement methods for Dependencies
       def add_step_dependency(step_id, dependency_step_id); raise NotImplementedError; end
       def add_step_dependencies_bulk(dependency_links_array); raise NotImplementedError; end
-      def get_step_dependencies(step_id); raise NotImplementedError; end
-      def get_step_dependents(step_id); raise NotImplementedError; end
+      def get_child_ids(step_id); raise NotImplementedError; end
+      def get_parent_ids(step_id); raise NotImplementedError; end
       def find_ready_steps(workflow_id); raise NotImplementedError; end
 
       # Implement methods for Bulk Operations / Cleanup
@@ -38,7 +38,7 @@ module Yantra
       def delete_workflow(workflow_id); raise NotImplementedError; end
       def delete_expired_workflows(cutoff_timestamp); raise NotImplementedError; end
       def fetch_step_outputs(step_ids); raise NotImplementedError; end
-      def get_step_dependencies_multi(step_ids); raise NotImplementedError; end
+      def get_parent_ids_multi(step_ids); raise NotImplementedError; end
     end
   end
 end

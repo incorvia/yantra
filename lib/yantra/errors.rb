@@ -1,8 +1,18 @@
-# --- lib/yantra/errors.rb ---
+# lib/yantra/errors.rb
 
 module Yantra
   # Base error class for all Yantra specific errors.
-  class Error < StandardError; end
+  # Add accessor for original_exception and handled flag.
+  class Error < StandardError
+    attr_reader :original_exception
+    attr_accessor :handled # Flag to indicate if error should stop AJ retries
+
+    def initialize(message = nil, original_exception: nil)
+      super(message)
+      @original_exception = original_exception
+      @handled = false # Default to not handled
+    end
+  end
 
   # Module to namespace specific error types
   module Errors
@@ -19,11 +29,10 @@ module Yantra
     class ConfigurationError < Yantra::Error; end
 
     # Raised when an operation encounters an invalid state or attempts an invalid state transition
-    # (though the StateMachine might handle transitions more specifically).
     class InvalidState < Yantra::Error; end
 
     # Raised when attempting an invalid state transition
-    class InvalidStateTransition < Error; end
+    class InvalidStateTransition < Yantra::Error; end # Note: Inherits from Yantra::Error now
 
     # A generic error for persistence layer issues, potentially wrapping adapter-specific errors.
     class PersistenceError < Yantra::Error; end
@@ -31,10 +40,12 @@ module Yantra
     # Optional: A generic error for worker adapter issues.
     class WorkerError < Yantra::Error; end
 
-    # --- ADD THIS ---
     # Raised when a job class definition is invalid or cannot be loaded.
     class StepDefinitionError < Yantra::Error; end
-    # --- END ADD ---
+
+    # Raised on update conflict during optimistic locking
+    class UpdateConflictError < PersistenceError; end
+
   end
 end
 

@@ -17,7 +17,7 @@ module Yantra
   module Worker
     module ActiveJob
       # Run tests only if ActiveJob components could be loaded/defined
-      if AR_LOADED && defined?(Yantra::Worker::ActiveJob::Adapter) && defined?(Yantra::Worker::ActiveJob::AsyncJob)
+      if AR_LOADED && defined?(Yantra::Worker::ActiveJob::Adapter) && defined?(Yantra::Worker::ActiveJob::StepJob)
 
         class AdapterTest < Minitest::Test # Use standard Minitest::Test
 
@@ -57,7 +57,7 @@ module Yantra
             mock_job_class.reset_mock!
 
             # Act: Stub the constant only for this block
-            with_stubbed_const(Yantra::Worker::ActiveJob, :AsyncJob, mock_job_class) do
+            with_stubbed_const(Yantra::Worker::ActiveJob, :StepJob, mock_job_class) do
                @adapter.enqueue(@job_id, @workflow_id, @job_klass_name, @queue_name)
             end
 
@@ -73,7 +73,7 @@ module Yantra
             mock_job_class.should_raise = true
 
             # Act & Assert: Stub the constant only for this block
-            with_stubbed_const(Yantra::Worker::ActiveJob, :AsyncJob, mock_job_class) do
+            with_stubbed_const(Yantra::Worker::ActiveJob, :StepJob, mock_job_class) do
               error = assert_raises(Yantra::Errors::WorkerError) do
                 @adapter.enqueue(@job_id, @workflow_id, @job_klass_name, @queue_name)
               end
@@ -88,7 +88,7 @@ module Yantra
           def test_enqueue_raises_config_error_if_job_class_undefined
              # Arrange: Manually remove the constant for this test's scope
              mod = Yantra::Worker::ActiveJob
-             const_sym = :AsyncJob
+             const_sym = :StepJob
              original_value = nil
              original_defined = mod.const_defined?(const_sym, false)
              original_value = mod.const_get(const_sym) if original_defined
@@ -99,7 +99,7 @@ module Yantra
                error = assert_raises(Yantra::Errors::ConfigurationError) do
                   @adapter.enqueue(@job_id, @workflow_id, @job_klass_name, @queue_name)
                end
-               assert_match(/AsyncJob class could not be found\/loaded/, error.message)
+               assert_match(/StepJob class could not be found\/loaded/, error.message)
              ensure
                # Restore original state in ensure block
                mod.send(:remove_const, const_sym) if mod.const_defined?(const_sym, false) # Remove if test failed to define it
@@ -118,7 +118,7 @@ module Yantra
              # but ideally it moves to the correct file. Requires AR setup.
              skip "Test belongs in ActiveRecord::AdapterTest" unless defined?(YantraActiveRecordTestCase) && self.is_a?(YantraActiveRecordTestCase)
 
-             job_pending = Yantra::Persistence::ActiveRecord::JobRecord.create!(id: SecureRandom.uuid, workflow_record: @workflow, klass: "Job", state: "pending")
+             job_pending = Yantra::Persistence::ActiveRecord::StepRecord.create!(id: SecureRandom.uuid, workflow_record: @workflow, klass: "Job", state: "pending")
              job_ids = [job_pending.id]
 
              # Mock update_all on the relation object that `where` returns
@@ -129,8 +129,8 @@ module Yantra
                raise ::ActiveRecord::ActiveRecordError, "DB Update Error" # <<< USE DIFFERENT ERROR
              end
 
-             # Stub the 'where' call on JobRecord class to return our mock relation
-             Yantra::Persistence::ActiveRecord::JobRecord.stub(:where, mock_relation) do
+             # Stub the 'where' call on StepRecord class to return our mock relation
+             Yantra::Persistence::ActiveRecord::StepRecord.stub(:where, mock_relation) do
                 # Act & Assert
                 error = assert_raises(Yantra::Errors::PersistenceError) do
                    # Assuming @adapter here is actually an instance of ActiveRecord::Adapter

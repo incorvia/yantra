@@ -1,259 +1,248 @@
-# --- lib/yantra/worker/active_job/step_job.rb ---
+# lib/yantra/worker/active_job/step_job.rb
 
-# Conditionally require 'active_job' and define a basic fallback if not found.
-begin
-  require 'active_job'
-rescue LoadError
-  # Define a minimal ActiveJob::Base if it doesn't exist,
-  # allowing the StepJob class definition to proceed without error,
-  # although ActiveJob functionality would be missing.
-  unless defined?(ActiveJob::Base)
-    module ActiveJob
-      class Base
-        # Mock methods used by some frameworks or initialization logic
-        def self.set(*); self; end
-        def self.perform_later(*); end
-        # Add executions attribute if needed by retry logic fallbacks
-        attr_accessor :executions
-      end
-    end
-    puts "WARN: [Yantra::AJ::StepJob] 'active_job' gem not found. Using basic fallback ActiveJob::Base." if Yantra.logger
-  end
-end
-
-# Conditionally require 'active_support/core_ext/hash/keys' for deep_symbolize_keys
-# and define a fallback implementation if not available.
-AS_DEEP_SYMBOLIZE_LOADED = begin
-  require 'active_support/core_ext/hash/keys'
-  true
-rescue LoadError
-  # Define deep_symbolize_keys directly on Hash if it's missing.
-  unless Hash.method_defined?(:deep_symbolize_keys)
-    puts "WARN: [Yantra::AJ::StepJob] 'active_support/core_ext/hash/keys' not found. Defining fallback Hash#deep_symbolize_keys." if Yantra.logger
-    class ::Hash
-      def deep_symbolize_keys
-        each_with_object({}) do |(key, value), result|
-          new_key = begin
-                      key.to_sym
-                    rescue
-                      key # Keep original key if conversion fails
-                    end
-          new_value = value.is_a?(Hash) ? value.deep_symbolize_keys : value
-          result[new_key] = new_value
-        end
-      end
-    end
-  end
-  false
-end
-
+require 'active_job'
+require 'yantra/errors' # Require the errors file defining Yantra::Error
 require_relative '../../step'
-require_relative '../../core/orchestrator'
-require_relative '../../core/state_machine'
-require_relative '../../errors'
-require_relative '../retry_handler' # Ensure RetryHandler is loaded
+require_relative '../../core/orchestrator' # Needed for orchestrator instance
+require_relative '../retry_handler'     # Needed for RetryHandler
+require_relative '../../persistence/repository_interface' # Needed for repository type check
+require_relative '../../events/notifier_interface'       # Needed for notifier type check
+
 
 module Yantra
   module Worker
     module ActiveJob
-      # ActiveJob wrapper for executing Yantra::Step instances.
+      # The ActiveJob job class responsible for executing a Yantra step.
       class StepJob < ::ActiveJob::Base
-        # Ensure executions attribute exists, potentially needed by ActiveJob retry mechanisms
-        # or the fallback RetryHandler.
-        attr_accessor :executions unless defined?(executions)
+        # Configure ActiveJob options if needed
+        # sidekiq_options retry: 5 # Example
 
-        # Main perform method called by ActiveJob.
-        # Arguments are provided by the Yantra::Worker::ActiveJob::Adapter.
-        def perform(yantra_step_id, yantra_workflow_id, yantra_step_klass_name)
-          # Initialize execution count (used by retry logic). ActiveJob might manage this itself.
-          self.executions = self.executions || 1 # Default to 1 if not set by AJ
+        # Error handling for ActiveJob specific issues or unhandled exceptions
+        rescue_from(StandardError) do |exception|
+          # This top-level rescue is for unexpected errors *outside* the main perform logic,
+          # or if the perform rescue itself fails.
+          # Attempt to extract arguments safely
+          step_id = arguments[0] rescue nil
+          workflow_id = arguments[1] rescue nil
+          log_job_error("Unhandled exception in StepJob", step_id, workflow_id, exception)
 
-          # Use Yantra logger if available, otherwise fallback to puts
-          log_method = Yantra.logger ? ->(level, msg) { Yantra.logger.send(level, "[AJ::StepJob] #{msg}") } : ->(level, msg) { puts "#{level.upcase}: [AJ::StepJob] #{msg}" }
-
-          log_method.call(:info, "Attempt ##{self.executions} for Yantra step: #{yantra_step_id} WF: #{yantra_workflow_id} Klass: #{yantra_step_klass_name}")
-
-          # --- Setup Dependencies ---
-          repo = Yantra.repository
-          notifier = Yantra.notifier # Get notifier for Orchestrator and potentially RetryHandler
-          unless repo
-            raise Yantra::Errors::ConfigurationError, "Yantra repository not configured."
-          end
-          # Pass along notifier if available
-          orchestrator = Yantra::Core::Orchestrator.new(repository: repo, notifier: notifier)
-
-          step_record = nil
-          user_step_klass = nil
-
-          # --- Pre-Execution Check ---
-          # Ask the orchestrator if it's okay to start this step.
-          # This handles state transitions and prevents starting already completed/failed steps.
-          unless orchestrator.step_starting(yantra_step_id)
-            log_method.call(:warn, "Orchestrator#step_starting indicated job #{yantra_step_id} should not proceed. Aborting.")
-            return # Do not proceed if orchestrator says no
-          end
-
-          # --- Main Execution Block ---
-          begin
-            # Load the step record from the repository.
-            step_record = repo.find_step(yantra_step_id)
-            unless step_record
-              # This should ideally not happen if step_starting succeeded.
-              raise Yantra::Errors::StepNotFound, "Job record #{yantra_step_id} not found after starting."
-            end
-            # Use class name from the record for consistency.
-            yantra_step_klass_name = step_record.klass
-
-            # Load the user's Step class.
+          # Optionally, try to mark the step as failed in Yantra as a last resort
+          if step_id # Only attempt if we have a step_id
             begin
-              user_step_klass = Object.const_get(yantra_step_klass_name)
-            rescue NameError => e
-              raise Yantra::Errors::StepDefinitionError, "Class #{yantra_step_klass_name} could not be loaded: #{e.message}"
+              error_info = { class: exception.class.name, message: "Unhandled StepJob error: #{exception.message}", backtrace: exception.backtrace }
+              # Use a safe way to access orchestrator if it exists
+              # safe_orchestrator = self.respond_to?(:orchestrator, true) ? self.send(:orchestrator) : nil
+              # safe_orchestrator&.step_failed(step_id, error_info) if safe_orchestrator
+            rescue => inner_e
+              log_job_error("Failed to mark step failed after unhandled StepJob error", step_id, workflow_id, inner_e)
             end
-            unless user_step_klass && user_step_klass < Yantra::Step
-              raise Yantra::Errors::StepDefinitionError, "Class #{yantra_step_klass_name} is not a Yantra::Step subclass."
-            end
+          end
 
-            # --- Argument Processing ---
-            # Deserialize and symbolize arguments from the step record.
-            arguments_hash = process_arguments(step_record.arguments, log_method)
-            final_arguments_hash = symbolize_arguments(arguments_hash, log_method)
+          # Re-raise the original error for ActiveJob's default handling
+          # unless it's a Yantra-specific error (which should have been handled below).
+          # Only re-raise if it's not already a Yantra::Error, as those should be handled explicitly
+          raise exception unless defined?(Yantra::Error) && exception.is_a?(Yantra::Error)
+        end
 
-            # --- Step Instantiation ---
-            parent_ids = repo.get_step_dependencies(yantra_step_id)
+        # Main execution method called by ActiveJob.
+        def perform(step_id, workflow_id, step_klass_name)
+          log_job_info "Received job", step_id, workflow_id
+
+          # Notify orchestrator that step processing is starting
+          unless orchestrator.step_starting(step_id)
+            log_job_warn "Orchestrator prevented step start", step_id, workflow_id
+            return # Stop processing
+          end
+
+          # Fetch step details (including arguments)
+          step_record = repository.find_step(step_id) # First find_step call
+          unless step_record
+            err = Yantra::Errors::StepNotFound.new("Step record #{step_id} not found after starting.") # Error raised here
+            log_job_error err.message, step_id, workflow_id, err
+            raise err # This will be caught by the specific StepNotFound rescue below
+          end
+
+          # Load the user's step implementation class
+          user_step_klass = load_user_step_class(step_klass_name) # Can raise StepDefinitionError
+
+          # Instantiate the user step class, passing required keywords
+          begin
             user_step_instance = user_step_klass.new(
               step_id: step_record.id,
               workflow_id: step_record.workflow_id,
               klass: user_step_klass,
-              arguments: final_arguments_hash, # Pass symbolized hash
-              parent_ids: parent_ids,
-              queue_name: step_record.queue,
-              repository: repo # Inject repository for potential use within the step
+              state: step_record.state&.to_sym,
+              arguments: step_record.arguments,
+              queue: step_record.queue,
+              retries: step_record.retries,
+              max_attempts: step_record.max_attempts,
+              repository: repository
             )
+          rescue ArgumentError => e
+             # Wrap initialization ArgumentErrors as StepDefinitionError
+             raise Yantra::Errors::StepDefinitionError.new("Failed to initialize #{step_klass_name}: #{e.message}. Check Step initializer arguments.", original_exception: e)
+          end
 
-            # Ensure keys are symbols for splat operator (**).
-            # This might be redundant if symbolize_arguments worked correctly.
-            final_arguments_hash_for_perform = final_arguments_hash.transform_keys(&:to_sym) rescue {}
-            log_method.call(:debug, "Arguments being passed to perform: #{final_arguments_hash_for_perform.inspect}")
+          # Prepare arguments (symbolize keys)
+          symbolized_args = begin
+                              (step_record.arguments || {}).deep_symbolize_keys
+                            rescue StandardError => e
+                              log_job_warn("Failed to symbolize step arguments: #{e.message}. Using empty hash.", step_id, workflow_id)
+                              {}
+                            end
 
-            # --- Execute the User's Step Logic ---
-            result = user_step_instance.perform(**final_arguments_hash_for_perform)
 
-            # --- Success Handling ---
-            # Notify the orchestrator of successful completion.
-            orchestrator.step_succeeded(yantra_step_id, result)
-            log_method.call(:info, "Step #{yantra_step_id} succeeded.")
+          # --- Execute User Code ---
+          log_job_info "Executing user step code: #{step_klass_name}", step_id, workflow_id
+          puts "[StepJob] Value of user_step_instance.id: #{user_step_instance.id} *****"
+          output = user_step_instance.perform(**symbolized_args) # Can raise runtime errors
+          # --- End User Code ---
 
-          # --- Error Handling Block ---
-          rescue StandardError => e
-            log_method.call(:error, "Rescued error in perform for step #{yantra_step_id}: #{e.class} - #{e.message}\n#{e.backtrace.first(5).join("\n")}")
+          # Notify orchestrator of success
+          orchestrator.step_succeeded(step_id, output)
+          log_job_info "Step succeeded", step_id, workflow_id
 
-            # Cannot proceed with error handling if the step record wasn't loaded.
-            unless step_record
-              log_method.call(:fatal, "Cannot handle error - step_record not loaded. Re-raising.")
-              raise e
-            end
+        # --- Specific Rescues Order: More specific / setup errors first ---
 
-            # Determine which user class to use for retry configuration (loaded class or base Step).
-            user_klass_for_handler = user_step_klass || Yantra::Step
-            # Get configured or default retry handler class.
-            retry_handler_class = (Yantra.configuration.respond_to?(:retry_handler_class) && Yantra.configuration.retry_handler_class) || Yantra::Worker::RetryHandler
+        rescue LoadError, NameError => e
+          # Catches direct LoadError/NameError if load_user_step_class itself fails unexpectedly
+          # OR if constantize raises LoadError instead of NameError.
+          err = Yantra::Errors::StepDefinitionError.new("Class #{step_klass_name} could not be loaded directly: #{e.message}", original_exception: e)
+          log_job_error err.message, step_id, workflow_id, e
+          error_info = { class: err.class.name, message: err.message, backtrace: e.backtrace }
+          orchestrator.step_failed(step_id, error_info)
+          raise err # Re-raise specific error
 
-            log_method.call(:debug, "Using RetryHandler: #{retry_handler_class}")
-            log_method.call(:debug, "Current executions: #{self.executions}")
+        rescue ArgumentError => e
+          # Catches ArgumentError from user_step_instance.perform if keyword args don't match
+          # (Initialization ArgumentErrors are wrapped in StepDefinitionError above)
+          # Assume runtime ArgumentErrors are definition issues unless proven otherwise
+          err = Yantra::Errors::StepDefinitionError.new("Argument mismatch calling #{step_klass_name}#perform. Check keyword arguments. Original error: #{e.message}", original_exception: e)
+          log_job_error err.message, step_id, workflow_id, e
+          error_info = { class: err.class.name, message: err.message, backtrace: e.backtrace }
+          orchestrator.step_failed(step_id, error_info)
+          raise err # Re-raise specific error
 
-            # Instantiate the retry handler.
-            handler = retry_handler_class.new(
-              repository: repo,
-              step_record: step_record,
-              error: e,
-              executions: self.executions,
-              user_step_klass: user_klass_for_handler,
-              notifier: notifier # Pass notifier for potential event publishing in handler
-            )
+        # --- NEW: Specific rescue for StepDefinitionError ---
+        rescue Yantra::Errors::StepDefinitionError => e
+            # This specifically catches errors from:
+            # 1. load_user_step_class failing to constantize (wrapped NameError)
+            # 2. Step initialization failing (wrapped ArgumentError)
+            # 3. ArgumentError during perform (wrapped above)
+            # 4. Direct LoadError/NameError (wrapped above)
+            log_job_error("Caught StepDefinitionError: #{e.message}. Step will be marked as failed.", step_id, workflow_id, e)
 
-            # --- Retry/Failure Decision ---
-            begin
-              # Let the handler decide the outcome (e.g., :retry, :failed, or raise for retry).
-              outcome = handler.handle_error!
-              log_method.call(:debug, "RetryHandler outcome: #{outcome.inspect}")
+            # Explicitly notify orchestrator about the failure
+            error_info = {
+              class: e.class.name,
+              message: e.message,
+              # Include original backtrace if available, otherwise the wrapper's
+              backtrace: e.original_exception&.backtrace || e.backtrace
+            }
+            orchestrator.step_failed(step_id, error_info) # Call step_failed directly
 
-              if outcome == :failed
-                # The handler decided the step has permanently failed and updated the record.
-                log_method.call(:debug, "Outcome is :failed. Notifying orchestrator step finished.")
-                # Double-check the state before notifying orchestrator.
-                final_record = repo.find_step(yantra_step_id)
-                if final_record&.state&.to_sym == Yantra::Core::StateMachine::FAILED
-                  # Tell orchestrator to process dependents/check workflow completion.
-                  orchestrator.step_finished(yantra_step_id)
-                else
-                  log_method.call(:warn, "RetryHandler indicated permanent failure, but step state is not 'failed'. State: #{final_record&.state}. Orchestrator#step_finished NOT called.")
-                end
-                # Do NOT re-raise the error; the job is considered handled (failed).
-              else
-                # Handler should have raised an error if retry is needed by ActiveJob.
-                # If it returns anything else, we assume retry is needed and re-raise original error.
-                log_method.call(:debug, "Outcome is NOT :failed. Re-raising error for background job system retry.")
-                raise e # Re-raise the original error 'e' to trigger ActiveJob retry.
-              end
+            # Re-raise the error for ActiveJob handling (e.g., mark job failed)
+            raise e
+        # --- END NEW BLOCK ---
 
-            # Rescue errors *from the handler itself*.
-            rescue => retry_handler_error
-              log_method.call(:error, "Error occurred within RetryHandler: #{retry_handler_error.class} - #{retry_handler_error.message}")
-              # If the handler raised something different than the original error, log it,
-              # but still raise the *original* error 'e' for ActiveJob's retry mechanism.
-              unless retry_handler_error.equal?(e)
-                log_method.call(:warn, "RetryHandler raised a different error than expected. Propagating original error '#{e.class}' for retry.")
-              end
-              # Raise the original error to let ActiveJob handle the retry based on it.
-              raise e
-            end # Inner begin/rescue for handler execution
-          end # Outer begin/rescue for perform execution
-        end # def perform
+        # --- Specific rescue for StepNotFound ---
+        rescue Yantra::Errors::StepNotFound => e
+          # This catches the StepNotFound raised specifically when the record isn't found after starting.
+          log_job_error("Caught StepNotFound: #{e.message}. Step will be marked as failed.", step_id, workflow_id, e)
+          # No need to call find_step again or invoke RetryHandler.
+          # Optionally notify orchestrator, though raising might suffice depending on AJ failure handling.
+          # error_info = { class: e.class.name, message: e.message }
+          # orchestrator.step_failed(step_id, error_info) # Consider if needed
+          raise e # Re-raise the error so ActiveJob handles it
+        # --- END StepNotFound BLOCK ---
+
+        # --- General Rescue for User Code Runtime Errors & Retries ---
+        rescue => e
+          # This block now catches errors from user_step_instance.perform that are not
+          # ArgumentError, OR other unexpected StandardErrors.
+          # It will *not* catch StepDefinitionError or StepNotFound.
+          log_job_error "Error performing user step code: #{e.class} - #{e.message}", step_id, workflow_id, e
+
+          # Re-fetch the record to get the latest state for RetryHandler
+          current_step_record = repository.find_step(step_id) # Fetch #2 - Justified here
+          unless current_step_record
+             # Handle the unlikely case where the step disappears *during* error handling
+             log_job_error "Step record #{step_id} not found after execution error!", step_id, workflow_id, e
+             # Cannot proceed with retry logic if record is gone, raise original error
+             raise e
+          end
+
+          # Load class again safely in case needed by handler (though unlikely for runtime errors)
+          user_klass = load_user_step_class(step_klass_name) rescue nil
+
+          # Instantiate RetryHandler
+          handler = Yantra::Worker::RetryHandler.new(
+            repository: repository,
+            step_record: current_step_record, # Use re-fetched record
+            error: e,
+            executions: executions, # ActiveJob's execution count (0-based) + 1
+            user_step_klass: user_klass,
+            notifier: notifier,
+            orchestrator: orchestrator
+          )
+
+          # Handle the error (retry or mark failed)
+          handler.handle_error! # This might call orchestrator.step_failed internally
+        end
 
         private
 
-        # Helper to process raw arguments from the database.
-        def process_arguments(raw_arguments, log_method)
-          arguments_hash = {}
-          if raw_arguments.is_a?(Hash)
-            arguments_hash = raw_arguments
-          elsif raw_arguments.is_a?(String) && !raw_arguments.empty?
-            begin
-              arguments_hash = JSON.parse(raw_arguments)
-              # Ensure it's a hash after parsing
-              arguments_hash = {} unless arguments_hash.is_a?(Hash)
-            rescue JSON::ParserError => json_error
-              log_method.call(:warn, "Failed to parse arguments JSON: #{json_error.message}. Using empty hash.")
-              arguments_hash = {}
-            end
-          elsif raw_arguments.nil?
-            arguments_hash = {} # Explicitly handle nil
-          else
-            log_method.call(:warn, "Unexpected argument type: #{raw_arguments.class}. Using empty hash.")
-            arguments_hash = {}
-          end
-          arguments_hash
+        # Helper to load the user's step class safely
+        def load_user_step_class(class_name)
+          class_name.constantize
+        rescue NameError => e
+          # Wrap NameError as our specific type
+          raise Yantra::Errors::StepDefinitionError.new("Class #{class_name} could not be loaded: #{e.message}", original_exception: e)
+        # Add rescue for LoadError just in case constantize raises it
+        rescue LoadError => e
+           raise Yantra::Errors::StepDefinitionError.new("Class file for #{class_name} could not be loaded: #{e.message}", original_exception: e)
         end
 
-        # Helper to symbolize argument keys.
-        def symbolize_arguments(arguments_hash, log_method)
-          # Use deep_symbolize_keys if available (handles nested hashes)
-          if arguments_hash.respond_to?(:deep_symbolize_keys)
-            begin
-              arguments_hash.deep_symbolize_keys
-            rescue => e
-              log_method.call(:warn, "deep_symbolize_keys failed: #{e.message}. Falling back to shallow symbolization.")
-              # Fallback to shallow symbolization on error
-              arguments_hash.transform_keys(&:to_sym) rescue {}
-            end
-          else
-            # Fallback to shallow symbolization if deep_symbolize_keys is not defined
-            arguments_hash.transform_keys(&:to_sym) rescue {}
-          end
+        # Accessor for Orchestrator instance (lazily initialized)
+        def orchestrator
+          @orchestrator ||= Yantra::Core::Orchestrator.new(
+              repository: repository(),
+              worker_adapter: worker_adapter(),
+              notifier: notifier()
+          )
         end
 
-      end # class StepJob
-    end # module ActiveJob
-  end # module Worker
-end # module Yantra
+        # Accessor for Repository instance (lazily initialized)
+        def repository
+          @repository ||= Yantra.repository
+        end
+
+        # Accessor for Notifier instance (lazily initialized)
+        def notifier
+           @notifier ||= Yantra.notifier
+        end
+
+        # Accessor for Worker Adapter instance (lazily initialized)
+        def worker_adapter
+           @worker_adapter ||= Yantra.worker_adapter
+        end
+
+        # Logging helpers with context
+        def log_job_info(message, step_id, workflow_id)
+          Yantra.logger&.info { "[StepJob][#{job_id}] W:#{workflow_id} S:#{step_id} - #{message}" }
+        end
+        def log_job_warn(message, step_id, workflow_id)
+          Yantra.logger&.warn { "[StepJob][#{job_id}] W:#{workflow_id} S:#{step_id} - #{message}" }
+        end
+        def log_job_error(message, step_id, workflow_id, error = nil)
+          full_message = "[StepJob][#{job_id}] W:#{workflow_id} S:#{step_id} - ERROR: #{message}"
+          # Safely access backtrace, ensuring it's an array before joining
+          backtrace_str = error&.backtrace.is_a?(Array) ? error.backtrace.join("\n") : "No backtrace available"
+          full_message += "\nException: #{error.class}: #{error.message}\nBacktrace:\n#{backtrace_str}" if error
+          Yantra.logger&.error { full_message }
+        end
+
+      end
+    end
+  end
+end

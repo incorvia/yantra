@@ -117,7 +117,7 @@ class StepTest < Minitest::Test
   def test_parent_outputs_fetches_and_returns_output_for_one_parent
     parent_id = SecureRandom.uuid
     expected_output = { "some_key" => "some_value" }
-    step = @klass.new(workflow_id: @workflow_id, klass: @klass, parent_ids: [parent_id])
+    step = @klass.new(workflow_id: @workflow_id, klass: @klass, parent_ids: [parent_id], repository: @mock_repo)
     @mock_repo.expect(:fetch_step_outputs, { parent_id => expected_output }, [[parent_id]])
     step.stub(:repository, @mock_repo) do
       result = step.parent_outputs
@@ -125,25 +125,40 @@ class StepTest < Minitest::Test
     end
   end
 
-  def test_parent_outputs_fetches_and_returns_outputs_for_multiple_parents
+   def test_parent_outputs_fetches_and_returns_outputs_for_multiple_parents
     parent_id_1 = SecureRandom.uuid
     parent_id_2 = SecureRandom.uuid
     output_1 = { value: 1 }
-    output_2 = nil
+    output_2 = nil # If fetch_step_outputs returns nil value for a key
     parent_ids = [parent_id_1, parent_id_2]
-    expected_result = { parent_id_1 => output_1, parent_id_2 => output_2 }
-    step = @klass.new(workflow_id: @workflow_id, klass: @klass, parent_ids: parent_ids)
+    # Adjust expected result based on how fetch_step_outputs handles nil output
+    expected_result = { parent_id_1.to_s => output_1, parent_id_2.to_s => {} } # Assuming nil becomes {}
+
+    # --- FIX: Inject repository during initialization ---
+    step = @klass.new(
+      id: SecureRandom.uuid, # Add step's own ID if needed
+      workflow_id: @workflow_id,
+      klass: @klass,
+      parent_ids: parent_ids,
+      repository: @mock_repo # Pass mock repository here
+    )
+    # --- END FIX ---
+
+    # Set expectation directly on the injected mock repo
     @mock_repo.expect(:fetch_step_outputs, expected_result, [parent_ids])
-    step.stub(:repository, @mock_repo) do
-      result = step.parent_outputs
-      assert_equal(expected_result, result)
-    end
+
+    # Call method directly
+    result = step.parent_outputs
+    assert_equal(expected_result, result)
+
+    @mock_repo.verify # Ensure expectation was met
   end
+
 
   def test_parent_outputs_lazy_loads_and_caches_result
     parent_id = SecureRandom.uuid
     expected_output = { value: "cached" }
-    step = @klass.new(workflow_id: @workflow_id, klass: @klass, parent_ids: [parent_id])
+    step = @klass.new(workflow_id: @workflow_id, klass: @klass, parent_ids: [parent_id], repository: @mock_repo)
     @mock_repo.expect(:fetch_step_outputs, { parent_id => expected_output }, [[parent_id]])
     step.stub(:repository, @mock_repo) do
       result1 = step.parent_outputs # First call
