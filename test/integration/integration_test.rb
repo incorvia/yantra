@@ -463,8 +463,8 @@ module Yantra
          consumer_id = consumer_record.id
          # Query using the ACTUAL column names from your schema.rb
          dependency_exists = Yantra::Persistence::ActiveRecord::StepDependencyRecord.exists?(
-             step_id: consumer_id,             # This column holds the parent ID
-             depends_on_step_id: producer_id   # This column holds the dependent ID
+             step_id: consumer_id,             # This column holds the child ID
+             depends_on_step_id: producer_id   # This column holds the parent ID
          )
          assert dependency_exists, "DATABASE CHECK: Dependency record from Producer (#{producer_id}) to Consumer (#{consumer_id}) was not created."
          # --- END CHECK ---
