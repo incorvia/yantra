@@ -108,47 +108,6 @@ module Yantra
       return @_parent_outputs_cache
     end
 
-
-    # def parent_outputs
-    #   # Return from cache if already loaded
-    #   return @_parent_outputs_cache unless @_parent_outputs_cache.nil?
-    #
-    #   # If no parent IDs were provided, there's nothing to fetch
-    #   if @parent_ids.empty?
-    #     @_parent_outputs_cache = {}
-    #     return @_parent_outputs_cache
-    #   end
-    #
-    #   # Fetch outputs from the repository using the stored parent IDs
-    #   fetched_outputs = nil # Initialize
-    #   begin
-    #     # Use the injected repository instance FIRST, fallback to global lookup
-    #     repo = repository # Calls the helper method below
-    #     unless repo
-    #       # Log using the logger helper method
-    #       logger.error("Yantra persistence adapter not configured while trying to fetch parent outputs for step #{id}.")
-    #       @_parent_outputs_cache = {} # Cache empty hash on error
-    #       return @_parent_outputs_cache
-    #     end
-    #
-    #     # Call the repository method to get outputs for all parents in one go
-    #     fetched_outputs = repo.fetch_step_outputs(@parent_ids)
-    #
-    #     # Cache the result (use || {} to ensure cache is always a hash)
-    #     @_parent_outputs_cache = fetched_outputs || {}
-    #
-    #   rescue => e
-    #     # Log error and cache an empty hash to prevent retries within the same instance
-    #     logger.error("Error fetching parent outputs for step #{id}: #{e.message}")
-    #     logger.error(e.backtrace.join("\n"))
-    #     @_parent_outputs_cache = {}
-    #   end
-    #
-    #   @_parent_outputs_cache
-    # end
-
-    # --- Default Configuration ---
-
     # Default queue name derived from the class name.
     def default_queue_name
       # Use @klass instance variable directly for safety during initialization
