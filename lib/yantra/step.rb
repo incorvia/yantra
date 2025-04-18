@@ -65,17 +65,17 @@ module Yantra
         # --- CASE 2: Need to look up parent IDs dynamically ---
         Yantra.logger&.debug { "[Step#parent_outputs] Attempting dynamic parent ID lookup for step: #{@id.inspect}"} if Yantra.logger
         # Check prerequisites for dynamic lookup
-        unless @id && @repository && @repository.respond_to?(:get_step_dependents)
-          Yantra.logger&.warn { "[Step#parent_outputs] Cannot fetch parent IDs dynamically for step #{@id.inspect}: missing step ID or repository does not support get_step_dependents."} if Yantra.logger
+        unless @id && @repository && @repository.respond_to?(:get_parent_ids)
+          Yantra.logger&.warn { "[Step#parent_outputs] Cannot fetch parent IDs dynamically for step #{@id.inspect}: missing step ID or repository does not support get_parent_ids."} if Yantra.logger
           return @_parent_outputs_cache = {} # Cannot proceed
         end
 
         # Perform dynamic lookup
         begin
-          ids_to_fetch = @repository.get_step_dependents(@id)
+          ids_to_fetch = @repository.get_parent_ids(@id)
           Yantra.logger&.debug { "[Step#parent_outputs] Dynamically found parent IDs: #{ids_to_fetch.inspect} for step #{@id.inspect}" } if Yantra.logger
         rescue => e
-          Yantra.logger&.error { "[Step#parent_outputs] Error fetching parent IDs using get_step_dependents for step #{@id.inspect}: #{e.message}" } if Yantra.logger
+          Yantra.logger&.error { "[Step#parent_outputs] Error fetching parent IDs using get_parent_ids for step #{@id.inspect}: #{e.message}" } if Yantra.logger
           return @_parent_outputs_cache = {}
         end
       end
