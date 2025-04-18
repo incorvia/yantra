@@ -106,7 +106,7 @@ module Yantra
       @step_lookup[step_ref_name] = step # Store using the unique name
 
       # Resolve dependencies based on their DSL reference names
-      dependency_ids = Array(after).map do |dep_ref|
+      dependency_ids = Array(after).flatten.map do |dep_ref|
         dep_step = find_step_by_ref(dep_ref.to_s)
         unless dep_step
           raise Yantra::Errors::DependencyNotFound, "Dependency '#{dep_ref}' not found for step '#{step_ref_name}'."

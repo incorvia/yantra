@@ -49,42 +49,103 @@ module Yantra
     # @return [Hash{String => Object}] A hash mapping parent step IDs to their outputs.
     #   Returns an empty hash if there are no parents or if outputs couldn't be fetched.
     def parent_outputs
-      # Return from cache if already loaded
-      return @_parent_outputs_cache unless @_parent_outputs_cache.nil?
+      # 1. Check cache first
+      # Use defined? check for cache instance variable to avoid errors if not initialized
+      return @_parent_outputs_cache if defined?(@_parent_outputs_cache) && !@_parent_outputs_cache.nil?
 
-      # If no parent IDs were provided, there's nothing to fetch
-      if @parent_ids.empty?
-        @_parent_outputs_cache = {}
-        return @_parent_outputs_cache
-      end
+      ids_to_fetch = [] # Initialize
 
-      # Fetch outputs from the repository using the stored parent IDs
-      fetched_outputs = nil # Initialize
-      begin
-        # Use the injected repository instance FIRST, fallback to global lookup
-        repo = repository # Calls the helper method below
-        unless repo
-          # Log using the logger helper method
-          logger.error("Yantra persistence adapter not configured while trying to fetch parent outputs for step #{id}.")
-          @_parent_outputs_cache = {} # Cache empty hash on error
-          return @_parent_outputs_cache
+      # 2. Determine which IDs to use: passed-in (@parent_ids) or dynamically looked up
+      if @parent_ids && !@parent_ids.empty?
+        # --- CASE 1: Parent IDs were provided at initialization ---
+        # Use the IDs passed during 'new'. No dynamic lookup needed.
+        Yantra.logger&.debug { "[Step#parent_outputs] Using pre-provided parent_ids for step #{@id.inspect}: #{@parent_ids.inspect}"} if Yantra.logger
+        ids_to_fetch = @parent_ids
+      else
+        # --- CASE 2: Need to look up parent IDs dynamically ---
+        Yantra.logger&.debug { "[Step#parent_outputs] Attempting dynamic parent ID lookup for step: #{@id.inspect}"} if Yantra.logger
+        # Check prerequisites for dynamic lookup
+        unless @id && @repository && @repository.respond_to?(:get_step_dependents)
+          Yantra.logger&.warn { "[Step#parent_outputs] Cannot fetch parent IDs dynamically for step #{@id.inspect}: missing step ID or repository does not support get_step_dependents."} if Yantra.logger
+          return @_parent_outputs_cache = {} # Cannot proceed
         end
 
-        # Call the repository method to get outputs for all parents in one go
-        fetched_outputs = repo.fetch_step_outputs(@parent_ids)
-
-        # Cache the result (use || {} to ensure cache is always a hash)
-        @_parent_outputs_cache = fetched_outputs || {}
-
-      rescue => e
-        # Log error and cache an empty hash to prevent retries within the same instance
-        logger.error("Error fetching parent outputs for step #{id}: #{e.message}")
-        logger.error(e.backtrace.join("\n"))
-        @_parent_outputs_cache = {}
+        # Perform dynamic lookup
+        begin
+          ids_to_fetch = @repository.get_step_dependents(@id)
+          Yantra.logger&.debug { "[Step#parent_outputs] Dynamically found parent IDs: #{ids_to_fetch.inspect} for step #{@id.inspect}" } if Yantra.logger
+        rescue => e
+          Yantra.logger&.error { "[Step#parent_outputs] Error fetching parent IDs using get_step_dependents for step #{@id.inspect}: #{e.message}" } if Yantra.logger
+          return @_parent_outputs_cache = {}
+        end
       end
 
-      @_parent_outputs_cache
+      # 3. If no parent IDs found (either passed-in or looked up), return empty hash
+      if ids_to_fetch.nil? || ids_to_fetch.empty?
+        Yantra.logger&.debug { "[Step#parent_outputs] No parent IDs to fetch outputs for (step #{@id.inspect})." } if Yantra.logger
+        return @_parent_outputs_cache = {}
+      end
+
+      # 4. Fetch outputs for the determined parent IDs
+      # Check repository and method existence
+      unless @repository && @repository.respond_to?(:fetch_step_outputs)
+        Yantra.logger&.error { "[Step#parent_outputs] Repository unavailable or does not support fetch_step_outputs for step #{@id.inspect}."}
+        return @_parent_outputs_cache = {}
+      end
+
+      fetched_outputs = {}
+      begin
+        # Call the method expected by the tests
+        fetched_outputs = @repository.fetch_step_outputs(ids_to_fetch)
+        Yantra.logger&.debug { "[Step#parent_outputs] fetch_step_outputs returned: #{fetched_outputs.inspect} for step #{@id.inspect}" } if Yantra.logger
+      rescue => e
+        Yantra.logger&.error { "[Step#parent_outputs] Error fetching outputs for parent IDs #{ids_to_fetch.inspect} (step #{@id.inspect}): #{e.message}" } if Yantra.logger
+        return @_parent_outputs_cache = {}
+      end
+
+      # 5. Cache and return the result (ensure it's a hash)
+      @_parent_outputs_cache = fetched_outputs || {}
+      return @_parent_outputs_cache
     end
+
+
+    # def parent_outputs
+    #   # Return from cache if already loaded
+    #   return @_parent_outputs_cache unless @_parent_outputs_cache.nil?
+    #
+    #   # If no parent IDs were provided, there's nothing to fetch
+    #   if @parent_ids.empty?
+    #     @_parent_outputs_cache = {}
+    #     return @_parent_outputs_cache
+    #   end
+    #
+    #   # Fetch outputs from the repository using the stored parent IDs
+    #   fetched_outputs = nil # Initialize
+    #   begin
+    #     # Use the injected repository instance FIRST, fallback to global lookup
+    #     repo = repository # Calls the helper method below
+    #     unless repo
+    #       # Log using the logger helper method
+    #       logger.error("Yantra persistence adapter not configured while trying to fetch parent outputs for step #{id}.")
+    #       @_parent_outputs_cache = {} # Cache empty hash on error
+    #       return @_parent_outputs_cache
+    #     end
+    #
+    #     # Call the repository method to get outputs for all parents in one go
+    #     fetched_outputs = repo.fetch_step_outputs(@parent_ids)
+    #
+    #     # Cache the result (use || {} to ensure cache is always a hash)
+    #     @_parent_outputs_cache = fetched_outputs || {}
+    #
+    #   rescue => e
+    #     # Log error and cache an empty hash to prevent retries within the same instance
+    #     logger.error("Error fetching parent outputs for step #{id}: #{e.message}")
+    #     logger.error(e.backtrace.join("\n"))
+    #     @_parent_outputs_cache = {}
+    #   end
+    #
+    #   @_parent_outputs_cache
+    # end
 
     # --- Default Configuration ---
 

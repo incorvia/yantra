@@ -2,6 +2,7 @@
 
 require "test_helper"
 require "ostruct" # For mock objects
+require "securerandom" # For UUIDs
 
 # Explicitly require files under test and dependencies
 require "yantra/worker/retry_handler"
@@ -10,6 +11,8 @@ require "yantra/errors"
 require "yantra/step" # Need base class for yantra_max_attempts
 require "yantra/events/notifier_interface"
 require "yantra/persistence/repository_interface"
+# --- ADDED: Require orchestrator for mocking ---
+require "yantra/core/orchestrator"
 
 # Dummy Step class for testing max_attempts override
 class RetryStepWithOverride < Yantra::Step
@@ -28,11 +31,13 @@ module Yantra
 
       # Setup common instance variables before each test
       def setup
-        # Mock repository and notifier
+        # Mock repository and notifier using Minitest::Mock
         @mock_repo = Minitest::Mock.new
         @mock_notifier = Minitest::Mock.new
+        # --- ADDED: Mock orchestrator ---
+        @mock_orchestrator = Minitest::Mock.new
 
-        # Mock step record data
+        # Mock step record data using OpenStruct
         @step_id = SecureRandom.uuid
         @workflow_id = SecureRandom.uuid
         @mock_step_record = OpenStruct.new(
@@ -46,71 +51,76 @@ module Yantra
         # Mock error
         @mock_error = StandardError.new("Something went wrong")
         @mock_error.set_backtrace(["line 1", "line 2"])
+
+        # Stub global configuration if needed (using Mocha for this example)
+        # If you have a different way of managing config in tests, adjust accordingly
+        Yantra.stubs(:configuration).returns(
+          stub(
+            default_step_options: { retries: 3 }, # Default: 3 retries = 4 attempts
+            default_max_step_attempts: nil
+          )
+        )
       end
 
       def teardown
         # Verify mocks after each test
         @mock_repo.verify
         @mock_notifier.verify
-        # Reset global config if needed
-        Yantra::Configuration.reset! if defined?(Yantra::Configuration) && Yantra::Configuration.respond_to?(:reset!)
+        # --- ADDED: Verify orchestrator mock ---
+        @mock_orchestrator.verify
+
+        # Unstub global config if stubbed with Mocha
+        Yantra.unstub(:configuration)
+        # Reset global config if needed (using your pattern)
+        # Yantra::Configuration.reset! if defined?(Yantra::Configuration) && Yantra::Configuration.respond_to?(:reset!)
       end
 
       # --- Test handle_error! when max attempts are reached ---
-      def test_handle_error_fails_permanently_and_publishes_event
-        # Stub repository access for this test
+      def test_handle_error_fails_permanently_and_calls_orchestrator
+        # Stub repository access for this test (using Mocha style here, adjust if needed)
         Yantra.stub(:repository, @mock_repo) do
           # Arrange
           max_attempts = 4 # Calculated based on default retries = 3
           executions = 4   # Simulate reaching max attempts
-          finished_at_time = Time.now # Capture time for expectation
+          finished_at_time = Time.now # Capture time for expectation (though not used in expect)
           formatted_error = { class: "StandardError", message: "Something went wrong", backtrace: ["line 1", "line 2"] }
 
+          # --- UPDATED: Pass orchestrator mock ---
           handler = RetryHandler.new(
             repository: @mock_repo,
             step_record: @mock_step_record,
             error: @mock_error,
             executions: executions,
             user_step_klass: RetryStepWithoutOverride,
-            notifier: @mock_notifier
+            notifier: @mock_notifier,
+            orchestrator: @mock_orchestrator # Pass the mock
           )
 
-          Time.stub :current, finished_at_time do # Freeze time
+          # Freeze time if precise time matching was needed (removed from expectations below)
+          # Time.stub :current, finished_at_time do
 
-            # --- Expectations ---
-            # --- UPDATED: Correct expectation for update_step_attributes ---
-            @mock_repo.expect(
-              :update_step_attributes,
-              true, # Assume update succeeds
-              [ # Positional arguments array
-                @step_id, # arg 1
-                { state: Yantra::Core::StateMachine::FAILED.to_s, finished_at: finished_at_time } # arg 2 (attrs hash)
-              ],
-              # Keyword arguments hash (placed after positional args array)
-              expected_old_state: :running
-            )
-            # --- END UPDATE ---
+          # --- Expectations ---
+          # Expect orchestrator#step_failed to be called
+          # Use a block to validate the arguments passed
+          @mock_orchestrator.expect(:step_failed, nil) do |arg_step_id, arg_error_info|
+              arg_step_id == @step_id &&
+              arg_error_info[:class] == formatted_error[:class] &&
+              arg_error_info[:message] == formatted_error[:message] &&
+              arg_error_info[:backtrace] == formatted_error[:backtrace]
+          end
 
-            @mock_repo.expect(:record_step_error, formatted_error, [@step_id, @mock_error])
-            @mock_repo.expect(:set_workflow_has_failures_flag, true, [@workflow_id])
-            @mock_notifier.expect(:publish, nil) do |event_name, payload|
-               event_name == 'yantra.step.failed' && payload[:step_id] == @step_id &&
-               payload[:workflow_id] == @workflow_id &&
-               payload[:klass] == @mock_step_record.klass &&
-               payload[:state] == Yantra::Core::StateMachine::FAILED &&
-               payload[:finished_at] == finished_at_time &&
-               payload[:error] == formatted_error &&
-               payload[:retries] == @mock_step_record.retries
-            end
-            # --- End Expectations ---
+          # --- REMOVED: Notifier expectation for :failed event ---
+          # This is now handled within the (mocked) orchestrator's step_failed method
+          # @mock_notifier.expect(:publish, nil) do |event_name, payload| ... end
+          # --- End Expectations ---
 
-            # Act
-            result = handler.handle_error!
+          # Act
+          result = handler.handle_error!
 
-            # Assert
-            assert_equal :failed, result
+          # Assert
+          assert_equal :failed, result
 
-          end # End Time.stub
+          # end # End Time.stub (if used)
         end # --- END Yantra.stub block ---
       end
 
@@ -121,19 +131,23 @@ module Yantra
           # Arrange
           max_attempts = 4 # Assuming default retries = 3
           executions = 1   # First failure, retries remaining
+
+          # --- UPDATED: Pass orchestrator mock ---
           handler = RetryHandler.new(
             repository: @mock_repo,
             step_record: @mock_step_record,
             error: @mock_error,
             executions: executions,
             user_step_klass: RetryStepWithoutOverride,
-            notifier: @mock_notifier
+            notifier: @mock_notifier,
+            orchestrator: @mock_orchestrator # Pass the mock
           )
 
           # --- Expectations ---
           @mock_repo.expect(:increment_step_retries, true, [@step_id])
           @mock_repo.expect(:record_step_error, true, [@step_id, @mock_error])
-          # Notifier should NOT be called
+          # No expectation set for @mock_orchestrator.step_failed,
+          # so verify() will fail if it *is* called.
           # --- End Expectations ---
 
           # Act & Assert
@@ -148,26 +162,55 @@ module Yantra
       # --- Test max attempts calculation ---
       def test_get_max_attempts_uses_step_override
          Yantra.stub(:repository, @mock_repo) do
-           @mock_step_record.retries = 1
-           handler = RetryHandler.new(repository: @mock_repo, step_record: @mock_step_record, error: @mock_error, executions: 1, user_step_klass: RetryStepWithOverride, notifier: @mock_notifier)
-           assert_equal 2, handler.send(:get_max_attempts)
-         end
+            @mock_step_record.retries = 1
+            # --- UPDATED: Pass orchestrator mock ---
+            handler = RetryHandler.new(
+                repository: @mock_repo, step_record: @mock_step_record,
+                error: @mock_error, executions: 1,
+                user_step_klass: RetryStepWithOverride, notifier: @mock_notifier,
+                orchestrator: @mock_orchestrator
+            )
+            assert_equal 2, handler.send(:get_max_attempts)
+          end
       end
 
       def test_get_max_attempts_uses_global_config
          Yantra.stub(:repository, @mock_repo) do
-           Yantra.configure { |c| c.default_step_options[:retries] = 4 } # 4 retries = 5 attempts
-           handler = RetryHandler.new(repository: @mock_repo, step_record: @mock_step_record, error: @mock_error, executions: 1, user_step_klass: RetryStepWithoutOverride, notifier: @mock_notifier)
-           assert_equal 5, handler.send(:get_max_attempts)
-         end
+            # Use Mocha stubbing for global config as before, adjust if needed
+            Yantra.stubs(:configuration).returns(
+              stub(
+                default_step_options: { retries: 4 }, # 4 retries = 5 attempts
+                default_max_step_attempts: nil
+              )
+            )
+            # --- UPDATED: Pass orchestrator mock ---
+            handler = RetryHandler.new(
+                repository: @mock_repo, step_record: @mock_step_record,
+                error: @mock_error, executions: 1,
+                user_step_klass: RetryStepWithoutOverride, notifier: @mock_notifier,
+                orchestrator: @mock_orchestrator
+            )
+            assert_equal 5, handler.send(:get_max_attempts)
+          end
       end
 
        def test_get_max_attempts_uses_default_if_no_config
          Yantra.stub(:repository, @mock_repo) do
-           Yantra.configure { |c| c.default_step_options.delete(:retries) }
-           handler = RetryHandler.new(repository: @mock_repo, step_record: @mock_step_record, error: @mock_error, executions: 1, user_step_klass: RetryStepWithoutOverride, notifier: @mock_notifier)
-           assert_equal 1, handler.send(:get_max_attempts)
-         end
+            Yantra.stubs(:configuration).returns(
+              stub(
+                default_step_options: {}, # No retries defined
+                default_max_step_attempts: nil
+              )
+            )
+            # --- UPDATED: Pass orchestrator mock ---
+            handler = RetryHandler.new(
+                repository: @mock_repo, step_record: @mock_step_record,
+                error: @mock_error, executions: 1,
+                user_step_klass: RetryStepWithoutOverride, notifier: @mock_notifier,
+                orchestrator: @mock_orchestrator
+            )
+            assert_equal 1, handler.send(:get_max_attempts) # Default attempts = 1
+          end
        end
 
     end # class RetryHandlerTest

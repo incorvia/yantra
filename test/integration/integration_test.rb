@@ -44,6 +44,7 @@ class IntegrationJobRetry < Yantra::Step
 
   def perform(msg: "Retry")
     # Use step_id if available, otherwise generate temp key for test setup phase if needed
+    puts "DEBUG: Inside IntegrationJobRetry#perform. self.id is: #{self.id.inspect}"
     attempt_key = self.id || SecureRandom.uuid
     @@retry_test_attempts[attempt_key] = @@retry_test_attempts[attempt_key].to_i + 1
     current_attempt = @@retry_test_attempts[attempt_key]
@@ -51,7 +52,6 @@ class IntegrationJobRetry < Yantra::Step
     if current_attempt < 2
       raise StandardError, "Integration job failed on attempt #{current_attempt}!"
     else
-
       { output_retry: "Success on attempt #{current_attempt}" }
     end
   end
@@ -456,6 +456,18 @@ module Yantra
          consumer_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == "PipeConsumer" }
          refute_nil producer_record
          refute_nil consumer_record
+
+
+            # --- MODIFY THIS CHECK to use correct column names ---
+         producer_id = producer_record.id
+         consumer_id = consumer_record.id
+         # Query using the ACTUAL column names from your schema.rb
+         dependency_exists = Yantra::Persistence::ActiveRecord::StepDependencyRecord.exists?(
+             step_id: consumer_id,             # This column holds the parent ID
+             depends_on_step_id: producer_id   # This column holds the dependent ID
+         )
+         assert dependency_exists, "DATABASE CHECK: Dependency record from Producer (#{producer_id}) to Consumer (#{consumer_id}) was not created."
+         # --- END CHECK ---
 
          # Act 1: Start
          Client.start_workflow(workflow_id)

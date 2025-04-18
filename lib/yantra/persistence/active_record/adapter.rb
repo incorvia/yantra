@@ -199,11 +199,11 @@ module Yantra
         end
 
         def get_step_dependencies(step_id)
-          StepDependencyRecord.where(step_id: step_id).pluck(:depends_on_step_id)
+          StepDependencyRecord.where(depends_on_step_id: step_id).pluck(:step_id)
         end
 
         def get_step_dependents(step_id)
-          StepDependencyRecord.where(depends_on_step_id: step_id).pluck(:step_id)
+          StepDependencyRecord.where(step_id: step_id).pluck(:depends_on_step_id)
         end
 
         def get_step_dependencies_multi(step_ids)

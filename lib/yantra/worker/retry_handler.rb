@@ -20,6 +20,7 @@ module Yantra
         @user_step_klass = user_step_klass
         @notifier = notifier # Store injected notifier
         @orchestrator = orchestrator # Store injected orchestrator
+        @repository = repository
 
         # Optional: Validate orchestrator type
         # unless @orchestrator&.is_a?(Yantra::Core::Orchestrator)
