@@ -98,21 +98,23 @@ module Yantra
       end
 
       # Checks dependents of a finished step and enqueues or cancels them.
+            # lib/yantra/core/orchestrator.rb (within the class)
+      private
+
+      # Checks dependents of a finished step and enqueues or cancels them.
+      # Optimized to fetch dependencies and parent states in bulk.
       def process_dependents(finished_step_id, finished_step_state)
-        # Fetch IDs of steps that depend on the one that just finished
         dependents = repository.get_step_dependents(finished_step_id)
-        return if dependents.empty? # No dependents, nothing to do
+        return if dependents.empty?
 
         Yantra.logger.debug { "[Orchestrator] Processing dependents for finished step #{finished_step_id} (state: #{finished_step_state}): #{dependents}" } if Yantra.logger
 
-        # --- Optimization Part 1: Bulk Fetch Dependencies ---
+        # --- Get Parent IDs for all dependents ---
         parent_map = {} # Store { dependent_id => [parent_ids] }
         all_parent_ids_needed = []
-        # Check if the repository supports bulk fetching dependencies
         if repository.respond_to?(:get_step_dependencies_multi)
           parent_map = repository.get_step_dependencies_multi(dependents)
-          # Ensure all dependents are keys in the map, even if they have no parents
-          dependents.each { |dep_id| parent_map[dep_id] ||= [] }
+          dependents.each { |dep_id| parent_map[dep_id] ||= [] } # Ensure all dependents have an entry
           all_parent_ids_needed = parent_map.values.flatten.uniq
         else
           # Fallback to N+1 if adapter doesn't support bulk fetch
@@ -124,66 +126,73 @@ module Yantra
           end
           all_parent_ids_needed.uniq!
         end
-        # --- End Optimization Part 1 ---
 
-        # --- Optimization Part 2: Bulk Fetch Parent States ---
-        parent_states_hash = {}
-        if all_parent_ids_needed.any? && repository.respond_to?(:fetch_step_states)
-           parent_states_hash = repository.fetch_step_states(all_parent_ids_needed)
+        # --- Bulk Fetch States for ALL relevant steps (parents AND dependents) ---
+        all_states_hash = {}
+        ids_to_fetch_states = (dependents + all_parent_ids_needed).uniq
+        if ids_to_fetch_states.any? && repository.respond_to?(:fetch_step_states)
+           all_states_hash = repository.fetch_step_states(ids_to_fetch_states)
         else
-           Yantra.logger.warn {"[Orchestrator] Repository does not support fetch_step_states, readiness check might be inefficient."} if Yantra.logger && all_parent_ids_needed.any?
+           Yantra.logger.warn {"[Orchestrator] Repository does not support fetch_step_states, readiness check might be inefficient."} if Yantra.logger && ids_to_fetch_states.any?
            # Fallback logic within is_ready_to_start? will handle this
         end
-        # --- End Optimization Part 2 ---
 
         # --- Process each dependent ---
         dependents.each do |dep_id|
           if finished_step_state == StateMachine::SUCCEEDED
-            # Pass the specific parents for this dependent (from parent_map)
-            # and the hash containing all potentially relevant parent states
-            parents_for_dep = parent_map.fetch(dep_id, []) # Use fetch with default
-            if is_ready_to_start?(dep_id, parents_for_dep, parent_states_hash)
+            parents_for_dep = parent_map.fetch(dep_id, [])
+            # Pass the hash containing states for dependents AND parents
+            if is_ready_to_start?(dep_id, parents_for_dep, all_states_hash)
               enqueue_step(dep_id)
             else
                Yantra.logger.debug { "[Orchestrator] Dependent #{dep_id} not ready yet." } if Yantra.logger
             end
           else # Finished step failed or was cancelled
-            cancel_downstream_pending(dep_id)
+            # Pass the state hash so cancel_downstream doesn't need to fetch state again
+            cancel_downstream_pending(dep_id, all_states_hash)
           end
         end
       end
 
+      def is_ready_to_start?(step_id, parent_ids, all_states_hash)
+        # Check dependent's state from the pre-fetched hash
+        step_state = all_states_hash[step_id]
+        # Must exist in hash and be pending
+        return false unless step_state == StateMachine::PENDING.to_s
 
-      # Checks if a given step is ready to start
-      def is_ready_to_start?(step_id, parent_ids, parent_states_hash)
-        step = repository.find_step(step_id)
-        return false unless step && step.state.to_sym == StateMachine::PENDING
-        return true if parent_ids.empty?
+        # Check parent states using the pre-fetched hash
+        return true if parent_ids.empty? # No dependencies, it's ready
+
         all_succeeded = parent_ids.all? do |parent_id|
-          state = parent_states_hash[parent_id]
-          unless state
-             Yantra.logger.debug {"[Orchestrator#is_ready_to_start?] Falling back to individual fetch for parent #{parent_id}"} if Yantra.logger
-             parent_step = repository.find_step(parent_id)
-             state = parent_step&.state
-          end
+          state = all_states_hash[parent_id]
+          # If a parent state is missing from the hash OR not succeeded, dependent is not ready
           state == StateMachine::SUCCEEDED.to_s
         end
+
         all_succeeded
       end
 
       # Recursively cancels downstream steps that are pending.
-      def cancel_downstream_pending(step_id)
-        step = repository.find_step(step_id)
-        return unless step && step.state.to_sym == StateMachine::PENDING
+      def cancel_downstream_pending(step_id, all_states_hash = {})
+        puts "--- DEBUG: Entering cancel_downstream_pending for #{step_id}" # DEBUG
+        step_state = all_states_hash[step_id]
+        should_cancel = false
+        if step_state == StateMachine::PENDING.to_s
+           should_cancel = true
+        elsif step_state.nil? # State not pre-fetched, fetch individually
+           step = repository.find_step(step_id)
+           should_cancel = (step && step.state.to_sym == StateMachine::PENDING)
+        end
+        return unless should_cancel
+
         Yantra.logger.debug { "[Orchestrator] Recursively cancelling pending step #{step_id}" } if Yantra.logger
         update_success = repository.update_step_attributes(step_id, { state: StateMachine::CANCELLED.to_s, finished_at: Time.current }, expected_old_state: StateMachine::PENDING)
-        if update_success
-          begin; cancelled_step_record = repository.find_step(step_id); payload = { step_id: step_id, workflow_id: cancelled_step_record&.workflow_id, klass: cancelled_step_record&.klass }; @notifier&.publish('yantra.step.cancelled', payload); rescue => e; Yantra.logger.error { "[Orchestrator] Failed to publish yantra.step.cancelled event during cascade for #{step_id}: #{e.message}" } if Yantra.logger; end
-        else
-           Yantra.logger.warn { "[Orchestrator] Failed to update state to cancelled for downstream step #{step_id} during cascade." } if Yantra.logger
-           return
-        end
-        repository.get_step_dependents(step_id).each { |dep_id| cancel_downstream_pending(dep_id) }
+        if update_success; begin; cancelled_step_record = repository.find_step(step_id); payload = { step_id: step_id, workflow_id: cancelled_step_record&.workflow_id, klass: cancelled_step_record&.klass }; @notifier&.publish('yantra.step.cancelled', payload); rescue => e; Yantra.logger.error { "[Orchestrator] Failed to publish yantra.step.cancelled event during cascade for #{step_id}: #{e.message}" } if Yantra.logger; end; else; Yantra.logger.warn { "[Orchestrator] Failed to update state to cancelled for downstream step #{step_id} during cascade." } if Yantra.logger; return; end
+        repository.get_step_dependents(step_id).each { |dep_id| cancel_downstream_pending(dep_id, all_states_hash) }
+        puts "--- DEBUG: Exiting cancel_downstream_pending for #{step_id}" # DEBUG
+      rescue => e
+        puts "--- DEBUG: ERROR inside cancel_downstream_pending(#{step_id}): #{e.class} - #{e.message}\n#{e.backtrace.first(5).join("\n")}" # DEBUG
+        raise e
       end
 
       # Checks if a workflow has completed and updates its state.
