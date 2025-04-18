@@ -23,11 +23,13 @@ class PerfStartJob; end unless defined?(PerfStartJob)
 class PerfParallelJob; end unless defined?(PerfParallelJob)
 class PerfFinalJob; end unless defined?(PerfFinalJob)
 
-class OrchestratorPerfTest < ActiveSupport::TestCase # Or Minitest::Test
+class OrchestratorPerfTest < YantraActiveRecordTestCase  # Or Minitest::Test
   # Consider using database cleaner or transactions if configured in test_helper
   # self.use_transactional_tests = true
 
   def setup
+    super
+
     # --- Use REAL Repository, Mock Worker ---
     @repository = Yantra::Persistence::ActiveRecord::Adapter.new
     @worker_adapter = mock("stub_worker_adapter") # Mock worker
@@ -71,6 +73,8 @@ class OrchestratorPerfTest < ActiveSupport::TestCase # Or Minitest::Test
 
     # Standard Mocha teardown
     Mocha::Mockery.instance.teardown
+
+    super
   end
 
   # --- Test 1: Fan-Out Performance ---
