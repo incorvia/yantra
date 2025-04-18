@@ -79,7 +79,7 @@ module Yantra
         notifier.stubs(:is_a?).with(Yantra::Events::NotifierInterface).returns(true)
 
         # Stub features used in optimized paths
-        repo.stubs(:respond_to?).with(:get_parent_ids_multi).returns(true)
+        repo.stubs(:respond_to?).with(:get_dependencies_ids_bulk).returns(true)
         repo.stubs(:respond_to?).with(:fetch_step_states).returns(true)
 
         # Local orchestrator instance with Mocha mocks
@@ -456,7 +456,7 @@ module Yantra
 
             # --- Expectations for step_finished (called by step_failed) -> check_workflow_completion ---
             # 10. Expect find_step inside step_finished to get the current state
-            repo.expects(:get_child_ids).with(@step_a_id).returns([]).in_sequence(sequence) # Assume no dependents
+            repo.expects(:get_dependent_ids).with(@step_a_id).returns([]).in_sequence(sequence) # Assume no dependents
 
             # Expectations for check_workflow_completion (These should now be reachable)
             # 12. Check counts
@@ -501,11 +501,11 @@ module Yantra
 
           # Expectations for step_finished(A)
           repo.expects(:find_step).with(@step_a_id).returns(step_a_succeeded).in_sequence(sequence)
-          repo.expects(:get_child_ids).with(@step_a_id).returns([@step_b_id]).in_sequence(sequence) # B depends on A
+          repo.expects(:get_dependent_ids).with(@step_a_id).returns([@step_b_id]).in_sequence(sequence) # B depends on A
 
           # --- Expectations for process_dependents (Optimized Success Path) ---
           # 1. Bulk fetch dependencies for dependents [B]
-          repo.expects(:get_parent_ids_multi).with([@step_b_id]).returns({ @step_b_id => [@step_a_id] }).in_sequence(sequence) # <<< USE MULTI
+          repo.expects(:get_dependencies_ids_bulk).with([@step_b_id]).returns({ @step_b_id => [@step_a_id] }).in_sequence(sequence) # <<< USE MULTI
           # 2. Bulk fetch states for parents [A] AND dependent [B]
           ids_to_fetch = [@step_b_id, @step_a_id].uniq
           repo.expects(:fetch_step_states)
@@ -558,11 +558,11 @@ module Yantra
 
           # Expectations for step_finished(A)
           repo.expects(:find_step).with(@step_a_id).returns(step_a_succeeded).in_sequence(sequence)
-          repo.expects(:get_child_ids).with(@step_a_id).returns([@step_c_id]).in_sequence(sequence) # C depends on A
+          repo.expects(:get_dependent_ids).with(@step_a_id).returns([@step_c_id]).in_sequence(sequence) # C depends on A
 
           # --- Expectations for process_dependents (Optimized Success Path) ---
           # 1. Bulk fetch dependencies for dependents [C]
-          repo.expects(:get_parent_ids_multi).with([@step_c_id]).returns({ @step_c_id => [@step_a_id, @step_b_id] }).in_sequence(sequence) # <<< CORRECTED EXPECTATION
+          repo.expects(:get_dependencies_ids_bulk).with([@step_c_id]).returns({ @step_c_id => [@step_a_id, @step_b_id] }).in_sequence(sequence) # <<< CORRECTED EXPECTATION
           # 2. Bulk fetch states for parents [A, B] AND dependent [C]
           ids_to_fetch = [@step_c_id, @step_a_id, @step_b_id].uniq
           repo.expects(:fetch_step_states)
@@ -614,7 +614,7 @@ module Yantra
 
           # Expectations for step_finished(A)
           repo.expects(:find_step).with(@step_a_id).returns(step_a_failed).in_sequence(sequence)
-          repo.expects(:get_child_ids).with(@step_a_id).returns([]).in_sequence(sequence) # No dependents
+          repo.expects(:get_dependent_ids).with(@step_a_id).returns([]).in_sequence(sequence) # No dependents
 
           # Expectations for check_workflow_completion
           repo.expects(:running_step_count).with(@workflow_id).returns(0).in_sequence(sequence)
@@ -669,17 +669,17 @@ module Yantra
 
           # --- Expectations for step_finished(A) -> process_dependents(A, :failed) ---
           repo.expects(:find_step).with(@step_a_id).returns(step_a_failed).in_sequence(sequence)
-          repo.expects(:get_child_ids).with(@step_a_id).returns([@step_b_id]).in_sequence(sequence) # B depends on A
+          repo.expects(:get_dependent_ids).with(@step_a_id).returns([@step_b_id]).in_sequence(sequence) # B depends on A
 
           # --- Expectations for find_all_pending_descendants([B]) ---
           # 1. Initial state fetch for direct dependents
           repo.expects(:fetch_step_states).with([@step_b_id]).returns({@step_b_id => 'pending'}).in_sequence(sequence)
           # 2. Get dependents of the first pending step (B)
-          repo.expects(:get_parent_ids).with(@step_b_id).returns([@step_c_id]).in_sequence(sequence)
+          repo.expects(:get_dependencies_ids).with(@step_b_id).returns([@step_c_id]).in_sequence(sequence)
           # 3. Fetch states for the next level of dependents
           repo.expects(:fetch_step_states).with([@step_c_id]).returns({@step_c_id => 'pending'}).in_sequence(sequence)
           # 4. Get dependents of the next pending step (C)
-          repo.expects(:get_parent_ids).with(@step_c_id).returns([]).in_sequence(sequence)
+          repo.expects(:get_dependencies_ids).with(@step_c_id).returns([]).in_sequence(sequence)
           # (find_all_pending_descendants now returns [B, C])
 
           # --- Expectation for bulk cancellation ---

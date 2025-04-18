@@ -165,7 +165,7 @@ module Yantra
       # --- REFACTORED: process_dependents using bulk cancellation ---
       # Checks dependents of a finished step and enqueues ready ones or cancels downstream on failure.
       def process_dependents(finished_step_id, finished_step_state)
-        direct_dependents = repository.get_child_ids(finished_step_id)
+        direct_dependents = repository.get_dependent_ids(finished_step_id)
         return if direct_dependents.empty?
 
         log_debug "Processing dependents for finished step #{finished_step_id} (state: #{finished_step_state}): #{direct_dependents}"
@@ -253,8 +253,8 @@ module Yantra
             if current_state == StateMachine::PENDING.to_s
               pending_descendants.add(step_id)
               # Find dependents of this pending step to continue traversal
-              # TODO: Optimize using get_parent_ids_multi if available?
-              direct_deps = repository.get_parent_ids(step_id)
+              # TODO: Optimize using get_dependencies_ids_bulk if available?
+              direct_deps = repository.get_dependencies_ids(step_id)
               direct_deps.each do |dep_id|
                 # Add to queue only if not already visited
                 if visited.add?(dep_id)
@@ -285,16 +285,16 @@ module Yantra
         all_parent_ids = []
         return [parent_map, all_parent_ids] if step_ids.empty? # Handle empty input
 
-        if repository.respond_to?(:get_parent_ids_multi)
-          parent_map = repository.get_parent_ids_multi(step_ids)
+        if repository.respond_to?(:get_dependencies_ids_bulk)
+          parent_map = repository.get_dependencies_ids_bulk(step_ids)
           # Ensure all requested steps have an entry, even if they have no parents
           step_ids.each { |id| parent_map[id] ||= [] }
           all_parent_ids = parent_map.values.flatten.uniq
         else
           # Fallback to N+1 if adapter doesn't support bulk fetch
-          log_warn "Repository does not support get_parent_ids_multi, dependency check might be inefficient."
+          log_warn "Repository does not support get_dependencies_ids_bulk, dependency check might be inefficient."
           step_ids.each do |dep_id|
-            parent_ids = repository.get_child_ids(dep_id) # N+1 Call
+            parent_ids = repository.get_dependent_ids(dep_id) # N+1 Call
             parent_map[dep_id] = parent_ids
             all_parent_ids.concat(parent_ids)
           end
