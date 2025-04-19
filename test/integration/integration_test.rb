@@ -593,7 +593,6 @@ module Yantra
           assert_equal 0, @test_notifier.published_events.count, "Should publish no events for already finished workflow"
       end
 
-      # --- NEW: Added Event Assertions ---
       def test_retry_failed_steps_restarts_failed_workflow
           # Arrange: Create and run a workflow that fails
           workflow_id = Client.create_workflow(LinearFailureWorkflow)
@@ -620,8 +619,8 @@ module Yantra
           # Assert Events after Retry Call
           # Expect step.enqueued for the retried step F
           assert_equal 1, @test_notifier.published_events.count, "Should publish 1 step.enqueued event"
-          assert_equal 'yantra.step.enqueued', @test_notifier.published_events[0][:name]
-          assert_equal step_f_record.id, @test_notifier.published_events[0][:payload][:step_id]
+          assert_equal 'yantra.step.bulk_enqueued', @test_notifier.published_events[0][:name]
+          assert_equal step_f_record.id, @test_notifier.published_events[0][:payload][:enqueued_ids].find { _1 == step_f_record.id }
 
           # Assert job queue
           assert_equal 1, enqueued_jobs.size
