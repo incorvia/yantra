@@ -33,6 +33,7 @@ module Yantra
       def get_dependencies_ids(step_id); raise NotImplementedError; end
       def get_dependencies_ids_bulk(step_ids); raise NotImplementedError; end
       def get_dependent_ids(step_id); raise NotImplementedError; end
+      def get_dependent_ids_bulk(step_ids); raise NotImplementedError; end
 
       # Implement methods for Bulk Operations / Cleanup
       def bulk_update_steps(step_ids, attributes); raise NotImplementedError; end

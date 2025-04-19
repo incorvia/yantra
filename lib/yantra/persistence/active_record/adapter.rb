@@ -249,6 +249,28 @@ module Yantra
           {} # Return empty hash on error
         end
 
+        def get_dependent_ids_bulk(step_ids)
+          return {} if step_ids.nil? || step_ids.empty?
+          unique_ids = step_ids.uniq
+
+          # Find dependency links where the 'depends_on_step_id' (parent) is in our list
+          links = StepDependencyRecord
+                    .where(depends_on_step_id: unique_ids)
+                    .select(:step_id, :depends_on_step_id) # Select child_id, parent_id
+
+          # Group the child IDs by their parent ID
+          dependents_map = links.group_by(&:depends_on_step_id).transform_values do |records|
+            records.map(&:step_id) # Extract the child IDs for each parent
+          end
+
+          # Ensure all queried parent IDs are present in the result hash, even if they have no children
+          unique_ids.each { |id| dependents_map[id] ||= [] }
+
+          dependents_map
+        rescue ::ActiveRecord::ActiveRecordError => e
+          raise Yantra::Errors::PersistenceError, "Finding bulk dependents failed: #{e.message}"
+        end
+
         def find_ready_steps(workflow_id)
           # Find IDs of all steps for the workflow
           all_step_ids = StepRecord.where(workflow_id: workflow_id).pluck(:id)

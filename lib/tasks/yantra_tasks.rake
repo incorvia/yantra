@@ -22,10 +22,10 @@ namespace :yantra do
       begin
         # --- Get Repository Adapter ---
         # Ensure Yantra is configured, especially the persistence adapter
-        unless Yantra.config&.persistence_adapter
+        unless Yantra.configuration&.persistence_adapter
           raise "Yantra configuration or persistence adapter not found. Ensure Yantra is initialized."
         end
-        repository = Yantra.config.persistence_adapter
+        repository = Yantra.configuration.persistence_adapter
 
         # --- Check if Adapter Supports Cleanup ---
         # Crucially, the adapter *must* respond to the method.

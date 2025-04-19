@@ -115,7 +115,7 @@ module Yantra
       # @param successfully_enqueued_ids [Array<String>] An array of the step IDs.
       # @return [void]
       def publish_bulk_enqueued_event(workflow_id, successfully_enqueued_ids)
-        notifier.publish('yantra.step.bulk_enqueued', {
+        notifier&.publish('yantra.step.bulk_enqueued', {
           workflow_id:  workflow_id,
           enqueued_ids: successfully_enqueued_ids
         })

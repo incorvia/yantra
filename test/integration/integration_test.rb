@@ -168,11 +168,12 @@ module Yantra
          # Assert Events after Start
          assert_equal 2, @test_notifier.published_events.count, "Expected 2 events after start"
          wf_started_event = @test_notifier.find_event('yantra.workflow.started')
-         step_a_enqueued_event = @test_notifier.find_event('yantra.step.enqueued')
+         bulk_enqueued_event = @test_notifier.find_event('yantra.step.bulk_enqueued')
+         step_a_record_enqueued_id = bulk_enqueued_event[:payload][:enqueued_ids].find { _1 == step_a_record.id }
          refute_nil wf_started_event, "Workflow started event missing"
-         refute_nil step_a_enqueued_event, "Step A enqueued event missing"
+         refute_nil step_a_record_enqueued_id, "Step A enqueued event missing"
          assert_equal workflow_id, wf_started_event[:payload][:workflow_id]
-         assert_equal step_a_record.id, step_a_enqueued_event[:payload][:step_id]
+         assert_equal step_a_record.id, step_a_record.id
 
          # Assert 1: Job A enqueued
          assert_equal 1, enqueued_jobs.size
@@ -238,8 +239,8 @@ module Yantra
          # Assert Events after Start
          assert_equal 2, @test_notifier.published_events.count
          assert_equal 'yantra.workflow.started', @test_notifier.published_events[0][:name]
-         assert_equal 'yantra.step.enqueued', @test_notifier.published_events[1][:name]
-         assert_equal step_f_record.id, @test_notifier.published_events[1][:payload][:step_id]
+         assert_equal 'yantra.step.bulk_enqueued', @test_notifier.published_events[1][:name]
+         assert_equal step_f_record.id, @test_notifier.published_events[1][:payload][:enqueued_ids].find { step_f_record.id == _1 }
 
          # Assert 1: Job F enqueued
          assert_equal 1, enqueued_jobs.size
@@ -296,8 +297,9 @@ module Yantra
          # Assert Events after Start
          assert_equal 2, @test_notifier.published_events.count, "Should publish workflow.started, step.enqueued(A)"
          assert_equal 'yantra.workflow.started', @test_notifier.published_events[0][:name]
-         assert_equal 'yantra.step.enqueued', @test_notifier.published_events[1][:name]
-         assert_equal step_a.id, @test_notifier.published_events[1][:payload][:step_id]
+         assert_equal 'yantra.step.bulk_enqueued', @test_notifier.published_events[1][:name]
+         assert_equal 1, @test_notifier.published_events[1][:payload][:enqueued_ids].length
+         assert_equal step_a.id, @test_notifier.published_events[1][:payload][:enqueued_ids].find { _1 == step_a.id }
 
          # Assert 1: Job A enqueued
          assert_equal 1, enqueued_jobs.size
@@ -365,7 +367,6 @@ module Yantra
          assert_equal "succeeded", repository.find_workflow(workflow_id).state
       end
 
-      # --- NEW: Added Event Assertions ---
       def test_workflow_with_retries
          # Arrange
          workflow_id = Client.create_workflow(RetryWorkflow)
@@ -380,7 +381,9 @@ module Yantra
          # Assert Events after Start
          assert_equal 2, @test_notifier.published_events.count, "Should publish workflow.started, step_r.enqueued"
          assert_equal 'yantra.workflow.started', @test_notifier.published_events[0][:name]
-         assert_equal 'yantra.step.enqueued', @test_notifier.published_events[1][:name]; assert_equal step_r_record.id, @test_notifier.published_events[1][:payload][:step_id]
+         assert_equal 'yantra.step.bulk_enqueued', @test_notifier.published_events[1][:name];
+         assert_equal step_r_record.id, @test_notifier.published_events[1][:payload][:enqueued_ids].find { _1 == step_r_record.id }
+         assert_equal 1, @test_notifier.published_events[1][:payload][:enqueued_ids].length
 
          # Assert 1: Job R enqueued
          assert_equal 1, enqueued_jobs.size
@@ -446,7 +449,6 @@ module Yantra
          assert_equal "succeeded", repository.find_workflow(workflow_id).state
       end
 
-      # --- NEW: Added Event Assertions ---
       def test_pipelining_workflow
          # Arrange
          workflow_id = Client.create_workflow(PipeliningWorkflow)
@@ -473,7 +475,9 @@ module Yantra
          # Assert Events after Start
          assert_equal 2, @test_notifier.published_events.count, "Should publish workflow.started, producer.enqueued"
          assert_equal 'yantra.workflow.started', @test_notifier.published_events[0][:name]
-         assert_equal 'yantra.step.enqueued', @test_notifier.published_events[1][:name]; assert_equal producer_record.id, @test_notifier.published_events[1][:payload][:step_id]
+         assert_equal 'yantra.step.bulk_enqueued', @test_notifier.published_events[1][:name];
+         assert_equal 1, @test_notifier.published_events[1][:payload][:enqueued_ids].length
+         assert_equal producer_record.id, @test_notifier.published_events[1][:payload][:enqueued_ids].find { _1 == producer_record.id }
 
          # Assert 1: Producer enqueued
          assert_equal 1, enqueued_jobs.size
@@ -484,9 +488,13 @@ module Yantra
 
          # Assert Events after Producer runs
          assert_equal 3, @test_notifier.published_events.count, "Should publish producer.started, producer.succeeded, consumer.enqueued"
-         assert_equal 'yantra.step.started', @test_notifier.published_events[0][:name]; assert_equal producer_record.id, @test_notifier.published_events[0][:payload][:step_id]
-         assert_equal 'yantra.step.succeeded', @test_notifier.published_events[1][:name]; assert_equal producer_record.id, @test_notifier.published_events[1][:payload][:step_id]
-         assert_equal 'yantra.step.bulk_enqueued', @test_notifier.published_events[2][:name]; assert_equal consumer_record.id, @test_notifier.published_events[2][:payload][:enqueued_ids].first
+         assert_equal 'yantra.step.started', @test_notifier.published_events[0][:name];
+         assert_equal producer_record.id, @test_notifier.published_events[0][:payload][:step_id]
+         assert_equal 'yantra.step.succeeded', @test_notifier.published_events[1][:name];
+         assert_equal producer_record.id, @test_notifier.published_events[1][:payload][:step_id]
+         assert_equal 'yantra.step.bulk_enqueued', @test_notifier.published_events[2][:name];
+         assert_equal 1, @test_notifier.published_events[2][:payload][:enqueued_ids].length
+         assert_equal consumer_record.id, @test_notifier.published_events[2][:payload][:enqueued_ids].first
 
          # Assert 2: Producer succeeded, Consumer enqueued
          producer_record.reload
