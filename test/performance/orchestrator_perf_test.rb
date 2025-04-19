@@ -79,7 +79,6 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase  # Or Minitest::Test
 
   # --- Test 1: Fan-Out Performance ---
   # Measures time to process start step completion and enqueue N parallel steps.
-  focus
   def test_perf_fan_out_enqueue
     puts "\n--- Testing Fan-Out Enqueue (N=#{@num_parallel_steps}) ---"
     # Start the workflow first
@@ -110,7 +109,6 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase  # Or Minitest::Test
   # --- Test 2: Failure Cascade Performance ---
   # Measures time to process a step failure, including updating state,
   # setting flags, and potentially cancelling downstream steps via step_finished.
-  focus
   def test_perf_failure_cascade
      puts "\n--- Testing Failure Cascade (N=#{@num_parallel_steps}) ---"
      # **FIX 2**: Start the workflow before simulating failure
@@ -146,7 +144,6 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase  # Or Minitest::Test
    # --- Test 3: Fan-In Readiness Check Performance ---
    # Measures time to process the completion of the LAST prerequisite for a fan-in step,
    # including checking all parents and enqueuing the final step.
-  focus
   def test_perf_fan_in_readiness_check
     puts "\n--- Testing Fan-In Readiness Check (N=#{@num_parallel_steps}) ---"
     # Setup: Start workflow, process start step completion (triggers parallel enqueues - allowed by setup stub)
