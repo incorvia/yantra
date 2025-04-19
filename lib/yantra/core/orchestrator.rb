@@ -333,7 +333,6 @@ module Yantra
         end
       end
 
-
       # Checks if a workflow has completed and updates its state.
       def check_workflow_completion(workflow_id)
         # Ensure workflow_id is present
@@ -415,7 +414,6 @@ module Yantra
           }
           publish_event('yantra.step.failed', payload)
       end
-
 
       def publish_step_enqueued_event(step_record)
         payload = { step_id: step_record.id, workflow_id: step_record.workflow_id, klass: step_record.klass, queue: step_record.queue, enqueued_at: step_record.enqueued_at }

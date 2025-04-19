@@ -1,6 +1,5 @@
 # lib/yantra.rb
 
-# --- Core Requires (No Zeitwerk) ---
 require_relative "yantra/version"
 require_relative "yantra/errors"
 require_relative "yantra/configuration"
@@ -12,15 +11,12 @@ module Yantra
   class << self
     attr_writer :configuration
 
-    # --- START: Definition of Built-in Adapter Map ---
     BUILTIN_ADAPTER_PATHS = {
       persistence: {
         active_record: 'yantra/persistence/active_record/adapter'
-        # redis: 'yantra/persistence/redis/adapter'
       }.freeze,
       worker: {
         active_job: 'yantra/worker/active_job/adapter'
-        # sidekiq: 'yantra/worker/sidekiq/adapter'
       }.freeze,
       notifier: {
         null: 'yantra/events/null/adapter',
@@ -28,8 +24,6 @@ module Yantra
         active_support_notifications: 'yantra/events/active_support_notifications/adapter'
       }.freeze
     }.freeze
-    # --- END: Definition of Built-in Adapter Map ---
-
 
     def configuration
       @configuration ||= Configuration.new
@@ -70,121 +64,126 @@ module Yantra
 
     private
 
-    # Internal helper to load and instantiate adapters based on configuration.
     def load_adapter(type, adapter_config, options = {})
-      # --- Conditional Require for Built-in Symbol Adapters (Using Map) ---
       if adapter_config.is_a?(Symbol)
         require_path = BUILTIN_ADAPTER_PATHS.dig(type, adapter_config)
         if require_path
           begin
             require_relative require_path
-            Yantra.logger.debug { "[Yantra.load_adapter] Conditionally loaded built-in adapter file: #{require_path}" } if Yantra.logger
+            logger&.debug { "[Yantra.load_adapter] Loaded built-in adapter: #{require_path}" }
           rescue LoadError => e
-            log_msg = "[Yantra.load_adapter] Failed to load built-in adapter file '#{require_path}' for :#{adapter_config}. Error: #{e.message}"
-            if defined?(Yantra.logger) && Yantra.logger; Yantra.logger.error { log_msg }; else; puts "ERROR: #{log_msg}"; end
-            raise Yantra::Errors::ConfigurationError, "Could not load required file for built-in adapter ':#{adapter_config}'. #{e.message}"
+            msg = "[Yantra.load_adapter] Could not load adapter :#{adapter_config} (#{require_path}): #{e.message}"
+            log_error(msg)
+            raise Yantra::Errors::ConfigurationError, "Could not load required file for ':#{adapter_config}'. #{e.message}"
           end
         else
-           Yantra.logger.debug { "[Yantra.load_adapter] Adapter symbol :#{adapter_config} is not a known built-in for type :#{type}. Assuming custom adapter (user must require file)." } if Yantra.logger
+          logger&.debug { "[Yantra.load_adapter] Unknown built-in adapter :#{adapter_config} for #{type}, assuming custom." }
         end
       end
-      # --- End Conditional Require ---
 
-      # --- Find/Initialize Adapter Instance ---
       adapter_instance = case adapter_config
                          when Symbol
-                           adapter_class = find_adapter_class(type, adapter_config)
-                           initialize_adapter(adapter_class, options) # Instantiates
+                           klass = find_adapter_class(type, adapter_config)
+                           initialize_adapter(klass, options)
+                         when Class
+                           validate_adapter_interface(type, adapter_config)
+                           initialize_adapter(adapter_config, options)
                          when nil
                            raise Yantra::Errors::ConfigurationError, "#{type.capitalize} adapter configuration is nil."
-                         # --- UPDATED: Handle Class or Instance passed directly ---
-                         when Class
-                           # If a class constant was passed (e.g., TestNotifierAdapter)
-                           validate_adapter_interface(type, adapter_config) # Validate the class itself first
-                           initialize_adapter(adapter_config, options) # Instantiate the class
                          else
-                           # Assume an already initialized instance was passed
-                           validate_adapter_interface(type, adapter_config) # Validate the instance
-                           adapter_config # Return the instance directly
-                         # --- END UPDATE ---
+                           validate_adapter_interface(type, adapter_config)
+                           adapter_config
                          end
 
-      # Validate the final instance conforms to the interface
       validate_adapter_interface(type, adapter_instance)
       adapter_instance
 
-    # --- Error Handling (Remains the same) ---
-    rescue Yantra::Errors::ConfigurationError => e; raise e
+    rescue Yantra::Errors::ConfigurationError => e
+      raise e
     rescue ArgumentError => e
-       adapter_class_name = adapter_config.is_a?(Symbol) ? adapter_config.to_s.camelize : adapter_config.class.name rescue adapter_config.inspect
-       raise Yantra::Errors::ConfigurationError, "Error initializing #{type.capitalize} adapter '#{adapter_class_name}' with options #{options.inspect}. Check initializer arguments. Original error: #{e.message}"
+      name = adapter_config.is_a?(Symbol) ? adapter_config.to_s.camelize : adapter_config.class.name rescue adapter_config.inspect
+      raise Yantra::Errors::ConfigurationError, "Error initializing #{type} adapter '#{name}' with #{options.inspect}: #{e.message}"
     rescue LoadError => e
-       raise Yantra::Errors::ConfigurationError, "Failed to load dependency for #{type.capitalize} adapter ':#{adapter_config}'. Is the required underlying gem (e.g., 'activerecord', 'activejob') installed? Original error: #{e.message}"
+      raise Yantra::Errors::ConfigurationError, "Failed to load dependency for #{type} adapter ':#{adapter_config}': #{e.message}"
     end
 
-    # Initializes an adapter class with options (Remains the same)
-    def initialize_adapter(adapter_class, options)
-       init_arity = adapter_class.instance_method(:initialize).arity
-       if options && !options.empty? && (init_arity != 0)
-          if init_arity < 0 || init_arity >= 1; adapter_class.new(**options); else; adapter_class.new(options); end
-       else; adapter_class.new; end
-    end
-
-    # Validates that the loaded adapter instance conforms to the expected interface (Remains the same)
-    def validate_adapter_interface(type, instance_or_class)
-       interface_module = case type
-                          when :persistence then Persistence::RepositoryInterface
-                          when :worker then Worker::EnqueuingInterface
-                          when :notifier then Events::NotifierInterface
-                          else raise ArgumentError, "Unknown adapter type: #{type}"
-                          end
-       # Check methods on an instance (allocate if class given)
-       object_to_check = instance_or_class.is_a?(Class) ? instance_or_class.allocate : instance_or_class
-       unless object_to_check.is_a?(interface_module)
-         required_method = case type
-                           when :persistence then :find_workflow
-                           when :worker then :enqueue
-                           when :notifier then :publish
-                           end
-         unless object_to_check.respond_to?(required_method)
-            raise Yantra::Errors::ConfigurationError, "Invalid #{type} adapter configured. Instance/Class #{instance_or_class.inspect} does not implement the required interface (#{interface_module.name} or respond to ##{required_method})."
-         end
-         log_msg = "[Yantra.validate_adapter_interface] Configured #{type} adapter #{instance_or_class.inspect} does not explicitly include #{interface_module.name}, but responds to ##{required_method}."
-         if defined?(Yantra.logger) && Yantra.logger; Yantra.logger.warn { log_msg }; else; puts "WARN: #{log_msg}"; end
-       end
-       true
-    end
-
-
-    # Internal helper to find the adapter class constant (Remains the same)
-    def find_adapter_class(type, name)
-      base_module = case type
-                    when :persistence then Yantra::Persistence
-                    when :worker then Yantra::Worker
-                    when :notifier then Yantra::Events
-                    else raise ArgumentError, "Unknown adapter type: #{type}"
-                    end
-      adapter_sub_namespace_name = name.to_s.camelize
-      adapter_class_name = "Adapter"
-      full_class_name_for_error = "#{base_module.name}::#{adapter_sub_namespace_name}::#{adapter_class_name}"
-      begin
-        adapter_module = base_module.const_get(adapter_sub_namespace_name)
-        adapter_module.const_get(adapter_class_name)
-      rescue NameError => e
-         raise Yantra::Errors::ConfigurationError, "Cannot find adapter class #{full_class_name_for_error} for type :#{type}, name :#{name}. If this is a custom adapter, ensure its file is required before Yantra is configured/used. Original error: #{e.message}"
+    def initialize_adapter(klass, options)
+      arity = klass.instance_method(:initialize).arity
+      if options && !options.empty? && arity != 0
+        arity < 0 || arity >= 1 ? klass.new(**options) : klass.new(options)
+      else
+        klass.new
       end
     end
 
-    # Simple camelize fallback (Remains the same)
-    unless String.method_defined?(:camelize)
-       class ::String; def camelize; self.split('_').map(&:capitalize).join; end unless method_defined?(:camelize); end
-       @_camelize_warning_logged ||= begin
-          log_msg = "[Yantra] WARN: ActiveSupport::Inflector not available. Using basic String#camelize fallback."; if defined?(Yantra.logger) && Yantra.logger; Yantra.logger.warn { log_msg }; else; puts log_msg; end; true; end
+    def validate_adapter_interface(type, obj)
+      mod = case type
+            when :persistence then Persistence::RepositoryInterface
+            when :worker      then Worker::EnqueuingInterface
+            when :notifier    then Events::NotifierInterface
+            else raise ArgumentError, "Unknown adapter type: #{type}"
+            end
+
+      instance = obj.is_a?(Class) ? obj.allocate : obj
+
+      unless instance.is_a?(mod)
+        method_name = {
+          persistence: :find_workflow,
+          worker: :enqueue,
+          notifier: :publish
+        }[type]
+
+        unless instance.respond_to?(method_name)
+          raise Yantra::Errors::ConfigurationError,
+                "Invalid #{type} adapter. #{obj.inspect} does not include #{mod.name} or respond to ##{method_name}."
+        end
+
+        log_warn("[Yantra.validate_adapter_interface] #{type} adapter #{obj.inspect} does not include #{mod.name}, but responds to ##{method_name}.")
+      end
+
+      true
     end
 
-  end # class << self
-end # module Yantra
+    def find_adapter_class(type, name)
+      base = {
+        persistence: Yantra::Persistence,
+        worker: Yantra::Worker,
+        notifier: Yantra::Events
+      }[type] || raise(ArgumentError, "Unknown adapter type: #{type}")
 
-# Initialize default configuration when file is loaded
+      mod_name = name.to_s.camelize
+      full_name = "#{base.name}::#{mod_name}::Adapter"
+
+      begin
+        base.const_get(mod_name).const_get("Adapter")
+      rescue NameError => e
+        raise Yantra::Errors::ConfigurationError,
+              "Cannot find adapter class #{full_name} for type :#{type}, name :#{name}: #{e.message}"
+      end
+    end
+
+    def log_warn(msg)
+      logger&.warn { msg } || warn("WARN: #{msg}")
+    end
+
+    def log_error(msg)
+      logger&.error { msg } || warn("ERROR: #{msg}")
+    end
+
+    unless String.method_defined?(:camelize)
+      class ::String
+        def camelize
+          split('_').map(&:capitalize).join
+        end unless method_defined?(:camelize)
+      end
+
+      unless defined?(@_camelize_warned)
+        warn("[Yantra] ActiveSupport not found. Using simple camelize fallback.") unless ENV["YANTRA_SILENT"]
+        @_camelize_warned = true
+      end
+    end
+  end
+end
+
 Yantra.configuration
 
