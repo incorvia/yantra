@@ -49,7 +49,7 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase  # Or Minitest::Test
     )
 
     # --- Test Parameters ---
-    @num_parallel_steps = ENV.fetch('PERF_N', 100).to_i
+    @num_parallel_steps = ENV.fetch('PERF_N', 10000).to_i
 
     # Optional: Silence Yantra's global logger
     @original_logger = Yantra.logger
@@ -100,6 +100,10 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase  # Or Minitest::Test
     end
     puts format_benchmark("Fan-Out (step_finished -> enqueue N)", measurement)
     # Implicit assertion via Mocha expects
+
+    max_time_seconds = 20.0
+    assert measurement.real < max_time_seconds, \
+      "Fan-out performance regression detected! Took #{measurement.real.round(4)}s, expected < #{max_time_seconds}s for N=#{@num_parallel_steps}."
   end
 
   # --- Test 2: Failure Cascade Performance ---
@@ -153,9 +157,15 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase  # Or Minitest::Test
     steps_to_finish_first = @parallel_step_uuids.take(@num_parallel_steps - 1)
     last_parallel_step_uuid = @parallel_step_uuids.last
 
-    steps_to_finish_first.each do |step_uuid|
-      update_step_state(step_uuid, :succeeded)
-      @orchestrator.step_finished(step_uuid) # Process completion silently
+    if steps_to_finish_first.any?
+      attributes_to_update = {
+        state: :succeeded # Pass state as symbol (implementation converts)
+        # updated_at will be added automatically by the adapter implementation
+      }
+      unless @repository.bulk_update_steps(steps_to_finish_first, attributes_to_update)
+        # Optional: Log if the repository method indicates potential issues
+        log_warn "Repository reported potential issues during bulk update for fan-in setup."
+      end
     end
 
     # Now, simulate the *last* parallel step finishing

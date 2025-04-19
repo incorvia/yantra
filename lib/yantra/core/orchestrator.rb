@@ -122,9 +122,11 @@ module Yantra
         step = repository.find_step(step_id)
         return unless step
 
+        workflow_id = step.workflow_id
+
         case step.state.to_sym
         when StateMachine::SUCCEEDED, StateMachine::FAILED, StateMachine::CANCELLED
-          process_dependents(step_id, step.state.to_sym)
+          process_dependents(step_id, step.state.to_sym, workflow_id)
           check_workflow_completion(step.workflow_id)
         else
           log_warn "Step #{step_id} in state '#{step.state}', skipping downstream logic"
@@ -169,26 +171,98 @@ module Yantra
         step_failed(step.id, error_info, expected_old_state: StateMachine::ENQUEUED)
       end
 
-      def process_dependents(finished_step_id, finished_state)
-        dependents = repository.get_dependent_ids(finished_step_id)
-        return if dependents.empty?
+      def process_dependents(finished_step_id, finished_state, workflow_id)
+        dependents_ids = repository.get_dependent_ids(finished_step_id) # Fetch IDs of children
+        return if dependents_ids.empty?
 
-        log_debug "Processing dependents for #{finished_step_id}: #{dependents.inspect}"
+        log_debug "Processing dependents for #{finished_step_id}: #{dependents_ids.inspect}"
 
         if finished_state == StateMachine::SUCCEEDED
-          parent_map, all_parents = fetch_dependencies_for_steps(dependents)
-          states = fetch_states_for_steps(dependents + all_parents)
-
-          dependents.each do |step_id|
-            parents = parent_map[step_id] || []
-            if is_ready_to_start?(step_id, parents, states)
-              enqueue_step(step_id)
-            else
-              log_debug "Step #{step_id} not ready"
-            end
-          end
+          # --- Delegate to the optimized method ---
+          process_successful_dependents(workflow_id, dependents_ids) # Pass finished_step_id for context
         else
-          cancel_downstream_dependents(dependents, finished_step_id, finished_state)
+          # Failure/Cancellation Cascade
+          cancel_downstream_dependents(dependents_ids, finished_step_id, finished_state)
+        end
+      end
+
+      def process_successful_dependents(workflow_id, potential_step_ids)
+        # Fetch parent info and states map upfront
+        parent_map, all_parents = fetch_dependencies_for_steps(potential_step_ids)
+        states = fetch_states_for_steps(potential_step_ids + all_parents) # Needed for parent checks
+
+        # 1. Identify ready steps using the states map
+        ready_step_ids = []
+        potential_step_ids.each do |step_id|
+          next unless states[step_id.to_s] == StateMachine::PENDING.to_s
+          parents = parent_map[step_id] || []
+          if is_ready_to_start?(step_id, parents, states)
+            ready_step_ids << step_id
+          else
+            log_debug "Step #{step_id} not ready yet."
+          end
+        end
+        return if ready_step_ids.empty?
+        log_info "Steps ready to enqueue: #{ready_step_ids.inspect}"
+
+        # 2. Bulk fetch data for the identified ready steps
+        begin
+          ready_steps = repository.find_steps(ready_step_ids) # No state filter needed
+          ready_steps_map = ready_steps.index_by(&:id)
+        rescue Yantra::Errors::PersistenceError => e
+          log_error "Failed to bulk fetch ready steps (#{ready_step_ids.inspect}): #{e.message}"
+          return
+        end
+
+        # 3. Attempt to enqueue each ready step
+        successfully_enqueued_ids = []
+
+        ready_step_ids.each do |step_id|
+          step = ready_steps_map[step_id]
+          unless step
+            log_warn "Could not find pre-fetched step data for #{step_id}, skipping enqueue."
+            next
+          end
+          unless step.state.to_sym == StateMachine::PENDING
+            log_warn "Step #{step_id} state was no longer PENDING (#{step.state}) just before enqueue, skipping."
+            next
+          end
+
+          begin
+            enqueue_job_via_adapter(step)
+            successfully_enqueued_ids << step_id # Collect only IDs
+          rescue StandardError => e
+            log_error "Failed to enqueue step #{step_id} via worker adapter: #{e.message}"
+          end
+        end
+
+        # 4. Bulk update state ONLY for successfully enqueued steps
+        if successfully_enqueued_ids.any?
+          log_info "Bulk updating state to ENQUEUED for steps: #{successfully_enqueued_ids.inspect}"
+          update_attributes = { enqueued_at: Time.current }
+          update_success = repository.bulk_update_steps(
+            successfully_enqueued_ids,
+            { state: StateMachine::ENQUEUED }.merge(update_attributes)
+          )
+          unless update_success
+            log_warn "Bulk update to enqueued might have failed or reported issues for steps: #{successfully_enqueued_ids.inspect}"
+          end
+
+          # --- 5. Publish ONE bulk event ---
+          # Fetch workflow_id efficiently (e.g., from one of the steps or the finished_step_id)
+          if workflow_id # Check if workflow_id is present
+            begin
+              publish_bulk_enqueued_event(workflow_id, successfully_enqueued_ids)
+            rescue StandardError => e
+              log_error("Error occurred during publish_bulk_enqueued_event: #{e.message}")
+            end
+          else
+            log_warn "Workflow ID was nil when trying to publish bulk enqueued event."
+          end
+          # --- END Bulk Event Publishing ---
+
+        else
+          log_info("No steps were successfully enqueued in this batch.") if ready_step_ids.any?
         end
       end
 
@@ -390,6 +464,13 @@ module Yantra
           queue:       step.queue,
           enqueued_at: step.enqueued_at
         })
+      end
+
+      def publish_bulk_enqueued_event(workflow_id, successfully_enqueued_ids)
+        publish_event('yantra.step.bulk_enqueued', {
+          workflow_id:               workflow_id,
+          enqueued_ids: successfully_enqueued_ids
+        }) 
       end
 
       def publish_step_cancelled_event(step_id)

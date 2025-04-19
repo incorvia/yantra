@@ -487,59 +487,63 @@ module Yantra
       # =========================================================================
       # Step Finished Tests (Covers Success/Failure Paths)
       # =========================================================================
-
       def test_step_finished_success_enqueues_ready_dependent
         mocks = setup_mocha_mocks_and_orchestrator
         repo = mocks[:repo]; notifier = mocks[:notifier]; worker = mocks[:worker]; orchestrator = mocks[:orchestrator]
         # Setup: Step A succeeded, Step B depends on A and is pending
         step_a_succeeded = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, state: 'succeeded')
         step_b_pending = MockStep.new(id: @step_b_id, workflow_id: @workflow_id, klass: "StepB", state: 'pending', queue: 'q_b')
-        step_b_enqueued = MockStep.new(id: @step_b_id, workflow_id: @workflow_id, klass: "StepB", state: 'enqueued', queue: 'q_b', enqueued_at: @frozen_time)
+        # Note: step_b_enqueued isn't strictly needed anymore as we don't re-find after update for event
 
         Time.stub :current, @frozen_time do
-          sequence = Mocha::Sequence.new('step_finished_success_enqueues_fixed') # Use a unique sequence name
+          sequence = Mocha::Sequence.new('step_finished_success_enqueues_refactored') # New sequence name
 
-          # Expectations for step_finished(A)
+          # === Expectations for step_finished(A) ===
+          # 1. Find the finished step A
           repo.expects(:find_step).with(@step_a_id).returns(step_a_succeeded).in_sequence(sequence)
+          # 2. Find dependents of A
           repo.expects(:get_dependent_ids).with(@step_a_id).returns([@step_b_id]).in_sequence(sequence) # B depends on A
 
-          # --- Expectations for process_dependents (Optimized Success Path) ---
-          # 1. Bulk fetch dependencies for dependents [B]
-          repo.expects(:get_dependencies_ids_bulk).with([@step_b_id]).returns({ @step_b_id => [@step_a_id] }).in_sequence(sequence) # <<< USE MULTI
-          # 2. Bulk fetch states for parents [A] AND dependent [B]
+          # === Expectations for process_successful_dependents(workflow_id, [B]) ===
+          # 3. Bulk fetch dependencies for dependents [B]
+          repo.expects(:get_dependencies_ids_bulk).with([@step_b_id]).returns({ @step_b_id => [@step_a_id] }).in_sequence(sequence)
+          # 4. Bulk fetch states for parents [A] AND dependent [B]
           ids_to_fetch = [@step_b_id, @step_a_id].uniq
           repo.expects(:fetch_step_states)
-            .with { |actual_ids| actual_ids.sort == ids_to_fetch.sort } # Match array content ignoring order
-            .returns({ @step_a_id => 'succeeded', @step_b_id => 'pending' }) # <<< CORRECT RETURN HASH
+            .with { |actual_ids| actual_ids.sort == ids_to_fetch.sort }
+            .returns({ @step_a_id => 'succeeded', @step_b_id => 'pending' })
             .in_sequence(sequence)
-          # 3. is_ready_to_start?(B) uses the hash, no find_step(B) call expected here
-          # --- End process_dependents expectations ---
+          # 5. Bulk fetch data for ready step(s) [B] (Result of is_ready_to_start check)
+          repo.expects(:find_steps).with([@step_b_id]).returns([step_b_pending]).in_sequence(sequence) # <<< CHANGED: find_steps bulk
 
-          # --- Expectations for enqueue_step(B) because it's ready ---
-          # 4. find_step(B) at start of enqueue_step
-          repo.expects(:find_step).with(@step_b_id).returns(step_b_pending).in_sequence(sequence)
-          # 5. Update B to enqueued (Use keyword arg)
-          repo.expects(:update_step_attributes)
-            .with(@step_b_id, has_entries(state: StateMachine::ENQUEUED.to_s), expected_old_state: StateMachine::PENDING)
-            .returns(true).in_sequence(sequence)
-          # 6. Find B again (for payload/enqueue)
-          repo.expects(:find_step).with(@step_b_id).returns(step_b_enqueued).in_sequence(sequence)
-          # 7. Publish enqueued event for B
-          notifier.expects(:publish).with('yantra.step.enqueued', has_entries(step_id: @step_b_id)).in_sequence(sequence)
-          # 8. Enqueue B job
-          worker.expects(:enqueue).with(@step_b_id, @workflow_id, "StepB", "q_b").in_sequence(sequence)
-          # --- End enqueue_step expectations ---
+          # 6. Enqueue B job (Inside the loop over ready steps)
+          worker.expects(:enqueue).with(@step_b_id, @workflow_id, "StepB", "q_b").in_sequence(sequence) # <<< SAME: Still enqueues
 
-          # --- Expectations for check_workflow_completion ---
-          # 9. Check counts
+          # 7. Bulk update state for successfully enqueued step(s) [B]
+          repo.expects(:bulk_update_steps)
+              .with([@step_b_id], has_entries(state: StateMachine::ENQUEUED, enqueued_at: @frozen_time)) # <<< FIX: Use the StateMachine constant directly (symbol)
+              .returns(true).in_sequence(sequence)
+
+
+          # 8. Publish ONE bulk event for B
+          notifier.expects(:publish) # <<< CHANGED: bulk event
+              .with('yantra.step.bulk_enqueued', has_entries(
+                  workflow_id: @workflow_id,
+                  enqueued_ids: [@step_b_id]
+               ))
+              .in_sequence(sequence)
+          # --- Removed expectations for individual find/update/publish for B ---
+
+          # === Expectations for check_workflow_completion ===
+          # 9. Check counts (These likely still happen)
           repo.expects(:running_step_count).with(@workflow_id).returns(0).in_sequence(sequence)
-          repo.expects(:enqueued_step_count).with(@workflow_id).returns(1).in_sequence(sequence) # B is now enqueued
-          # Note: check_workflow_completion exits here as enqueued_count > 0
+          repo.expects(:enqueued_step_count).with(@workflow_id).returns(1).in_sequence(sequence) # B is enqueued
           # --- End check_workflow_completion expectations ---
 
           # Act
           orchestrator.step_finished(@step_a_id)
-          # Assertions handled by mock verification
+
+          # Assertions handled by mock verification by Mocha
         end
       end
 
@@ -720,9 +724,6 @@ module Yantra
               # Assertions handled by mock verification in teardown
         end
       end
-
-      # Ensure other tests in the file remain unchanged
-
 
       # =========================================================================
       # Error Handling / Edge Case Tests

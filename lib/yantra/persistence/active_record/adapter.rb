@@ -102,6 +102,38 @@ module Yantra
           step_record.update(attributes_hash) # Returns true on success, false on failure
         end
 
+        def bulk_update_steps(step_ids, attributes)
+          return true if step_ids.nil? || step_ids.empty?
+          # Return early if attributes hash is empty or nil to avoid unnecessary DB call
+          return true if attributes.nil? || attributes.empty?
+
+          update_attrs = attributes.dup # Clone to avoid modifying the original hash
+
+          # Ensure state is stored as a string if provided
+          if update_attrs.key?(:state) && update_attrs[:state].is_a?(Symbol)
+            update_attrs[:state] = update_attrs[:state].to_s
+          end
+
+          # Ensure updated_at is always set
+          update_attrs[:updated_at] = Time.current unless update_attrs.key?(:updated_at)
+
+          begin
+            # Note: update_all skips callbacks and validations
+            updated_count = StepRecord.where(id: step_ids).update_all(update_attrs)
+            # Log if count doesn't match? Optional, but less critical than state-specific one.
+            true # Return true indicating the operation was attempted.
+          rescue ::ActiveRecord::StatementInvalid, ::ActiveRecord::ActiveRecordError => e
+            raise Yantra::Errors::PersistenceError, "Bulk step update failed: #{e.message}"
+          end
+        end
+
+        def find_steps(step_ids)
+          return [] if step_ids.nil? || step_ids.empty?
+          query = StepRecord.where(id: step_ids)
+          query.to_a
+        rescue ::ActiveRecord::ActiveRecordError => e
+          raise Yantra::Errors::PersistenceError, "Finding steps failed: #{e.message}"
+        end
 
         def running_step_count(workflow_id)
           StepRecord.where(workflow_id: workflow_id, state: 'running').count

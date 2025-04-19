@@ -125,7 +125,7 @@ class StepTest < Minitest::Test
     end
   end
 
-   def test_parent_outputs_fetches_and_returns_outputs_for_multiple_parents
+  def test_parent_outputs_fetches_and_returns_outputs_for_multiple_parents
     parent_id_1 = SecureRandom.uuid
     parent_id_2 = SecureRandom.uuid
     output_1 = { value: 1 }
@@ -168,7 +168,7 @@ class StepTest < Minitest::Test
     end
   end
 
-   def test_parent_outputs_handles_repository_error_gracefully
+  def test_parent_outputs_handles_repository_error_gracefully
     parent_id = SecureRandom.uuid
     step = @klass.new(workflow_id: @workflow_id, klass: @klass, parent_ids: [parent_id])
 
@@ -181,13 +181,13 @@ class StepTest < Minitest::Test
 
     # Stub the repository method on the step instance to return our error_repo
     step.stub(:repository, error_repo) do
-        # Call the method under test
-        result = step.parent_outputs
-        # Assert that it returns empty hash because the rescue block should catch the error
-        assert_equal({}, result, "Should return empty hash on repository error")
+      # Call the method under test
+      result = step.parent_outputs
+      # Assert that it returns empty hash because the rescue block should catch the error
+      assert_equal({}, result, "Should return empty hash on repository error")
     end
     # No need to verify @mock_repo here as it wasn't used.
-   end
+  end
 
 end
 
