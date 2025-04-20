@@ -101,7 +101,7 @@ module Yantra
     end
 
     def repository
-      @repository || Yantra.config&.persistence_adapter
+      @repository || Yantra.configuration&.persistence_adapter
     rescue NameError
       @repository
     end

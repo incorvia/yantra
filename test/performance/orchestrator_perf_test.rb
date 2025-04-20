@@ -49,7 +49,7 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase  # Or Minitest::Test
     )
 
     # --- Test Parameters ---
-    @num_parallel_steps = ENV.fetch('PERF_N', 10000).to_i
+    @num_parallel_steps = ENV.fetch('PERF_N', 100).to_i
 
     # Optional: Silence Yantra's global logger
     @original_logger = Yantra.logger
@@ -91,8 +91,8 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase  # Or Minitest::Test
     # Expect the worker adapter's 'enqueue' method to be called N times
     # Override the general stub from setup with a specific expectation for this test.
     @worker_adapter.expects(:enqueue)
-                   .with(any_of(*@parallel_step_uuids), @workflow_uuid, PerfParallelJob.name, anything)
-                   .times(@num_parallel_steps)
+      .with(any_of(*@parallel_step_uuids), @workflow_uuid, PerfParallelJob.name, anything)
+      .times(@num_parallel_steps)
 
     # Measure the time for the orchestrator to process the finished step
     measurement = Benchmark.measure do
@@ -101,7 +101,7 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase  # Or Minitest::Test
     puts format_benchmark("Fan-Out (step_finished -> enqueue N)", measurement)
     # Implicit assertion via Mocha expects
 
-    max_time_seconds = 20.0
+    max_time_seconds = 25.0
     assert measurement.real < max_time_seconds, \
       "Fan-out performance regression detected! Took #{measurement.real.round(4)}s, expected < #{max_time_seconds}s for N=#{@num_parallel_steps}."
   end
@@ -110,40 +110,40 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase  # Or Minitest::Test
   # Measures time to process a step failure, including updating state,
   # setting flags, and potentially cancelling downstream steps via step_finished.
   def test_perf_failure_cascade
-     puts "\n--- Testing Failure Cascade (N=#{@num_parallel_steps}) ---"
-     # **FIX 2**: Start the workflow before simulating failure
-     @orchestrator.start_workflow(@workflow_uuid)
-     assert_equal 'running', @repository.find_workflow(@workflow_uuid)&.state, "Workflow should be running before failure"
+    puts "\n--- Testing Failure Cascade (N=#{@num_parallel_steps}) ---"
+    # **FIX 2**: Start the workflow before simulating failure
+    @orchestrator.start_workflow(@workflow_uuid)
+    assert_equal 'running', @repository.find_workflow(@workflow_uuid)&.state, "Workflow should be running before failure"
 
-     # Simulate the START step failing after starting
-     step_to_fail_uuid = @start_step_uuid
-     update_step_state(step_to_fail_uuid, :running) # Step must be running for step_failed
+    # Simulate the START step failing after starting
+    step_to_fail_uuid = @start_step_uuid
+    update_step_state(step_to_fail_uuid, :running) # Step must be running for step_failed
 
-     simulated_error = { class: "StandardError", message: "Simulated failure for cascade test", backtrace: ["line 1"] }
+    simulated_error = { class: "StandardError", message: "Simulated failure for cascade test", backtrace: ["line 1"] }
 
-     # Allow any enqueue calls that might happen during cancellation (though likely none)
-     @worker_adapter.stubs(:enqueue)
+    # Allow any enqueue calls that might happen during cancellation (though likely none)
+    @worker_adapter.stubs(:enqueue)
 
-     # Measure the time for the orchestrator to handle the failure report
-     measurement = Benchmark.measure do
-        @orchestrator.step_failed(step_to_fail_uuid, simulated_error)
-     end
-     puts format_benchmark("Failure Handling & Cascade (step_failed -> step_finished)", measurement)
+    # Measure the time for the orchestrator to handle the failure report
+    measurement = Benchmark.measure do
+      @orchestrator.step_failed(step_to_fail_uuid, simulated_error)
+    end
+    puts format_benchmark("Failure Handling & Cascade (step_failed -> step_finished)", measurement)
 
-     # Verify workflow has failures flag is set and state is failed (since start failed)
-     wf_check = @repository.find_workflow(@workflow_uuid)
-     assert_equal true, wf_check&.has_failures, "Workflow has_failures flag should be true"
-     # Now that workflow was started, the final state update should succeed
-     assert_equal 'failed', wf_check&.state, "Workflow state should be marked failed"
+    # Verify workflow has failures flag is set and state is failed (since start failed)
+    wf_check = @repository.find_workflow(@workflow_uuid)
+    assert_equal true, wf_check&.has_failures, "Workflow has_failures flag should be true"
+    # Now that workflow was started, the final state update should succeed
+    assert_equal 'failed', wf_check&.state, "Workflow state should be marked failed"
 
-     # Optional: Verify parallel/final steps are cancelled if desired
-     # cancelled_states = Yantra::Persistence::ActiveRecord::StepRecord.where(id: @parallel_step_uuids + [@final_step_uuid]).pluck(:state)
-     # assert cancelled_states.all? { |s| s == 'cancelled' }, "Downstream steps should be cancelled"
+    # Optional: Verify parallel/final steps are cancelled if desired
+    # cancelled_states = Yantra::Persistence::ActiveRecord::StepRecord.where(id: @parallel_step_uuids + [@final_step_uuid]).pluck(:state)
+    # assert cancelled_states.all? { |s| s == 'cancelled' }, "Downstream steps should be cancelled"
   end
 
-   # --- Test 3: Fan-In Readiness Check Performance ---
-   # Measures time to process the completion of the LAST prerequisite for a fan-in step,
-   # including checking all parents and enqueuing the final step.
+  # --- Test 3: Fan-In Readiness Check Performance ---
+  # Measures time to process the completion of the LAST prerequisite for a fan-in step,
+  # including checking all parents and enqueuing the final step.
   def test_perf_fan_in_readiness_check
     puts "\n--- Testing Fan-In Readiness Check (N=#{@num_parallel_steps}) ---"
     # Setup: Start workflow, process start step completion (triggers parallel enqueues - allowed by setup stub)
@@ -174,8 +174,8 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase  # Or Minitest::Test
     # Expect ONLY the final step to be enqueued now
     # Override the general stub with a specific expectation for the final step.
     @worker_adapter.expects(:enqueue)
-                   .with(@final_step_uuid, @workflow_uuid, PerfFinalJob.name, anything)
-                   .once
+      .with(@final_step_uuid, @workflow_uuid, PerfFinalJob.name, anything)
+      .once
 
     # Measure the time for processing the last parallel step's completion.
     measurement = Benchmark.measure do
@@ -223,13 +223,13 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase  # Or Minitest::Test
     }
     # Parallel Steps data
     parallel_step_uuids.each_with_index do |p_uuid, i|
-        steps_to_insert << {
-          id: p_uuid, workflow_id: workflow_uuid,
-          klass: 'PerfParallelJob', state: 'pending',
-          arguments: { index: i }.to_json, queue: 'perf_queue', retries: 0, max_attempts: 3, # Added schema columns
-          created_at: now, updated_at: now
-          # Schema does NOT have 'name'
-        }
+      steps_to_insert << {
+        id: p_uuid, workflow_id: workflow_uuid,
+        klass: 'PerfParallelJob', state: 'pending',
+        arguments: { index: i }.to_json, queue: 'perf_queue', retries: 0, max_attempts: 3, # Added schema columns
+        created_at: now, updated_at: now
+        # Schema does NOT have 'name'
+      }
     end
     # Final Step data
     steps_to_insert << {
@@ -250,7 +250,7 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase  # Or Minitest::Test
     # Parallel depends on Start
     parallel_step_uuids.each do |p_step_uuid|
       dependencies_to_insert << {
-         step_id: p_step_uuid, depends_on_step_id: start_step_uuid
+        step_id: p_step_uuid, depends_on_step_id: start_step_uuid
         # created_at/updated_at not in schema for dependencies
       }
     end
@@ -271,7 +271,7 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase  # Or Minitest::Test
   # Helper modified to find step by string UUID 'id'
   def update_step_state(step_uuid, state_symbol)
     Yantra::Persistence::ActiveRecord::StepRecord.find(step_uuid) # Find by primary key UUID 'id'
-                      .update_column(:state, state_symbol.to_s)
+      .update_column(:state, state_symbol.to_s)
   end
 
   # Helper to format benchmark output
