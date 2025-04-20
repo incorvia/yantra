@@ -43,11 +43,6 @@ module Yantra
           workflow.update(attributes_hash) # Returns true on success, false on failure
         end
 
-        def set_workflow_has_failures_flag(workflow_id)
-          updated_count = WorkflowRecord.where(id: workflow_id).update_all(has_failures: true)
-          updated_count > 0
-        end
-
         def workflow_has_failures?(workflow_id)
           WorkflowRecord.where(id: workflow_id).pick(:has_failures) || false
         end

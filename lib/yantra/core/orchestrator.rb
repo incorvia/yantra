@@ -157,7 +157,17 @@ module Yantra
 
         # Set workflow failure flag (idempotent)
         workflow_id = repository.find_step(step_id)&.workflow_id
-        repository.set_workflow_has_failures_flag(workflow_id) if workflow_id
+
+        if workflow_id
+          update_success = repository.update_workflow_attributes(
+            workflow_id,
+            { has_failures: true }
+            # No expected_old_state needed here, just ensure the flag is set
+          )
+          unless update_success
+            log_warn "[Orchestrator] Failed to set has_failures flag for workflow #{workflow_id} via update_workflow_attributes."
+          end
+        end
 
         # Publish event and process dependents
         publish_step_failed_event(step_id, error_info, finished_at)
