@@ -49,15 +49,15 @@ module Yantra
       #   Note: This might not guarantee individual job success, depending on the adapter.
       # @raise [Yantra::Errors::WorkerError] If a critical error occurs during bulk enqueuing.
       # @raise [NotImplementedError] If the adapter does not support bulk enqueuing.
-      def enqueue_bulk(jobs_data_array)
+      # def enqueue_bulk(jobs_data_array)
         # Default implementation raises NotImplementedError.
         # Adapters supporting bulk enqueue should override this.
         # Adapters *not* supporting it can simply omit this method,
         # and callers should use respond_to? check.
         # Alternatively, provide a fallback loop here calling self.enqueue,
         # but raising NotImplementedError is clearer if it's truly optional.
-        raise NotImplementedError, "#{self.class.name} does not support 'enqueue_bulk'"
-      end
+        # raise NotImplementedError, "#{self.class.name} does not support 'enqueue_bulk'"
+      # end
     end
   end
 end
