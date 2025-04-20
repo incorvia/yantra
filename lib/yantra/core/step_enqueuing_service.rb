@@ -44,8 +44,16 @@ module Yantra
         begin
           # Fetch steps we intend to enqueue. No state filter needed here as caller
           # should have provided IDs that are believed to be pending.
-          steps_to_process = repository.find_steps(step_ids_to_attempt)
-          steps_map = steps_to_process.index_by(&:id)
+          steps_to_process = []
+          measurement = Benchmark.measure do 
+            steps_to_process += repository.find_steps(step_ids_to_attempt)
+          end
+          puts format_benchmark("Fan-Out (find_steps -> N)", measurement)
+          steps_map = {}
+          Benchmark.measure do
+            steps_map = steps_to_process.index_by(&:id)
+          end
+          puts format_benchmark("Fan-Out (build steps map -> N)", measurement)
         rescue Yantra::Errors::PersistenceError => e
           log_error "Failed to bulk fetch steps #{step_ids_to_attempt.inspect} for enqueuing: #{e.message}"
           return 0 # Cannot proceed without step data
@@ -53,29 +61,32 @@ module Yantra
 
         # 3. Attempt to enqueue each step via the worker adapter
         successfully_enqueued_ids = []
-        step_ids_to_attempt.each do |step_id|
-          step = steps_map[step_id]
-          unless step
-            log_warn "Could not find pre-fetched step data for #{step_id}, skipping enqueue."
-            next
-          end
-
-          # Safety check: Ensure step is still pending before enqueuing
-          unless step.state.to_sym == StateMachine::PENDING
-              log_warn "Step #{step_id} state was not PENDING (#{step.state}) when attempting enqueue, skipping."
+        measurement = Benchmark.measure do
+          step_ids_to_attempt.each do |step_id|
+            step = steps_map[step_id]
+            unless step
+              log_warn "Could not find pre-fetched step data for #{step_id}, skipping enqueue."
               next
-          end
+            end
 
-          begin
-            # Delegate actual enqueueing to the worker adapter
-            worker_adapter.enqueue(step.id, step.workflow_id, step.klass, step.queue)
-            successfully_enqueued_ids << step_id # Collect IDs of successfully enqueued steps
-            log_debug { "Successfully called enqueue via adapter for step #{step.id}" } # Use block for debug
-          rescue StandardError => e
-            log_error "Failed to enqueue step #{step_id} via worker adapter: #{e.class} - #{e.message}"
-            # Step remains pending in DB; will not be included in bulk update below.
+            # Safety check: Ensure step is still pending before enqueuing
+            unless step.state.to_sym == StateMachine::PENDING
+                log_warn "Step #{step_id} state was not PENDING (#{step.state}) when attempting enqueue, skipping."
+                next
+            end
+
+            begin
+              # Delegate actual enqueueing to the worker adapter
+                worker_adapter.enqueue(step.id, step.workflow_id, step.klass, step.queue)
+              successfully_enqueued_ids << step_id # Collect IDs of successfully enqueued steps
+              log_debug { "Successfully called enqueue via adapter for step #{step.id}" } # Use block for debug
+            rescue StandardError => e
+              log_error "Failed to enqueue step #{step_id} via worker adapter: #{e.class} - #{e.message}"
+              # Step remains pending in DB; will not be included in bulk update below.
+            end
           end
         end
+        puts format_benchmark("Fan-Out (step_ids_to_attempt.each (enqueue) -> N)", measurement)
 
         # 4. Bulk update state ONLY for successfully enqueued steps
         if successfully_enqueued_ids.any?
@@ -126,6 +137,9 @@ module Yantra
       def log_debug(msg); Yantra.logger&.debug { "[StepEnqueuingService] #{msg}" }; end
       def log_warn(msg); Yantra.logger&.warn { "[StepEnqueuingService] #{msg}" }; end
       def log_error(msg); Yantra.logger&.error { "[StepEnqueuingService] #{msg}" }; end
+      def format_benchmark(label, measurement)
+        "#{label}: #{measurement.real.round(4)}s real, #{measurement.total.round(4)}s cpu"
+      end
     end
   end
 end

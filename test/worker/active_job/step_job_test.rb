@@ -9,28 +9,24 @@ if AR_LOADED # Using AR_LOADED as proxy for full dev env
   require "yantra/worker/active_job/step_job"
   require "yantra/core/orchestrator"
   require "yantra/core/state_machine"
+  require "yantra/core/step_executor" # <<< Require StepExecutor
   require "yantra/errors"
   require "yantra/step" # Need base Yantra::Step
   require "yantra/worker/retry_handler"
-  require 'active_job/test_helper' # Require the helper for ActiveJob base functionality if needed
+  require 'active_job/test_helper'
 end
 
 # --- Dummy User Job Classes ---
 class AsyncSuccessJob < Yantra::Step
-  # Need initializer accepting keywords now due to base class change
   def initialize(**args); super; end
   def perform(data:, multiplier: 1); "Success output with #{data * multiplier}"; end
 end
 class AsyncFailureJob < Yantra::Step
-  # Need initializer accepting keywords now due to base class change
   def initialize(**args); super; end
-  # Accept args to avoid ArgumentError, then raise intended error
   def perform(data:, **_options)
     raise StandardError, "Job failed intentionally";
   end
 end
-# Dummy class for invalid klass test
-# class NonExistentStepClass; end # Not needed, test uses string
 
 module Yantra
   module Worker
@@ -38,202 +34,229 @@ module Yantra
       if defined?(YantraActiveRecordTestCase) && AR_LOADED && defined?(Yantra::Worker::ActiveJob::StepJob)
 
         class StepJobTest < YantraActiveRecordTestCase
-          # --- REMOVED: Unnecessary include ---
-          # This test class doesn't directly use methods like perform_enqueued_jobs
-          # include ActiveJob::TestHelper
-          # --- END REMOVED ---
 
           def setup
             super
-            Yantra.configure { |c| c.default_step_options[:retries] = 3 } # Default 4 attempts
+            Yantra.configure { |c| c.default_step_options[:retries] = 3 }
 
-            # --- Use Mocha Mocks Consistently ---
             @mock_repository = mock('repository')
             @mock_orchestrator = mock('orchestrator')
-            @mock_notifier = mock('notifier') # Needed by RetryHandler
+            @mock_notifier = mock('notifier')
+            @mock_worker_adapter = mock('worker_adapter') # Needed for Orchestrator init
 
-            # Stub global accessors/constructors
+            # --- <<< CHANGED: Updated Stubs >>> ---
+            # Stub global accessors
             Yantra.stubs(:repository).returns(@mock_repository)
             Yantra.stubs(:notifier).returns(@mock_notifier)
-            # Stub Orchestrator.new to return our mock when StepJob calls its helper
+            Yantra.stubs(:worker_adapter).returns(@mock_worker_adapter) # Stub this too
+
+            # Stub Orchestrator.new to return OUR mock when StepJob -> StepExecutor calls it
             Yantra::Core::Orchestrator.stubs(:new).returns(@mock_orchestrator)
-            # --- End Mocha Setup ---
+
+            # Add stubs needed by StepExecutor's initializer validation checks
+            # These are called when StepJob#step_executor calls StepExecutor.new
+            @mock_repository.stubs(:respond_to?).with(:find_step).returns(true)
+            @mock_repository.stubs(:respond_to?).with(:record_step_error).returns(true)
+            # Add stubs for other checks if StepExecutor initializer has them
+            # @mock_orchestrator.stubs(:respond_to?).with(:...)
+            # @mock_notifier.stubs(:respond_to?).with(:...)
+            # --- <<< END CHANGED >>> ---
 
             @step_id = SecureRandom.uuid
             @workflow_id = SecureRandom.uuid
             @step_klass_name = "AsyncSuccessJob"
             @arguments = { data: 10, multiplier: 2 }
 
-            # Use OpenStruct for mock data record (can be replaced with stubbing if preferred)
             @mock_step_record = OpenStruct.new(
               id: @step_id, workflow_id: @workflow_id, klass: @step_klass_name,
-              state: :running, # Start as running for simplicity in some tests
+              state: :running, # Use symbol or string based on what StepExecutor expects
               arguments: @arguments.transform_keys(&:to_s),
               retries: 0,
-              max_attempts: 4, # Based on default retries = 3
+              max_attempts: 4,
               queue: 'default_queue'
-              # Ensure it responds to methods needed by StepJob/RetryHandler
             )
 
             @async_job_instance = StepJob.new
-            # Set executions count directly for testing retry logic
-            @async_job_instance.executions = 0 # AJ executions are 0-based
+            @async_job_instance.executions = 0
           end
 
           def teardown
-            # Mocha teardown happens automatically via mocha/minitest
             Yantra::Configuration.reset! if defined?(Yantra::Configuration) && Yantra::Configuration.respond_to?(:reset!)
             super
           end
 
           # --- Test Perform Method ---
 
+          # --- <<< CHANGED: Test now verifies StepExecutor is called >>> ---
           def test_perform_success_path
             # Arrange
-            expected_output = "Success output with 20"
-            @mock_step_record.state = :running # Assume starting succeeded
+            # Mock the step_executor helper to return a mock executor
+            mock_executor = mock('step_executor')
+            @async_job_instance.stubs(:step_executor).returns(mock_executor)
 
-            # Expectations
-            @mock_orchestrator.expects(:step_starting).with(@step_id).returns(true)
-            # Expect first find_step call
-            @mock_repository.expects(:find_step).with(@step_id).returns(@mock_step_record)
-            # Expect orchestrator success call
-            @mock_orchestrator.expects(:step_succeeded).with(@step_id, expected_output)
+            # Expect the execute method to be called on the mock executor
+            mock_executor.expects(:execute).with(
+              step_id: @step_id,
+              workflow_id: @workflow_id,
+              step_klass_name: @step_klass_name,
+              job_executions: 0 # executions (0) + 1
+            ).returns(nil) # Or whatever execute returns on success
 
             # Act
             @async_job_instance.perform(@step_id, @workflow_id, @step_klass_name)
 
-            # Assert: Verification happens in teardown
+            # Assert: Verification happens in teardown via Mocha expects
           end
+          # --- <<< END CHANGED >>> ---
 
+          # --- <<< CHANGED: Test now verifies StepExecutor is called >>> ---
           def test_perform_user_step_failure_path_allows_retry
-            # Arrange: Simulate first failure (attempt 1 < max 4)
+            # Arrange
             failing_step_klass_name = "AsyncFailureJob"
             expected_error_class = StandardError
-            @mock_step_record.klass = failing_step_klass_name
-            @mock_step_record.state = :running
-            @mock_step_record.arguments = { data: 5 }.transform_keys(&:to_s)
-            @async_job_instance.executions = 0 # First attempt (0-based)
+            @async_job_instance.executions = 0 # First attempt
 
-            # Expectations
-            @mock_orchestrator.expects(:step_starting).with(@step_id).returns(true)
-            # Expect first find_step (before perform)
-            @mock_repository.expects(:find_step).with(@step_id).returns(@mock_step_record).once
-            # Expect second find_step (inside rescue block before RetryHandler)
-            @mock_repository.expects(:find_step).with(@step_id).returns(@mock_step_record).once
+            # Mock the step_executor helper
+            mock_executor = mock('step_executor')
+            @async_job_instance.stubs(:step_executor).returns(mock_executor)
 
-            # Expect RetryHandler calls (via repo)
-            @mock_repository.expects(:increment_step_retries).with(@step_id).once
-            @mock_repository.expects(:record_step_error).with(@step_id, instance_of(expected_error_class)).once
+            # Expect execute to be called and simulate it raising the user error
+            mock_executor.expects(:execute)
+              .with(
+                step_id: @step_id,
+                workflow_id: @workflow_id,
+                step_klass_name: failing_step_klass_name,
+                job_executions: 0
+              )
+              .raises(expected_error_class, "Job failed intentionally")
 
-            # DO NOT expect step_failed or step_succeeded from orchestrator
-            @mock_orchestrator.expects(:step_failed).never
-            @mock_orchestrator.expects(:step_succeeded).never
-
-            # Act & Assert: Expect the intended error to be re-raised by RetryHandler
+            # Act & Assert: Expect the error raised by the executor to propagate
             error = assert_raises(expected_error_class) do
               @async_job_instance.perform(@step_id, @workflow_id, failing_step_klass_name)
             end
             assert_match(/Job failed intentionally/, error.message)
+
+            # Note: We no longer test the *internal* behavior of the RetryHandler
+            # here. That should be done in StepExecutor tests or RetryHandler tests.
+            # This test now just verifies StepJob calls the executor and handles errors.
           end
+          # --- <<< END CHANGED >>> ---
 
-
+          # --- <<< CHANGED: Test now verifies StepExecutor is called >>> ---
           def test_perform_user_step_failure_path_reaches_max_attempts
-            # Arrange: Simulate final failure (attempt 4 >= max 4)
+            # Arrange
             failing_step_klass_name = "AsyncFailureJob"
-            expected_error_class = StandardError
-            @mock_step_record.klass = failing_step_klass_name
-            @mock_step_record.state = :running
-            @mock_step_record.arguments = { data: 5 }.transform_keys(&:to_s)
-            # Set executions to indicate the final attempt (AJ is 0-based, RetryHandler expects 1-based)
-            # If max_attempts is 4, the last execution number is 3 (0, 1, 2, 3)
-            @async_job_instance.executions = 4
+            @async_job_instance.executions = 3 # Final attempt (0, 1, 2, 3 -> 4th execution)
 
-            # Expectations
-            @mock_orchestrator.expects(:step_starting).with(@step_id).returns(true)
-            # Expect first find_step (before perform)
-            @mock_repository.expects(:find_step).with(@step_id).returns(@mock_step_record).once
-            # Expect second find_step (inside rescue block before RetryHandler)
-            @mock_repository.expects(:find_step).with(@step_id).returns(@mock_step_record).once
+            # Mock the step_executor helper
+            mock_executor = mock('step_executor')
+            @async_job_instance.stubs(:step_executor).returns(mock_executor)
 
-            # Expect RetryHandler to call orchestrator.step_failed
-            # Match error details loosely
-            error_details_matcher = has_entries(
-              class: expected_error_class.name,
-              message: "Job failed intentionally"
-            )
-            @mock_orchestrator.expects(:step_failed)
-                              .with(@step_id, error_details_matcher)
-                              .once
+            # Expect execute to be called and simulate it raising the user error
+            mock_executor.expects(:execute)
+              .with(
+                step_id: @step_id,
+                workflow_id: @workflow_id,
+                step_klass_name: failing_step_klass_name,
+                job_executions: 3 # executions (3) 
+              )
+              .raises(StandardError, "Job failed intentionally") # Simulate error on last attempt
 
-            # DO NOT expect step_succeeded
-            @mock_orchestrator.expects(:step_succeeded).never
+            # Act & Assert: Expect the error to propagate
+            error = assert_raises(StandardError) do
+              @async_job_instance.perform(@step_id, @workflow_id, failing_step_klass_name)
+            end
+            assert_match(/Job failed intentionally/, error.message)
 
-            # Act
-            # Perform should NOT raise an error here, as RetryHandler returns :failed internally
-            @async_job_instance.perform(@step_id, @workflow_id, failing_step_klass_name)
-
-            # Assert: Verification happens in teardown
+            # Note: We don't verify orchestrator.step_failed here anymore.
+            # That interaction happens *inside* the StepExecutor/RetryHandler,
+            # which should have its own tests.
           end
+          # --- <<< END CHANGED >>> ---
 
-
+          # --- <<< CHANGED: Test now verifies StepExecutor is called >>> ---
           def test_perform_does_nothing_if_step_starting_returns_false
              # Arrange
+             # Let the real StepJob#step_executor run. It will create a real
+             # StepExecutor instance, which will use the @mock_orchestrator
+             # because Yantra::Core::Orchestrator.new is stubbed in setup.
+
+             # Expect step_starting to be called on the mock orchestrator and return false
              @mock_orchestrator.expects(:step_starting).with(@step_id).returns(false)
-             # DO NOT expect find_step or anything else from repo/orchestrator
-             @mock_repository.expects(:find_step).never
+
+             # Expect StepExecutor#execute NOT to call these because it returns early
+             @mock_repository.expects(:find_step).never # Should not try to find step after starting fails
              @mock_orchestrator.expects(:step_succeeded).never
              @mock_orchestrator.expects(:step_failed).never
+             # We don't need to mock the executor itself anymore
 
              # Act
              @async_job_instance.perform(@step_id, @workflow_id, @step_klass_name)
-             # Assert: Verification happens in teardown
-          end
 
+             # Assert: Verification happens in teardown via Mocha expects/never
+          end
+          # --- <<< END CHANGED >>> ---
+
+
+          # --- <<< CHANGED: Test now verifies StepExecutor is called >>> ---
           def test_perform_raises_persistence_error_if_step_not_found_after_starting
-             # Arrange
-             @mock_orchestrator.expects(:step_starting).with(@step_id).returns(true)
-             # Expect first find_step to return nil
-             @mock_repository.expects(:find_step).with(@step_id).returns(nil)
-             # Do NOT expect step_succeeded or step_failed
-             @mock_orchestrator.expects(:step_succeeded).never
-             @mock_orchestrator.expects(:step_failed).never
+            # Arrange
+            # Mock the step_executor helper
+            mock_executor = mock('step_executor')
+            @async_job_instance.stubs(:step_executor).returns(mock_executor)
 
-             # Act & Assert
-             error = assert_raises(Yantra::Errors::StepNotFound) do
-               @async_job_instance.perform(@step_id, @workflow_id, @step_klass_name)
-             end
-             assert_match(/Step record #{@step_id} not found after starting/, error.message)
+            # Expect execute to be called and simulate it raising StepNotFound
+            mock_executor.expects(:execute)
+              .with(
+                step_id: @step_id,
+                workflow_id: @workflow_id,
+                step_klass_name: @step_klass_name,
+                job_executions: 0
+              )
+              .raises(Yantra::Errors::StepNotFound, "Step record #{@step_id} not found after starting.")
+
+            # Act & Assert
+            error = assert_raises(Yantra::Errors::StepNotFound) do
+              @async_job_instance.perform(@step_id, @workflow_id, @step_klass_name)
+            end
+            assert_match(/Step record #{@step_id} not found after starting/, error.message)
           end
+          # --- <<< END CHANGED >>> ---
 
+
+          # --- <<< CHANGED: Test now verifies StepExecutor is called >>> ---
           def test_perform_raises_step_definition_error_if_klass_invalid
+            # Arrange
             invalid_klass_name = "NonExistentStepClass"
-            @mock_step_record.klass = invalid_klass_name
+            # Mock the step_executor helper
+            mock_executor = mock('step_executor')
+            @async_job_instance.stubs(:step_executor).returns(mock_executor)
 
-            # Expectations
-            @mock_orchestrator.expects(:step_starting).with(@step_id).returns(true)
-            # Expect first find_step
-            @mock_repository.expects(:find_step).with(@step_id).returns(@mock_step_record)
-
-            # Expect StepJob to catch LoadError/NameError, call orchestrator.step_failed, and re-raise
-            error_details_matcher = has_entries(
-              class: "Yantra::Errors::StepDefinitionError", # Expecting our wrapped error
-              message: regexp_matches(/Class #{invalid_klass_name} could not be loaded/)
-            )
-            @mock_orchestrator.expects(:step_failed)
-                              .with(@step_id, error_details_matcher)
-                              .once
+            # Expect execute to be called and simulate it raising StepDefinitionError
+            mock_executor.expects(:execute)
+              .with(
+                step_id: @step_id,
+                workflow_id: @workflow_id,
+                step_klass_name: invalid_klass_name,
+                job_executions: 0
+              )
+              .raises(Yantra::Errors::StepDefinitionError, "Class #{invalid_klass_name} could not be loaded")
 
             # Act & Assert: Expect StepDefinitionError
             error = assert_raises(Yantra::Errors::StepDefinitionError) do
               @async_job_instance.perform(@step_id, @workflow_id, invalid_klass_name)
             end
             assert_match(/Class #{invalid_klass_name} could not be loaded/, error.message)
+
+            # Note: We no longer check orchestrator.step_failed here,
+            # as that logic is inside StepExecutor and tested separately.
           end
+          # --- <<< END CHANGED >>> ---
 
         end
       end # if defined?
     end
   end
 end
+
 
