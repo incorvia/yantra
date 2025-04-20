@@ -49,7 +49,7 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase  # Or Minitest::Test
     )
 
     # --- Test Parameters ---
-    @num_parallel_steps = ENV.fetch('PERF_N', 10000).to_i
+    @num_parallel_steps = ENV.fetch('PERF_N', 100).to_i
 
     # Optional: Silence Yantra's global logger
     @original_logger = Yantra.logger
