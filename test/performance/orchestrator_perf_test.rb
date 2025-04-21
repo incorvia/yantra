@@ -170,7 +170,7 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase
 
     # Measure the time for processing the last parallel step's completion.
     # This involves: get_dependents(last_parallel) -> [final], fetch_dependencies(final) -> [all parallel],
-    # fetch_states(final + all parallel), is_ready?(final), enqueue_bulk(final)
+    # fetch_states(final + all parallel), is_ready?(final)
     measurement = Benchmark.measure do
       @orchestrator.step_finished(last_parallel_step_uuid)
     end

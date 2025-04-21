@@ -43,29 +43,5 @@ class TestWorkerAdapter
     # Yantra.logger&.debug { "[TestWorkerAdapter] Recorded enqueue: #{job_data.inspect}" } # Optional logging
     true # Simulate successful enqueue submission
   end
-
-  # Simulates enqueuing multiple jobs by recording their details.
-  #
-  # @param jobs_data_array [Array<Hash>] Array of job data hashes.
-  #   Expected keys per hash: :step_id, :workflow_id, :klass, :queue
-  # @return [Boolean] Always returns true in this test adapter.
-  def enqueue_bulk(jobs_data_array)
-    return true if jobs_data_array.nil? || jobs_data_array.empty?
-
-    jobs_data_array.each do |job_data|
-       # Ensure basic keys exist before recording
-       recorded_data = {
-         step_id: job_data[:step_id],
-         workflow_id: job_data[:workflow_id],
-         klass: job_data[:klass],
-         queue: job_data[:queue],
-         args: [job_data[:step_id], job_data[:workflow_id], job_data[:klass]]
-       }
-       @enqueued_jobs << recorded_data
-    end
-    # Yantra.logger&.debug { "[TestWorkerAdapter] Recorded bulk enqueue: #{jobs_data_array.count} jobs." } # Optional logging
-    true # Simulate successful bulk submission
-  end
-
 end
 

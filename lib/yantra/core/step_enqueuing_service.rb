@@ -15,7 +15,7 @@ module Yantra
       attr_reader :repository, :worker_adapter, :notifier
 
       # @param repository [#find_steps, #bulk_update_steps]
-      # @param worker_adapter [#enqueue, #enqueue_bulk (optional)]
+      # @param worker_adapter [#enqueue]
       # @param notifier [#publish, nil]
       def initialize(repository:, worker_adapter:, notifier:)
         @repository     = repository
@@ -69,59 +69,23 @@ module Yantra
         successfully_enqueued_ids = []
         enqueue_successful = false
 
-        # --- <<< CHANGED: Use Bulk or Fallback >>> ---
-        if worker_adapter.respond_to?(:enqueue_bulk)
-          # --- Bulk Path ---
-          log_debug "Worker adapter supports enqueue_bulk. Preparing data."
-          jobs_data_array = valid_steps_to_enqueue.map do |step|
-            {
-              step_id: step.id,
-              workflow_id: step.workflow_id,
-              klass: step.klass,
-              queue: step.queue
-              # Add :args if your bulk interface/adapters need it
-            }
-          end
-
+        valid_steps_to_enqueue.each do |step|
           begin
-            # Assume enqueue_bulk returns true on success, false/raises on failure
-            enqueue_successful = worker_adapter.enqueue_bulk(jobs_data_array)
-            if enqueue_successful
-              # If bulk call succeeded, assume all valid steps passed to it were enqueued
-              successfully_enqueued_ids = valid_steps_to_enqueue.map(&:id)
-              log_info "Successfully submitted #{successfully_enqueued_ids.count} jobs via enqueue_bulk."
+            # Delegate actual enqueueing to the worker adapter
+            # Assume enqueue returns true/JID on success, false/nil/raises on failure
+            if worker_adapter.enqueue(step.id, step.workflow_id, step.klass, step.queue)
+              successfully_enqueued_ids << step.id # Collect IDs of successfully enqueued steps
+              log_debug "Successfully called enqueue via adapter for step #{step.id}"
             else
-              log_warn "Worker adapter enqueue_bulk returned false for steps: #{valid_steps_to_enqueue.map(&:id).inspect}"
+              log_warn "Failed to enqueue step #{step.id} via worker adapter (adapter returned false/nil)."
             end
           rescue StandardError => e
-            log_error "Error calling worker_adapter.enqueue_bulk: #{e.class} - #{e.message}"
-            enqueue_successful = false # Ensure flag is false on error
+            log_error "Failed to enqueue step #{step.id} via worker adapter: #{e.class} - #{e.message}"
+            # Step remains pending in DB; not added to successfully_enqueued_ids
           end
-          # --- End Bulk Path ---
-        else
-          # --- Fallback Path (Single Enqueue Loop) ---
-          log_debug "Worker adapter does not support enqueue_bulk. Using single enqueue loop."
-          valid_steps_to_enqueue.each do |step|
-            begin
-              # Delegate actual enqueueing to the worker adapter
-              # Assume enqueue returns true/JID on success, false/nil/raises on failure
-              if worker_adapter.enqueue(step.id, step.workflow_id, step.klass, step.queue)
-                successfully_enqueued_ids << step.id # Collect IDs of successfully enqueued steps
-                log_debug "Successfully called enqueue via adapter for step #{step.id}"
-              else
-                 log_warn "Failed to enqueue step #{step.id} via worker adapter (adapter returned false/nil)."
-              end
-            rescue StandardError => e
-              log_error "Failed to enqueue step #{step.id} via worker adapter: #{e.class} - #{e.message}"
-              # Step remains pending in DB; not added to successfully_enqueued_ids
-            end
-          end
-          # Set flag based on whether any steps succeeded in the loop
-          enqueue_successful = successfully_enqueued_ids.any?
-          # --- End Fallback Path ---
         end
-        # --- <<< END CHANGED >>> ---
-
+        # Set flag based on whether any steps succeeded in the loop
+        enqueue_successful = successfully_enqueued_ids.any?
 
         # 4. Bulk update state ONLY for steps successfully submitted for enqueuing
         if successfully_enqueued_ids.any?

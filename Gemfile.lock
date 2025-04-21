@@ -101,6 +101,7 @@ GEM
       pp (>= 0.6.0)
       rdoc (>= 4.0.0)
       reline (>= 0.4.2)
+    json (2.10.2)
     logger (1.7.0)
     loofah (2.24.0)
       crass (~> 1.0.2)
@@ -183,10 +184,18 @@ GEM
     rake (13.2.1)
     rdoc (6.13.1)
       psych (>= 4.0.0)
+    redis-client (0.24.0)
+      connection_pool
     reline (0.6.1)
       io-console (~> 0.5)
     ruby2_keywords (0.0.5)
     securerandom (0.4.1)
+    sidekiq (8.0.2)
+      connection_pool (>= 2.5.0)
+      json (>= 2.9.0)
+      logger (>= 1.6.2)
+      rack (>= 3.1.0)
+      redis-client (>= 0.23.2)
     sqlite3 (2.6.0-arm64-darwin)
     sqlite3 (2.6.0-x86_64-linux-gnu)
     stringio (3.1.6)
@@ -215,6 +224,7 @@ DEPENDENCIES
   pry
   rails (>= 6.0)
   rake (~> 13.0)
+  sidekiq
   sqlite3 (>= 2.1)
   yantra!
 
