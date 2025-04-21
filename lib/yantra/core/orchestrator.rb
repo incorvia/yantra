@@ -3,7 +3,7 @@ require_relative '../errors'
 require_relative '../persistence/repository_interface'
 require_relative '../worker/enqueuing_interface'
 require_relative '../events/notifier_interface'
-require_relative 'step_enqueuing_service'
+require_relative 'step_enqueuer'
 
 module Yantra
   module Core
@@ -15,7 +15,7 @@ module Yantra
         @worker_adapter = worker_adapter || Yantra.worker_adapter
         @notifier       = notifier       || Yantra.notifier
 
-        @step_enqueuer = StepEnqueuingService.new(
+        @step_enqueuer = StepEnqueuer.new(
           repository: @repository,
           worker_adapter: @worker_adapter,
           notifier: @notifier

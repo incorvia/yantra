@@ -1,4 +1,4 @@
-# lib/yantra/core/step_enqueuing_service.rb
+# lib/yantra/core/step_enqueuer.rb
 
 require_relative '../errors'
 require_relative 'state_machine'
@@ -11,7 +11,7 @@ module Yantra
     # Service class responsible for taking a list of step IDs ready to be run,
     # attempting to enqueue them via the worker adapter, updating their state,
     # and publishing appropriate events. Uses bulk operations for efficiency.
-    class StepEnqueuingService
+    class StepEnqueuer
       attr_reader :repository, :worker_adapter, :notifier
 
       # @param repository [#find_steps, #bulk_update_steps]
@@ -24,10 +24,10 @@ module Yantra
 
         # Validation
         unless repository&.respond_to?(:find_steps) && repository&.respond_to?(:bulk_update_steps)
-           raise ArgumentError, "StepEnqueuingService requires a repository implementing #find_steps and #bulk_update_steps"
+           raise ArgumentError, "StepEnqueuer requires a repository implementing #find_steps and #bulk_update_steps"
         end
         unless worker_adapter&.respond_to?(:enqueue) # Base enqueue is required
-           raise ArgumentError, "StepEnqueuingService requires a worker adapter implementing #enqueue"
+           raise ArgumentError, "StepEnqueuer requires a worker adapter implementing #enqueue"
         end
       end
 
@@ -127,12 +127,12 @@ module Yantra
       end
 
       # Logging helpers (expecting strings)
-      def log_info(msg); Yantra.logger&.info("[StepEnqueuingService] #{msg}") end
-      def log_debug(msg); Yantra.logger&.debug("[StepEnqueuingService] #{msg}") end
-      def log_warn(msg); Yantra.logger&.warn("[StepEnqueuingService] #{msg}") end
-      def log_error(msg); Yantra.logger&.error("[StepEnqueuingService] #{msg}") end
+      def log_info(msg); Yantra.logger&.info("[StepEnqueuer] #{msg}") end
+      def log_debug(msg); Yantra.logger&.debug("[StepEnqueuer] #{msg}") end
+      def log_warn(msg); Yantra.logger&.warn("[StepEnqueuer] #{msg}") end
+      def log_error(msg); Yantra.logger&.error("[StepEnqueuer] #{msg}") end
 
-    end # class StepEnqueuingService
+    end # class StepEnqueuer
   end # module Core
 end # module Yantra
 

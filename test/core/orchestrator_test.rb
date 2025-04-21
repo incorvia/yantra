@@ -12,7 +12,7 @@ require 'test_helper'
 # Project requires
 require 'yantra/core/orchestrator'
 require 'yantra/core/state_machine'
-require 'yantra/core/step_enqueuing_service'
+require 'yantra/core/step_enqueuer'
 require 'yantra/errors'
 require 'yantra/persistence/repository_interface'
 require 'yantra/worker/enqueuing_interface'
@@ -76,7 +76,7 @@ module Yantra
         @notifier.stubs(:is_a?).with(Yantra::Events::NotifierInterface).returns(true)
         @notifier.stubs(:respond_to?).with(:publish).returns(true)
 
-        # Stub checks required by StepEnqueuingService initializer
+        # Stub checks required by StepEnqueuer initializer
         @repo.stubs(:respond_to?).with(:find_steps).returns(true)
         @repo.stubs(:respond_to?).with(:bulk_update_steps).returns(true)
         @worker.stubs(:respond_to?).with(:enqueue).returns(true)
@@ -85,7 +85,7 @@ module Yantra
         @repo.stubs(:respond_to?).with(:get_dependencies_ids_bulk).returns(true)
         @repo.stubs(:respond_to?).with(:fetch_step_states).returns(true)
 
-        # Instantiate the orchestrator - this also instantiates StepEnqueuingService
+        # Instantiate the orchestrator - this also instantiates StepEnqueuer
         @orchestrator = Orchestrator.new(
           repository: @repo,
           worker_adapter: @worker,
@@ -118,7 +118,7 @@ module Yantra
                    .in_sequence(sequence)
           @repo.expects(:find_ready_steps).with(@workflow_id).returns(ready_step_ids).in_sequence(sequence)
 
-          # --- Expectation for the delegation to StepEnqueuingService ---
+          # --- Expectation for the delegation to StepEnqueuer ---
           @step_enqueuer.expects(:call)
                         .with(workflow_id: @workflow_id, step_ids_to_attempt: ready_step_ids)
                         .returns(2) # Simulate service enqueuing 2 steps
@@ -303,7 +303,7 @@ module Yantra
       end
 
       # =========================================================================
-      # Step Finished Tests (Focus on interaction with StepEnqueuingService)
+      # Step Finished Tests (Focus on interaction with StepEnqueuer)
       # =========================================================================
 
       def test_step_finished_success_enqueues_ready_dependent
@@ -328,7 +328,7 @@ module Yantra
                .in_sequence(sequence)
           # (is_ready_to_start? check happens internally in orchestrator based on fetched states)
 
-          # --- Expect delegation to StepEnqueuingService ---
+          # --- Expect delegation to StepEnqueuer ---
           @step_enqueuer.expects(:call)
                         .with(workflow_id: @workflow_id, step_ids_to_attempt: ready_dependent_ids)
                         .returns(1) # Simulate 1 step enqueued
@@ -370,7 +370,7 @@ module Yantra
                .returns({ @step_c_id => 'pending', @step_a_id => 'succeeded', @step_b_id => 'pending' }) # B is pending, so C is not ready
                .in_sequence(sequence)
 
-          # --- Expect StepEnqueuingService NOT to be called ---
+          # --- Expect StepEnqueuer NOT to be called ---
           @step_enqueuer.expects(:call).never
 
           # --- check_workflow_completion (workflow should complete successfully) ---

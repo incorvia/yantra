@@ -1,9 +1,9 @@
 # lib/yantra/core/workflow_retry_service.rb
-# Refactored to use StepEnqueuingService
+# Refactored to use StepEnqueuer
 
 require_relative '../errors'
 require_relative 'state_machine'
-require_relative 'step_enqueuing_service' # <<< Add require for the new service
+require_relative 'step_enqueuer' # <<< Add require for the new service
 
 module Yantra
   module Core
@@ -16,7 +16,7 @@ module Yantra
         @workflow_id = workflow_id
         @repository  = repository
         # Instantiate the enqueuing service, passing dependencies
-        @step_enqueuer = StepEnqueuingService.new(
+        @step_enqueuer = StepEnqueuer.new(
           repository: repository,
           worker_adapter: worker_adapter,
           notifier: notifier
@@ -30,7 +30,7 @@ module Yantra
       end
 
       # Finds failed steps, resets them to pending, and delegates enqueuing
-      # to StepEnqueuingService.
+      # to StepEnqueuer.
       # Returns the number of steps successfully re-enqueued by the service.
       def call
         failed_steps = find_failed_steps # Still need step objects to get IDs
@@ -62,24 +62,24 @@ module Yantra
         end
 
         # --- 2. Delegate Enqueuing to the Service ---
-        # The StepEnqueuingService will handle:
+        # The StepEnqueuer will handle:
         # - Fetching step data (find_steps)
         # - Looping and attempting enqueue via worker_adapter
         # - Collecting successful IDs
         # - Bulk updating successful IDs to ENQUEUED
         # - Publishing the bulk event
         begin
-          Yantra.logger&.info { "[WorkflowRetryService] Delegating enqueue attempt to StepEnqueuingService for steps: #{failed_step_ids.inspect}" }
+          Yantra.logger&.info { "[WorkflowRetryService] Delegating enqueue attempt to StepEnqueuer for steps: #{failed_step_ids.inspect}" }
           # Pass the IDs of the steps that are now pending and ready for retry
           reenqueued_count = @step_enqueuer.call(
             workflow_id: workflow_id,
             step_ids_to_attempt: failed_step_ids
           )
-          Yantra.logger&.info { "[WorkflowRetryService] StepEnqueuingService reported #{reenqueued_count} steps successfully enqueued."}
+          Yantra.logger&.info { "[WorkflowRetryService] StepEnqueuer reported #{reenqueued_count} steps successfully enqueued."}
           return reenqueued_count # Return the count reported by the service
         rescue StandardError => e
            # Catch errors from the enqueuing service itself
-           Yantra.logger&.error { "[WorkflowRetryService] Error during StepEnqueuingService call: #{e.class} - #{e.message}" }
+           Yantra.logger&.error { "[WorkflowRetryService] Error during StepEnqueuer call: #{e.class} - #{e.message}" }
            return 0 # Indicate failure if the service call failed
         end
         # --- End Delegation ---
