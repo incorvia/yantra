@@ -39,6 +39,15 @@ class IntegrationStepD < Yantra::Step
   def perform(input_b:, input_c:); puts "INTEGRATION_TEST: Job D running"; { output_d: "#{input_b[:output_b]}-#{input_c[:output_c]}" }; end
 end
 
+class IntegrationStepE < Yantra::Step
+  def perform(msg: 'E')
+    # Simulate some work, similar to IntegrationStepA
+    puts "INTEGRATION_TEST: Job E running"
+    sleep 0.1
+    { output_e: msg.upcase }
+  end
+end
+
 class IntegrationStepFails < Yantra::Step
   def self.yantra_max_attempts; 1; end # Force immediate permanent failure (1 attempt total)
   def perform(msg: 'F'); puts "INTEGRATION_TEST: Job Fails running - WILL FAIL"; raise StandardError, 'Integration job failed!'; end
@@ -125,6 +134,13 @@ class PipeliningWorkflow < Yantra::Workflow
   end
 end
 
+class ParallelStartWorkflow < Yantra::Workflow
+  def perform
+    run IntegrationStepA, name: :step_a # No dependencies
+    run IntegrationStepE, name: :step_e # No dependencies
+    run IntegrationStepC, name: :step_c # No dependencies - Assuming IntegrationStepE exists or use A/C again
+  end
+end
 
 module Yantra
   # Keep original conditional test class definition
@@ -713,6 +729,72 @@ module Yantra
         assert_equal 'pending', step_a_record.reload.state # Step A remains pending
         assert_equal 0, @test_notifier.published_events.count
         assert_equal 0, enqueued_jobs.size # No jobs were actually failed to re-enqueue
+      end
+
+      def test_parallel_start_workflow_enqueues_all_initial_steps
+        # Arrange: Create the workflow
+        workflow_id = Client.create_workflow(ParallelStartWorkflow)
+
+        # Fetch all step records, identifying them by klass defined in the workflow
+        all_steps = repository.get_workflow_steps(workflow_id)
+        step_a = all_steps.find { |s| s.klass == 'IntegrationStepA' }
+        step_e = all_steps.find { |s| s.klass == 'IntegrationStepE' } # Find E now
+        step_c = all_steps.find { |s| s.klass == 'IntegrationStepC' }
+
+        refute_nil step_a, "Step A record should exist"
+        refute_nil step_e, "Step E record should exist" # Check E
+        refute_nil step_c, "Step C record should exist"
+        assert_equal 'IntegrationStepA', step_a.klass
+        assert_equal 'IntegrationStepE', step_e.klass # Check E
+        assert_equal 'IntegrationStepC', step_c.klass
+
+        # Act: Start the workflow
+        @test_notifier.clear!
+        Client.start_workflow(workflow_id)
+
+        # Assert Events after Start
+        assert_equal 2, @test_notifier.published_events.count, 'Should publish workflow.started and one step.bulk_enqueued'
+        assert_equal 'yantra.workflow.started', @test_notifier.published_events[0][:name]
+        assert_equal workflow_id, @test_notifier.published_events[0][:payload][:workflow_id]
+
+        bulk_enqueued_event = @test_notifier.published_events[1]
+        assert_equal 'yantra.step.bulk_enqueued', bulk_enqueued_event[:name]
+        enqueued_ids = bulk_enqueued_event[:payload][:enqueued_ids]
+
+        # Verify all three steps were in the single bulk enqueue event
+        assert_equal 3, enqueued_ids.length, "Should enqueue 3 steps"
+        assert_includes enqueued_ids, step_a.id
+        assert_includes enqueued_ids, step_e.id # Check E
+        assert_includes enqueued_ids, step_c.id
+
+        # Assert Queue State
+        assert_equal 3, enqueued_jobs.size, "Should have 3 jobs enqueued"
+        assert_enqueued_with(job: Yantra::Worker::ActiveJob::StepJob, args: [step_a.id, workflow_id, 'IntegrationStepA'])
+        assert_enqueued_with(job: Yantra::Worker::ActiveJob::StepJob, args: [step_e.id, workflow_id, 'IntegrationStepE']) # Check E
+        assert_enqueued_with(job: Yantra::Worker::ActiveJob::StepJob, args: [step_c.id, workflow_id, 'IntegrationStepC'])
+
+        # Assert DB State
+        assert_equal 'enqueued', step_a.reload.state
+        assert_equal 'enqueued', step_e.reload.state # Check E
+        assert_equal 'enqueued', step_c.reload.state
+        assert_equal 'running', repository.find_workflow(workflow_id).state
+
+        # Act 2: Perform all enqueued jobs
+        @test_notifier.clear!
+        perform_enqueued_jobs # Runs A, E, C
+
+        # Assert Final State
+        assert_equal 0, enqueued_jobs.size, "Queue should be empty after performing jobs"
+        assert_equal 'succeeded', step_a.reload.state
+        assert_equal 'succeeded', step_e.reload.state # Check E
+        assert_equal 'succeeded', step_c.reload.state
+        assert_equal 'succeeded', repository.find_workflow(workflow_id).state
+
+        # Assert Events after completion (3 starts, 3 succeeds, 1 workflow succeed)
+        assert_equal 7, @test_notifier.published_events.count
+        assert_equal 3, @test_notifier.find_events('yantra.step.started').count
+        assert_equal 3, @test_notifier.find_events('yantra.step.succeeded').count
+        assert_equal 1, @test_notifier.find_events('yantra.workflow.succeeded').count
       end
 
     end # class ActiveJobWorkflowExecutionTest
