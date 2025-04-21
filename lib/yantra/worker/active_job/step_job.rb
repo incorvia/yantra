@@ -47,11 +47,7 @@ module Yantra
               step_id: step_id,
               workflow_id: workflow_id,
               step_klass_name: step_klass_name,
-              # <<< FIX: Pass the raw ActiveJob executions count >>>
-              # This count appears to be 1-based *within* the perform method context
-              # based on pry testing. RetryHandler expects 1-based.
               job_executions: executions
-              # <<< END FIX >>>
             )
             log_job_info "StepExecutor finished successfully", step_id, workflow_id
           rescue Yantra::Errors::StepDefinitionError, Yantra::Errors::StepNotFound => e
