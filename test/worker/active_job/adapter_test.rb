@@ -78,7 +78,7 @@ module Yantra
                 @adapter.enqueue(@job_id, @workflow_id, @job_klass_name, @queue_name)
               end
               # Check wrapped error message
-              assert_match /ActiveJob enqueuing failed: Queue backend connection failed/, error.message
+              assert_match(/ActiveJob enqueuing failed: Queue backend connection failed/, error.message)
             end
             # Verify perform_later was still called (and raised the error) by checking captured args
             assert_equal [@job_id, @workflow_id, @job_klass_name], mock_job_class.captured_perform_later_args

@@ -129,7 +129,6 @@ class StepTest < Minitest::Test
     parent_id_1 = SecureRandom.uuid
     parent_id_2 = SecureRandom.uuid
     output_1 = { value: 1 }
-    output_2 = nil # If fetch_step_outputs returns nil value for a key
     parent_ids = [parent_id_1, parent_id_2]
     # Adjust expected result based on how fetch_step_outputs handles nil output
     expected_result = { parent_id_1.to_s => output_1, parent_id_2.to_s => {} } # Assuming nil becomes {}

@@ -80,9 +80,7 @@ module Yantra
         # Stub repository access for this test (using Mocha style here, adjust if needed)
         Yantra.stub(:repository, @mock_repo) do
           # Arrange
-          max_attempts = 4 # Calculated based on default retries = 3
           executions = 4   # Simulate reaching max attempts
-          finished_at_time = Time.now # Capture time for expectation (though not used in expect)
           formatted_error = { class: "StandardError", message: "Something went wrong", backtrace: ["line 1", "line 2"] }
 
           # --- UPDATED: Pass orchestrator mock ---
@@ -95,9 +93,6 @@ module Yantra
             notifier: @mock_notifier,
             orchestrator: @mock_orchestrator # Pass the mock
           )
-
-          # Freeze time if precise time matching was needed (removed from expectations below)
-          # Time.stub :current, finished_at_time do
 
           # --- Expectations ---
           # Expect orchestrator#step_failed to be called
@@ -129,7 +124,6 @@ module Yantra
       def test_handle_error_prepares_for_retry_and_raises
         Yantra.stub(:repository, @mock_repo) do
           # Arrange
-          max_attempts = 4 # Assuming default retries = 3
           executions = 1   # First failure, retries remaining
 
           # --- UPDATED: Pass orchestrator mock ---

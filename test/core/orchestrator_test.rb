@@ -270,7 +270,6 @@ module Yantra
       # =========================================================================
       def test_step_succeeded_updates_state_records_output_publishes_event_and_calls_step_finished
         output = { result: 'ok' }
-        step_running = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: 'StepA', state: 'running') # State before call
         step_succeeded_record = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: 'StepA', state: 'succeeded', finished_at: FROZEN_TIME, output: output)
 
         Time.stub :current, FROZEN_TIME do

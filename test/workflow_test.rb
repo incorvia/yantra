@@ -75,7 +75,6 @@ class WorkflowTest < Minitest::Test
   end
 
   def test_dsl_run_method_returns_reference_symbol # <<< NEW TEST (or assertion)
-    wf = ComplexTestWorkflow.new(100)
     # Manually run one step to check return value
     # Need to call perform first to initialize internal state used by run
     # wf.perform(100) # Or just instantiate, as initialize calls perform

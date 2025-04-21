@@ -300,7 +300,6 @@ module Yantra
           # ... (Restored original logic) ...
           all_step_ids = StepRecord.where(workflow_id: workflow_id).pluck(:id)
           return [] if all_step_ids.empty?
-          steps_with_deps_ids = StepDependencyRecord.where(step_id: all_step_ids).pluck(:step_id).uniq
           incomplete_deps = StepDependencyRecord
             .joins("INNER JOIN yantra_steps AS prerequisites ON prerequisites.id = yantra_step_dependencies.depends_on_step_id")
             .where(step_id: all_step_ids)
@@ -378,8 +377,7 @@ module Yantra
             update_attrs[:state] = update_attrs[:state].to_s
           end
           update_attrs[:updated_at] = Time.current unless update_attrs.key?(:updated_at)
-          updated_count = StepRecord.where(id: step_ids).update_all(update_attrs)
-          true
+          StepRecord.where(id: step_ids).update_all(update_attrs)
         rescue ::ActiveRecord::StatementInvalid, ::ActiveRecord::ActiveRecordError => e
           log_error { "Bulk step update failed for IDs #{step_ids.inspect}: #{e.message}" }
           raise Yantra::Errors::PersistenceError, "Bulk step update failed: #{e.message}"

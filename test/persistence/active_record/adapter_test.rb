@@ -270,8 +270,8 @@ module Yantra
 
           def test_list_workflows_with_status
             wf_running = @workflow
-            wf_succeeded = create_workflow_record!(state: "succeeded")
-            wf_pending = create_workflow_record!(state: "pending")
+            create_workflow_record!(state: "succeeded")
+            create_workflow_record!(state: "pending")
             workflows = @adapter.list_workflows(status: :running)
             assert_equal 1, workflows.size
             assert_equal wf_running.id, workflows.first.id
@@ -326,7 +326,7 @@ module Yantra
 
           # --- Tests for delete_expired_workflows ---
           # [ ... existing delete_expired_workflows test remains unchanged ... ]
-           def test_delete_expired_workflows
+          def test_delete_expired_workflows
             # Arrange
             cutoff = 2.days.ago
             wf_expired1 = create_workflow_record!(state: "succeeded", finished_at: 3.days.ago)
@@ -348,7 +348,6 @@ module Yantra
             refute_nil WorkflowRecord.find_by(id: wf_not_expired1.id)
             refute_nil WorkflowRecord.find_by(id: wf_not_expired2.id)
           end
-
 
           # --- Private Helper Methods ---
           private

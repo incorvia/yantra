@@ -19,21 +19,20 @@ module Yantra
         # sidekiq_options retry: false # Disable Sidekiq retries, use Yantra's logic via RetryHandler
 
         rescue_from(StandardError) do |exception|
-          step_id = arguments[0] rescue nil
-          workflow_id = arguments[1] rescue nil
+          # Safely extract arguments for logging context
+          step_id = arguments.first rescue nil
+          # Using arguments[1] is also fine if you prefer
+          workflow_id = arguments.second rescue nil
+
+          # Log the error with context before deciding whether to re-raise
           log_job_error("Unhandled exception in StepJob wrapper", step_id, workflow_id, exception)
 
-          if step_id && !exception.is_a?(Yantra::Errors::StepNotFound)
-             begin
-                error_info = { class: exception.class.name, message: "Unhandled StepJob wrapper error: #{exception.message}", backtrace: exception.backtrace }
-                # Get a fresh orchestrator instance to report failure
-                # Ensure Orchestrator.new uses configured adapters if called here
-                # Yantra::Core::Orchestrator.new.step_failed(step_id, error_info, expected_old_state: nil)
-             rescue => inner_e
-                log_job_error("Failed to mark step failed after unhandled StepJob wrapper error", step_id, workflow_id, inner_e)
-             end
-          end
-          # Re-raise non-Yantra errors to let ActiveJob handle them
+          # Re-raise errors that are NOT Yantra-specific errors.
+          # This allows ActiveJob/Sidekiq to handle infrastructure issues or
+          # unexpected code errors according to their configuration (retries, dead set).
+          # Yantra::Error types are swallowed here, assuming they were already
+          # handled appropriately by Yantra's logic (e.g., RetryHandler determined
+          # max retries reached or error was non-retryable).
           raise exception unless exception.is_a?(Yantra::Error)
         end
 

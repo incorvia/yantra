@@ -67,7 +67,6 @@ module Yantra
         return 0 if valid_steps_to_enqueue.empty?
 
         successfully_enqueued_ids = []
-        enqueue_successful = false
 
         valid_steps_to_enqueue.each do |step|
           begin
@@ -84,8 +83,6 @@ module Yantra
             # Step remains pending in DB; not added to successfully_enqueued_ids
           end
         end
-        # Set flag based on whether any steps succeeded in the loop
-        enqueue_successful = successfully_enqueued_ids.any?
 
         # 4. Bulk update state ONLY for steps successfully submitted for enqueuing
         if successfully_enqueued_ids.any?
