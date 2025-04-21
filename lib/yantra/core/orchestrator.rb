@@ -123,14 +123,8 @@ module Yantra
 
         case step.state.to_sym
         when StateMachine::SUCCEEDED, StateMachine::FAILED, StateMachine::CANCELLED
-          measurement = Benchmark.measure do
             process_dependents(step.id, step.state.to_sym, step.workflow_id)
-          end
-          puts format_benchmark("Fan-Out (process_dependents -> N)", measurement)
-          measurement = Benchmark.measure do
             check_workflow_completion(step.workflow_id)
-          end
-          puts format_benchmark("Fan-Out (check_workflow_completion -> N)", measurement)
         else
           log_warn "Step #{step_id} reported finished but state is '#{step.state}', skipping."
         end
@@ -184,10 +178,7 @@ module Yantra
 
       def process_dependents(finished_step_id, finished_state, workflow_id)
         dependents_ids = []
-        measurement = Benchmark.measure do
-          dependents_ids += repository.get_dependent_ids(finished_step_id)
-        end
-        puts format_benchmark("Fan-Out (get_dependent_ids -> enqueue N)", measurement)
+        dependents_ids += repository.get_dependent_ids(finished_step_id)
         return if dependents_ids.empty?
 
         log_debug "Processing dependents for #{finished_step_id} in workflow #{workflow_id}: #{dependents_ids.inspect}"
@@ -197,19 +188,14 @@ module Yantra
           states = fetch_states_for_steps(dependents_ids + all_parents)
 
           ready_step_ids = []
-          measurement = Benchmark.measure do
-            ready_step_ids += dependents_ids.select do |step_id|
-              states[step_id.to_s] == StateMachine::PENDING.to_s &&
-                is_ready_to_start?(step_id, parent_map[step_id] || [], states)
-            end
+          ready_step_ids += dependents_ids.select do |step_id|
+            states[step_id.to_s] == StateMachine::PENDING.to_s &&
+              is_ready_to_start?(step_id, parent_map[step_id] || [], states)
           end
-          puts format_benchmark("Fan-Out (is_ready_to_start -> enqueue N)", measurement)
 
           if ready_step_ids.any?
             log_info "Steps ready to enqueue after #{finished_step_id} finished: #{ready_step_ids.inspect}"
-            measurement = Benchmark.measure do
-              step_enqueuer.call(workflow_id: workflow_id, step_ids_to_attempt: ready_step_ids)
-            end
+            step_enqueuer.call(workflow_id: workflow_id, step_ids_to_attempt: ready_step_ids)
             puts format_benchmark("Fan-Out (step_enqueuer.call -> enqueue N)", measurement)
           else
             log_debug "No dependent steps became ready after #{finished_step_id} finished."
