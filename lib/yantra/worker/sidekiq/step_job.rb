@@ -36,28 +36,27 @@ module Yantra
         def perform(step_id, workflow_id, step_klass_name)
           log_job_info "Received job, delegating to StepExecutor", step_id, workflow_id
 
-          begin
-            # Instantiate the executor and execute the step
-            # Pass Sidekiq's retry count as job_executions (Sidekiq retry_count is 0-based)
-            job_executions = (self.respond_to?(:retry_count) ? self.retry_count.to_i : 0) + 1
-            step_executor.execute(
-              step_id: step_id,
-              workflow_id: workflow_id,
-              step_klass_name: step_klass_name,
-              job_executions: job_executions
-            )
-            log_job_info "StepExecutor finished successfully", step_id, workflow_id
-          rescue Yantra::Errors::StepDefinitionError, Yantra::Errors::StepNotFound => e
-             # These are critical errors caught by StepExecutor but re-raised.
-             # Log them here and let Sidekiq handle the job failure (it won't retry based on options)
-             log_job_error("StepExecutor raised critical error: #{e.class}", step_id, workflow_id, e)
-             raise e # Re-raise to ensure Sidekiq marks job failed
-          rescue StandardError => e
-             # This catches unexpected errors during the execute call itself,
-             # although StepExecutor aims to handle most internally.
-             log_job_error("Unexpected error during StepExecutor#execute call", step_id, workflow_id, e)
-             raise e # Re-raise for Sidekiq failure handling
-          end
+          # Calculate execution count based on Sidekiq's retry_count (which is 0-based)
+          # Handle potential absence of retry_count on first attempt or if middleware modifies things
+          current_sidekiq_retry_count = jid && respond_to?(:retry_count) ? retry_count.to_i : 0
+          # Yantra's execution count is typically 1-based
+          job_executions = current_sidekiq_retry_count + 1
+
+          # Directly execute; let StepExecutor handle internal error logging.
+          # Exceptions representing needed retries (original error from RetryHandler)
+          # or critical/unexpected errors will propagate upwards.
+          step_executor.execute(
+            step_id: step_id,
+            workflow_id: workflow_id,
+            step_klass_name: step_klass_name,
+            job_executions: job_executions
+          )
+
+          # This log only executes if StepExecutor completes without raising an error
+          # (meaning step succeeded OR RetryHandler handled terminal failure internally)
+          log_job_info "StepExecutor finished successfully", step_id, workflow_id
+
+          # No redundant rescue block needed here
         end
 
         private
