@@ -10,6 +10,7 @@ on:
 
 jobs:
   test:
+    name: Ruby ${{ matrix.ruby-version }} CI Tests
     runs-on: ubuntu-latest
     strategy:
       matrix:
