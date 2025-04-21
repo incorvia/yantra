@@ -16,7 +16,6 @@ module Yantra
       class StepJob < ::ActiveJob::Base
         # Configure ActiveJob options if needed (e.g., retries managed by Yantra)
         # self.queue_adapter = :sidekiq # Example
-        # sidekiq_options retry: false # Disable Sidekiq retries, use Yantra's logic via RetryHandler
 
         # Main execution method called by ActiveJob.
         # Delegates the core step execution logic to StepExecutor.
