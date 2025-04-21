@@ -4,14 +4,11 @@ require "test_helper"
 require "ostruct" # For mock objects
 require "securerandom" # For UUIDs
 
-# Explicitly require files under test and dependencies
 require "yantra/worker/retry_handler"
 require "yantra/core/state_machine"
 require "yantra/errors"
 require "yantra/step" # Need base class for yantra_max_attempts
-require "yantra/events/notifier_interface"
 require "yantra/persistence/repository_interface"
-# --- ADDED: Require orchestrator for mocking ---
 require "yantra/core/orchestrator"
 
 # Dummy Step class for testing max_attempts override
@@ -31,10 +28,7 @@ module Yantra
 
       # Setup common instance variables before each test
       def setup
-        # Mock repository and notifier using Minitest::Mock
         @mock_repo = Minitest::Mock.new
-        @mock_notifier = Minitest::Mock.new
-        # --- ADDED: Mock orchestrator ---
         @mock_orchestrator = Minitest::Mock.new
 
         # Mock step record data using OpenStruct
@@ -65,7 +59,6 @@ module Yantra
       def teardown
         # Verify mocks after each test
         @mock_repo.verify
-        @mock_notifier.verify
         # --- ADDED: Verify orchestrator mock ---
         @mock_orchestrator.verify
 
@@ -90,7 +83,6 @@ module Yantra
             error: @mock_error,
             executions: executions,
             user_step_klass: RetryStepWithoutOverride,
-            notifier: @mock_notifier,
             orchestrator: @mock_orchestrator # Pass the mock
           )
 
@@ -103,11 +95,6 @@ module Yantra
               arg_error_info[:message] == formatted_error[:message] &&
               arg_error_info[:backtrace] == formatted_error[:backtrace]
           end
-
-          # --- REMOVED: Notifier expectation for :failed event ---
-          # This is now handled within the (mocked) orchestrator's step_failed method
-          # @mock_notifier.expect(:publish, nil) do |event_name, payload| ... end
-          # --- End Expectations ---
 
           # Act
           result = handler.handle_error!
@@ -133,7 +120,6 @@ module Yantra
             error: @mock_error,
             executions: executions,
             user_step_klass: RetryStepWithoutOverride,
-            notifier: @mock_notifier,
             orchestrator: @mock_orchestrator # Pass the mock
           )
 
@@ -159,9 +145,10 @@ module Yantra
             @mock_step_record.retries = 1
             # --- UPDATED: Pass orchestrator mock ---
             handler = RetryHandler.new(
-                repository: @mock_repo, step_record: @mock_step_record,
+                repository: @mock_repo,
+                step_record: @mock_step_record,
                 error: @mock_error, executions: 1,
-                user_step_klass: RetryStepWithOverride, notifier: @mock_notifier,
+                user_step_klass: RetryStepWithOverride,
                 orchestrator: @mock_orchestrator
             )
             assert_equal 2, handler.send(:get_max_attempts)
@@ -181,7 +168,7 @@ module Yantra
             handler = RetryHandler.new(
                 repository: @mock_repo, step_record: @mock_step_record,
                 error: @mock_error, executions: 1,
-                user_step_klass: RetryStepWithoutOverride, notifier: @mock_notifier,
+                user_step_klass: RetryStepWithoutOverride,
                 orchestrator: @mock_orchestrator
             )
             assert_equal 5, handler.send(:get_max_attempts)
@@ -200,7 +187,7 @@ module Yantra
             handler = RetryHandler.new(
                 repository: @mock_repo, step_record: @mock_step_record,
                 error: @mock_error, executions: 1,
-                user_step_klass: RetryStepWithoutOverride, notifier: @mock_notifier,
+                user_step_klass: RetryStepWithoutOverride,
                 orchestrator: @mock_orchestrator
             )
             assert_equal 1, handler.send(:get_max_attempts) # Default attempts = 1

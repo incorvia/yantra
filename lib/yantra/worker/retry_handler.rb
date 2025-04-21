@@ -9,18 +9,16 @@ module Yantra
   module Worker
     class RetryHandler
       # --- UPDATED: Added orchestrator reader ---
-      attr_reader :repository, :step_record, :error, :executions, :user_step_klass, :notifier, :orchestrator
+      attr_reader :repository, :step_record, :error, :executions, :user_step_klass, :orchestrator
 
       # --- UPDATED: Added orchestrator keyword argument ---
-      def initialize(repository:, step_record:, error:, executions:, user_step_klass:, notifier:, orchestrator:)
+      def initialize(repository:, step_record:, error:, executions:, user_step_klass:, orchestrator:)
         @repository = repository
         @step_record = step_record
         @error = error # Should be the original exception object
         @executions = executions
         @user_step_klass = user_step_klass
-        @notifier = notifier # Store injected notifier
         @orchestrator = orchestrator # Store injected orchestrator
-        @repository = repository
 
         # Optional: Validate orchestrator type
         # unless @orchestrator&.is_a?(Yantra::Core::Orchestrator)

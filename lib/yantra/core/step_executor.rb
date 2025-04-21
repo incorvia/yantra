@@ -154,7 +154,6 @@ module Yantra
           error: error,
           executions: job_executions || (current_step_record.retries.to_i + 1),
           user_step_klass: user_klass,
-          notifier: notifier,
           orchestrator: orchestrator
         )
         # handle_error! will either:
