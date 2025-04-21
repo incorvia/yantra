@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.2].define(version: 2025_04_17_192035) do
+ActiveRecord::Schema[7.2].define(version: 2025_04_21_135703) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "plpgsql"
 
@@ -36,8 +36,9 @@ ActiveRecord::Schema[7.2].define(version: 2025_04_17_192035) do
     t.datetime "enqueued_at", precision: nil
     t.datetime "started_at", precision: nil
     t.datetime "finished_at", precision: nil
-    t.index ["state"], name: "index_yantra_steps_on_state"
-    t.index ["workflow_id"], name: "index_yantra_steps_on_workflow_id"
+    t.index ["klass", "state"], name: "index_yantra_steps_on_klass_and_state"
+    t.index ["state", "updated_at"], name: "index_yantra_steps_on_state_and_updated_at"
+    t.index ["workflow_id", "state"], name: "index_yantra_steps_on_workflow_id_and_state"
   end
 
   create_table "yantra_workflows", id: { type: :string, limit: 36 }, force: :cascade do |t|
@@ -51,6 +52,8 @@ ActiveRecord::Schema[7.2].define(version: 2025_04_17_192035) do
     t.datetime "started_at", precision: nil
     t.datetime "finished_at", precision: nil
     t.index ["finished_at"], name: "index_yantra_workflows_on_finished_at"
+    t.index ["has_failures"], name: "index_yantra_workflows_on_has_failures"
+    t.index ["klass", "state"], name: "index_yantra_workflows_on_klass_and_state"
     t.index ["started_at"], name: "index_yantra_workflows_on_started_at"
     t.index ["state"], name: "index_yantra_workflows_on_state"
   end
