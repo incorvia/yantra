@@ -43,7 +43,7 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase
 
     # --- Test Parameters ---
     # Default to 1k, allow override via ENV var PERF_N
-    @num_parallel_steps = ENV.fetch('PERF_N', 1000).to_i
+    @num_parallel_steps = ENV.fetch('PERF_N', 10000).to_i
 
     # Optional: Silence Yantra's global logger for performance runs
     @original_logger = Yantra.logger
