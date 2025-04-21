@@ -85,6 +85,7 @@ module Yantra
          # Note: Depending on desired behavior, you might want to re-raise 'e' here
          # or attempt direct repository updates as a fallback (though less ideal).
          # Currently, it logs the error and the step might remain in 'running'.
+         raise e
       end
       # --- END UPDATED METHOD ---
 

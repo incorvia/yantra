@@ -70,7 +70,6 @@ module Yantra
         # It returns :failed if handled permanently, otherwise re-raises 'e' for retry.
         failure_status = handle_failure(step_id, e, job_executions: job_executions)
 
-        # <<< FIX: Only re-raise 'e' if handle_failure didn't handle it permanently >>>
         # If handle_failure completed (meaning RetryHandler returned :failed or
         # it was a definition error), we don't re-raise.
         # If handle_failure raised (because RetryHandler raised for retry),
@@ -86,13 +85,12 @@ module Yantra
         # So, we only need to re-raise 'e' if handle_failure somehow completes
         # *without* returning :failed and *without* raising. This shouldn't happen.
 
-        # Therefore, we likely don't need the final 'raise e' here anymore,
+        # Therefore, we don't need the final 'raise e' here anymore,
         # as the RetryHandler inside handle_failure is responsible for raising on retry.
         # Let's remove it for now. If handle_failure has an issue, its own
         # (now removed) rescue block would have caught it, or it propagates.
 
-        # raise e # <<< REMOVE THIS LINE >>>
-        # <<< END FIX >>>
+        # raise e #
       end
 
       private
@@ -133,7 +131,6 @@ module Yantra
 
       # Handles failures, deciding between retry or marking as permanently failed.
       # Returns status from RetryHandler (:failed) or lets exceptions propagate.
-      # <<< CHANGED: Returns status from handler >>>
       def handle_failure(step_id, error, job_executions: nil, is_definition_error: false)
         current_step_record = repository.find_step(step_id)
         unless current_step_record
@@ -166,7 +163,6 @@ module Yantra
         # Let any exception raised by handle_error! propagate up.
         handler.handle_error! # Returns :failed or raises error
       end
-      # <<< END CHANGED >>>
 
 
       # Formats an exception or hash into the standard error hash.
