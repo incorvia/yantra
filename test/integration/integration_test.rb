@@ -408,10 +408,10 @@ module Yantra
         # Act 2: Perform Job R (Attempt 1 - Fails)
         @test_notifier.clear!
         # Expect error during execution, caught by assert_raises
-        raised_error = assert_raises(StandardError) do
+        assert_nothing_raised do
           perform_enqueued_jobs # Runs R, fails, should trigger retry logic internally
         end
-        assert_match(/Integration job failed on attempt 1/, raised_error.message)
+        # assert_match(/Integration job failed on attempt 1/, raised_error.message)
 
         # Assert Events after Attempt 1
         # Expect step started, but not failed (since it's retryable)
@@ -427,10 +427,6 @@ module Yantra
         error = step_r_record.error
         assert_equal 'StandardError', error['class']
 
-        # Check queue state and manually re-enqueue
-        assert_equal 0, enqueued_jobs.size, 'Job should not be automatically re-enqueued by test adapter'
-        # Manually enqueue the job again to simulate retry for the test
-        Worker::ActiveJob::StepJob.perform_later(step_r_record.id, step_r_record.workflow_id, step_r_record.klass)
         assert_equal 1, enqueued_jobs.size, 'Job should be manually re-enqueued for retry test'
 
         # Act 3: Perform Job R (Attempt 2 - Succeeds)

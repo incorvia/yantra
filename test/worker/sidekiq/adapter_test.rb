@@ -73,7 +73,7 @@ if SIDEKIQ_LOADED
             assert_equal Yantra::Worker::Sidekiq::StepJob.name, job['class']
             assert_equal [@step_id, @workflow_id, @step_klass_name], job['args']
             assert_equal @queue_name, job['queue']
-            assert_equal true, job['retry']
+            assert_equal 25, job['retry']
             assert result, "Enqueue should return true on success"
           end
 

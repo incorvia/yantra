@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    yantra (1.0.0.beta.10)
+    yantra (1.0.0.beta.11)
 
 GEM
   remote: https://rubygems.org/

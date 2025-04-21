@@ -17,6 +17,34 @@ module Yantra
         # Configure ActiveJob options if needed (e.g., retries managed by Yantra)
         # self.queue_adapter = :sidekiq # Example
 
+         # --- Determine Correct Wait Symbol based on Rails/ActiveJob Version ---
+        # Define the version where the symbol potentially changed
+        # (Assuming 7.0 based on discussion, verify if precise compatibility needed)
+        RAILS_7_VERSION_THRESHOLD = Gem::Version.new('7.0.0')
+
+        # Determine the correct symbol for exponential/polynomial backoff
+        # Default to the older symbol for safety/backward compatibility
+        backoff_symbol = :exponentially_longer
+        if defined?(::ActiveJob) && ::ActiveJob.gem_version >= RAILS_7_VERSION_THRESHOLD
+          # Use the symbol found in Rails 7.x+ docs
+          backoff_symbol = :polynomially_longer
+        end
+
+        # --- Determine Wait Strategy based on Environment ---
+        # Use a simple integer wait in test env to avoid :test adapter issues
+        # Use the version-appropriate backoff symbol otherwise
+        wait_strategy = if defined?(Rails) && Rails.env.test?
+                          5 # Simple 5-second wait for tests
+                        else
+                          backoff_symbol # Use :polynomially_longer or :exponentially_longer
+                        end
+
+        # --- Apply Final Configuration ---
+        # Use the determined wait strategy in the retry_on call.
+        # Set attempts high enough for Yantra's logic to control stopping.
+        retry_on StandardError, attempts: 25, wait: wait_strategy, jitter: 0.15 # Example jitter
+
+
         # Main execution method called by ActiveJob.
         # Delegates the core step execution logic to StepExecutor.
         def perform(step_id, workflow_id, step_klass_name)

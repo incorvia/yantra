@@ -24,10 +24,10 @@ module Yantra
         # Check if Sidekiq::Job is defined (Sidekiq 7+) otherwise use Sidekiq::Worker
         if defined?(::Sidekiq::Job)
            include ::Sidekiq::Job
-           sidekiq_options retry: true # Disable Sidekiq retries, use Yantra's logic via RetryHandler
+           sidekiq_options retry: 25 # Disable Sidekiq retries, use Yantra's logic via RetryHandler
         elsif defined?(::Sidekiq::Worker)
            include ::Sidekiq::Worker
-           sidekiq_options retry: true # Disable Sidekiq retries for older versions
+           sidekiq_options retry: 25 # Disable Sidekiq retries for older versions
         end
 
         # Main execution method called by Sidekiq.

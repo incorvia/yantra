@@ -311,6 +311,41 @@ ActiveSupport::Notifications.subscribe(/yantra\..*/) do |name, start, finish, id
 end
 ```
 
+## Error Handling and Retries
+
+Yantra provides configurable automatic retries for steps that fail during execution. It employs a cooperative strategy with the underlying job runner (configured via `worker_adapter`) to handle the retry process.
+
+**Division of Responsibility:**
+
+* **Yantra (`RetryHandler`)**: Determines *if* a step should be retried based on its configured number of attempts (`default_step_options[:retries]` or step-specific `yantra_max_attempts`) and the current execution count. It manages Yantra's internal state related to retries.
+* **Job Runner Backend (Sidekiq, ActiveJob Adapter, etc.)**: Handles the *mechanism* of retrying a job instance, including scheduling the next attempt using its built-in delay/backoff algorithms. Yantra leverages this backend capability.
+
+**Signaling Mechanism:**
+
+Yantra signals its decision to the job runner backend as follows:
+
+1.  **Retry Needed:** If a step fails but Yantra determines it has retries remaining, the `StepExecutor` will **raise the original error**. The job runner backend catches this error and triggers its own retry process.
+2.  **Stop Processing (Success or Terminal Failure):** If a step succeeds, OR if it fails but has reached its maximum retry attempts according to Yantra, the `StepExecutor` will **complete normally without raising an error**. The job runner backend sees this as a successful job completion and will *not* attempt further retries.
+
+**Backend Retry Configuration (Handled by Yantra Defaults):**
+
+For this cooperative system to work correctly, the underlying job runner must execute Yantra's internal StepJob classes with **retries enabled** and a **sufficient attempt limit**.
+
+**Yantra provides sensible defaults for this out-of-the-box:**
+
+* **Internal Defaults:** Yantra's built-in adapter job classes (`Yantra::Worker::ActiveJob::StepJob` and `Yantra::Worker::Sidekiq::StepJob` [if available]) include internal configurations that enable backend retries with a default limit (typically **25 attempts**, aligning with Sidekiq's standard). This uses ActiveJob's `retry_on` or Sidekiq's `sidekiq_options` internally within the adapter code.
+* **User Configuration:** In most scenarios, **no additional configuration is required** by the user specifically for Yantra's retry mechanism. The built-in defaults ensure the backend retry functionality is available for Yantra to leverage.
+
+**Important Considerations:**
+
+* **DO NOT Disable Backend Retries:** It is crucial that you **do not** globally disable retries in your job backend or specifically configure Yantra's job classes (e.g., via global ActiveJob settings or monkey-patching) with `retry: false`, `attempts: 0`, or equivalent. Disabling backend retries will prevent Yantra's retry logic from functioning as intended.
+* **Sufficient Attempts:** The default backend attempt limit provided by Yantra's adapters (e.g., 25) is designed to be sufficient for most use cases. If you configure a specific Yantra step to require *more* retries than this backend limit (e.g., `retries: 30` in Yantra), the backend runner would stop retrying prematurely. This is generally an edge case; exceptionally high retry counts might warrant rethinking the step's design.
+* **Potential Overrides (ActiveJob):** If using the `:active_job` adapter, be aware that global settings in your `ApplicationJob` (from which Yantra's `ActiveJob::StepJob` likely inherits) could potentially influence retry behavior. However, the specific `retry_on` configuration within Yantra's `StepJob` should generally take precedence for the errors it covers.
+* **Customizing Attempts (Advanced):** If you have a specific need to change the number of backend retry attempts for Yantra jobs (e.g., increase it beyond the default 25), you may need to investigate advanced techniques like subclassing Yantra's adapter job or checking if Yantra offers configuration overrides via `config.worker_adapter_options`.
+
+**In summary:** Yantra is designed to work with standard backend retry mechanisms enabled, and it includes internal defaults to facilitate this. Ensure you don't disable backend retries, and Yantra's retry system should work as expected.
+
+
 ## Development
 
 After checking out the repo, run `bin/setup` to install dependencies. Then, run `rake test` to run the tests. You can also run `bin/console` for an interactive prompt that will allow you to experiment.
