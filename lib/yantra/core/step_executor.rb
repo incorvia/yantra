@@ -18,7 +18,7 @@ module Yantra
         @retry_handler_class = retry_handler_class
 
         # ... (initializer validations) ...
-        unless repository&.respond_to?(:find_step) && repository&.respond_to?(:record_step_error)
+        unless repository&.respond_to?(:find_step) && repository&.respond_to?(:update_step_error)
           raise ArgumentError, "StepExecutor requires a repository"
         end
         unless orchestrator&.respond_to?(:step_starting) && orchestrator&.respond_to?(:step_succeeded) && orchestrator&.respond_to?(:step_failed)

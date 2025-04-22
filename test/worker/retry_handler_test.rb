@@ -125,7 +125,7 @@ module Yantra
 
           # --- Expectations ---
           @mock_repo.expect(:increment_step_retries, true, [@step_id])
-          @mock_repo.expect(:record_step_error, true, [@step_id, @mock_error])
+          @mock_repo.expect(:update_step_error, true, [@step_id, @mock_error])
           # No expectation set for @mock_orchestrator.step_failed,
           # so verify() will fail if it *is* called.
           # --- End Expectations ---

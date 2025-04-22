@@ -83,7 +83,7 @@ module Yantra
         assert_equal "pending", wf_record.state # Initial state
         # Check persisted positional args - should be empty now
         assert_equal [], wf_record.arguments
-        # Check persisted keyword args (ensure your persist_workflow handles kwargs if needed - currently it doesn't)
+        # Check persisted keyword args (ensure your create_workflow handles kwargs if needed - currently it doesn't)
         # assert_equal({ "user_id" => user_id_arg, "report_type" => report_type_kwarg }, wf_record.kwargs) # If kwargs were persisted
         assert_equal({ "tenant_id" => "abc" }, wf_record.globals) # Check persisted globals
         refute wf_record.has_failures # Should initially be false
@@ -137,7 +137,7 @@ module Yantra
           klass: "ClientTestWorkflow",
           state: 'running' # Start in a cancellable state
         )
-        # Mock step records returned by get_workflow_steps
+        # Mock step records returned by list_steps
         mock_steps_to_cancel = [
           OpenStruct.new(id: SecureRandom.uuid, state: :pending),
           OpenStruct.new(id: SecureRandom.uuid, state: :enqueued)
@@ -186,7 +186,7 @@ module Yantra
               end
 
               # 5. Get steps to cancel (after workflow marked cancelled)
-              mock_repo.expect(:get_workflow_steps, mock_steps_to_cancel, [workflow_id])
+              mock_repo.expect(:list_steps, mock_steps_to_cancel, workflow_id: workflow_id)
 
               # 6. Bulk cancel steps
               mock_repo.expect(:cancel_steps_bulk, step_ids_to_cancel.size, [step_ids_to_cancel])

@@ -82,8 +82,8 @@ module Yantra
         @worker.stubs(:respond_to?).with(:enqueue).returns(true)
 
         # Stub common helper method checks used within Orchestrator logic
-        @repo.stubs(:respond_to?).with(:get_dependencies_ids_bulk).returns(true)
-        @repo.stubs(:respond_to?).with(:fetch_step_states).returns(true)
+        @repo.stubs(:respond_to?).with(:get_dependency_ids_bulk).returns(true)
+        @repo.stubs(:respond_to?).with(:get_step_states).returns(true)
 
         # Instantiate the orchestrator - this also instantiates StepEnqueuer
         @orchestrator = Orchestrator.new(
@@ -116,7 +116,7 @@ module Yantra
           @notifier.expects(:publish)
                    .with('yantra.workflow.started', has_entries(workflow_id: @workflow_id))
                    .in_sequence(sequence)
-          @repo.expects(:find_ready_steps).with(@workflow_id).returns(ready_step_ids).in_sequence(sequence)
+          @repo.expects(:list_ready_steps).with(workflow_id: @workflow_id).returns(ready_step_ids).in_sequence(sequence)
 
           # --- Expectation for the delegation to StepEnqueuer ---
           @step_enqueuer.expects(:call)
@@ -147,9 +147,9 @@ module Yantra
           # Expect find_workflow to be called (e.g., for logging or checking state)
           @repo.expects(:find_workflow).with(@workflow_id).returns(workflow_running).in_sequence(sequence)
 
-          # Ensure downstream actions (publish, find_ready_steps, enqueuer.call) do not happen
+          # Ensure downstream actions (publish, list_ready_steps, enqueuer.call) do not happen
           @notifier.expects(:publish).never
-          @repo.expects(:find_ready_steps).never
+          @repo.expects(:list_ready_steps).never
           @step_enqueuer.expects(:call).never
 
           # Act
@@ -174,7 +174,7 @@ module Yantra
 
           # Ensure downstream actions do not happen
           @notifier.expects(:publish).never
-          @repo.expects(:find_ready_steps).never
+          @repo.expects(:list_ready_steps).never
           @step_enqueuer.expects(:call).never
 
           # Act
@@ -282,7 +282,7 @@ module Yantra
               .returns(true).in_sequence(sequence)
 
           # 2. Record output
-          @repo.expects(:record_step_output).with(@step_a_id, output).returns(true).in_sequence(sequence)
+          @repo.expects(:update_step_output).with(@step_a_id, output).returns(true).in_sequence(sequence)
 
           # 3. Fetch step for event payload
           @repo.expects(:find_step).with(@step_a_id).returns(step_succeeded_record).in_sequence(sequence)
@@ -320,9 +320,9 @@ module Yantra
           @repo.expects(:get_dependent_ids).with(@step_a_id).returns(ready_dependent_ids).in_sequence(sequence) # B depends on A
 
           # --- process_dependents internal logic (finding ready steps) ---
-          @repo.expects(:get_dependencies_ids_bulk).with(ready_dependent_ids).returns({ dependent_step_id => [@step_a_id] }).in_sequence(sequence)
+          @repo.expects(:get_dependency_ids_bulk).with(ready_dependent_ids).returns({ dependent_step_id => [@step_a_id] }).in_sequence(sequence)
           ids_to_fetch_states = (ready_dependent_ids + [@step_a_id]).uniq
-          @repo.expects(:fetch_step_states)
+          @repo.expects(:get_step_states)
                .with { |actual_ids| actual_ids.sort == ids_to_fetch_states.sort } # Check array content regardless of order
                .returns({ @step_a_id => 'succeeded', dependent_step_id => 'pending' })
                .in_sequence(sequence)
@@ -363,9 +363,9 @@ module Yantra
           @repo.expects(:get_dependent_ids).with(@step_a_id).returns(dependents_of_a).in_sequence(sequence)
 
           # --- process_dependents(A, :succeeded) -> find ready steps ---
-          @repo.expects(:get_dependencies_ids_bulk).with(dependents_of_a).returns({ dependent_step_id => dependencies_of_c }).in_sequence(sequence)
+          @repo.expects(:get_dependency_ids_bulk).with(dependents_of_a).returns({ dependent_step_id => dependencies_of_c }).in_sequence(sequence)
           ids_to_fetch_states = (dependents_of_a + dependencies_of_c).uniq.sort
-          @repo.expects(:fetch_step_states)
+          @repo.expects(:get_step_states)
                .with { |actual_ids| actual_ids.sort == ids_to_fetch_states }
                .returns({ @step_c_id => 'pending', @step_a_id => 'succeeded', @step_b_id => 'pending' }) # B is pending, so C is not ready
                .in_sequence(sequence)
@@ -457,11 +457,11 @@ module Yantra
 
           # Mock the recursive search for pending descendants (simplified)
           # Expect initial fetch for direct dependents
-          @repo.expects(:fetch_step_states).with(initial_dependents).returns({@step_b_id => 'pending'}).in_sequence(sequence)
+          @repo.expects(:get_step_states).with(initial_dependents).returns({@step_b_id => 'pending'}).in_sequence(sequence)
           # Expect fetching dependents of pending steps
           @repo.expects(:get_dependent_ids_bulk).with([@step_b_id]).returns({@step_b_id => [@step_c_id]}).in_sequence(sequence)
           # Expect fetching state of next level dependents
-          @repo.expects(:fetch_step_states).with([@step_c_id]).returns({@step_c_id => 'pending'}).in_sequence(sequence)
+          @repo.expects(:get_step_states).with([@step_c_id]).returns({@step_c_id => 'pending'}).in_sequence(sequence)
           # Expect fetching dependents of next level (finds none)
           @repo.expects(:get_dependent_ids_bulk).with([@step_c_id]).returns({@step_c_id => []}).in_sequence(sequence)
           # (Internal logic determines B and C need cancellation)

@@ -104,9 +104,9 @@ module Yantra
              mock_relation.verify
           end
 
-          # --- Tests for persist_steps_bulk ---
-          # [ ... existing persist_steps_bulk tests remain unchanged ... ]
-          def test_persist_steps_bulk_success
+          # --- Tests for create_steps_bulk ---
+          # [ ... existing create_steps_bulk tests remain unchanged ... ]
+          def test_create_steps_bulk_success
             step1_id = SecureRandom.uuid
             step2_id = SecureRandom.uuid
             # Use OpenStruct or simple Hashes mimicking Yantra::Step instance attributes
@@ -117,7 +117,7 @@ module Yantra
 
             # --- FIXED: Replace assert_difference ---
             initial_count = StepRecord.count
-            assert @adapter.persist_steps_bulk(step_instances), "persist_steps_bulk should return true"
+            assert @adapter.create_steps_bulk(step_instances), "create_steps_bulk should return true"
             final_count = StepRecord.count
             assert_equal initial_count + 2, final_count, "StepRecord count should increase by 2"
             # --- END FIX ---
@@ -138,17 +138,17 @@ module Yantra
             assert_equal "q2", record2.queue
           end
 
-          def test_persist_steps_bulk_empty_array
-            assert @adapter.persist_steps_bulk([])
+          def test_create_steps_bulk_empty_array
+            assert @adapter.create_steps_bulk([])
             # Count assertion removed as setup might create records
           end
 
-          def test_persist_steps_bulk_nil_input
-             assert @adapter.persist_steps_bulk(nil)
+          def test_create_steps_bulk_nil_input
+             assert @adapter.create_steps_bulk(nil)
              # Count assertion removed as setup might create records
           end
 
-          def test_persist_steps_bulk_raises_persistence_error_on_duplicate_id
+          def test_create_steps_bulk_raises_persistence_error_on_duplicate_id
             step1_id = SecureRandom.uuid
             StepRecord.create!(id: step1_id, workflow_record: @workflow, klass: "ExistingJob", state: "pending")
 
@@ -157,65 +157,65 @@ module Yantra
             ]
 
             error = assert_raises(Yantra::Errors::PersistenceError) do
-              @adapter.persist_steps_bulk(step_instances)
+              @adapter.create_steps_bulk(step_instances)
             end
             assert_match(/Bulk step insert failed due to unique constraint/, error.message)
           end
 
-          def test_persist_steps_bulk_raises_persistence_error_on_db_error
+          def test_create_steps_bulk_raises_persistence_error_on_db_error
             step_instances = [ OpenStruct.new(id: SecureRandom.uuid, workflow_id: @workflow.id, klass: TestJobClassA, arguments: {}, queue_name: 'q1') ]
             # Stub insert_all! to raise error
             StepRecord.stub(:insert_all!, ->(*) { raise ::ActiveRecord::StatementInvalid, "DB Insert Error" }) do
                error = assert_raises(Yantra::Errors::PersistenceError) do
-                 @adapter.persist_steps_bulk(step_instances)
+                 @adapter.create_steps_bulk(step_instances)
                end
                assert_match(/Bulk step insert failed: DB Insert Error/, error.message)
             end
           end
 
 
-          # --- Tests for find_ready_steps ---
-          # [ ... other find_ready_steps tests remain unchanged ... ]
-          def test_find_ready_steps_no_deps
+          # --- Tests for list_ready_steps ---
+          # [ ... other list_ready_steps tests remain unchanged ... ]
+          def test_list_ready_steps_no_deps
             step_a = create_step_record!(workflow_record: @workflow, state: "pending")
-            ready_ids = @adapter.find_ready_steps(@workflow.id)
+            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
             assert_equal [step_a.id], ready_ids
           end
 
-          def test_find_ready_steps_one_dep_succeeded
+          def test_list_ready_steps_one_dep_succeeded
             step_a = create_step_record!(workflow_record: @workflow, state: "succeeded")
             step_b = create_step_record!(workflow_record: @workflow, state: "pending")
             create_dependency!(step_b, step_a)
-            ready_ids = @adapter.find_ready_steps(@workflow.id)
+            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
             assert_equal [step_b.id], ready_ids
           end
 
-          def test_find_ready_steps_one_dep_not_succeeded
+          def test_list_ready_steps_one_dep_not_succeeded
             step_a = create_step_record!(workflow_record: @workflow, state: "running") # Not succeeded
             step_b = create_step_record!(workflow_record: @workflow, state: "pending")
             create_dependency!(step_b, step_a)
-            ready_ids = @adapter.find_ready_steps(@workflow.id)
+            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
             assert_empty ready_ids
           end
 
-          def test_find_ready_steps_multiple_deps_all_succeeded
+          def test_list_ready_steps_multiple_deps_all_succeeded
             step_a = create_step_record!(workflow_record: @workflow, state: "succeeded")
             step_b = create_step_record!(workflow_record: @workflow, state: "succeeded")
             step_c = create_step_record!(workflow_record: @workflow, state: "pending")
             create_dependency!(step_c, step_a)
             create_dependency!(step_c, step_b)
-            ready_ids = @adapter.find_ready_steps(@workflow.id)
+            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
             assert_equal [step_c.id], ready_ids
           end
 
-          def test_find_ready_steps_multiple_deps_one_not_succeeded
+          def test_list_ready_steps_multiple_deps_one_not_succeeded
             step_a = create_step_record!(workflow_record: @workflow, state: "succeeded")
             step_b = create_step_record!(workflow_record: @workflow, state: "pending") # Not succeeded
             step_c = create_step_record!(workflow_record: @workflow, state: "pending")
             create_dependency!(step_c, step_a)
             create_dependency!(step_c, step_b)
 
-            ready_ids = @adapter.find_ready_steps(@workflow.id)
+            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
 
             # --- FIXED Assertion ---
             # Step C is not ready because Step B is pending.
@@ -224,19 +224,19 @@ module Yantra
             # --- END FIX ---
           end
 
-          def test_find_ready_steps_returns_only_pending_steps
+          def test_list_ready_steps_returns_only_pending_steps
             step_a = create_step_record!(workflow_record: @workflow, state: "succeeded") # Prereq
             step_b = create_step_record!(workflow_record: @workflow, state: "pending") # Ready and Pending
             step_c = create_step_record!(workflow_record: @workflow, state: "enqueued") # Ready but Enqueued
             create_dependency!(step_b, step_a)
             create_dependency!(step_c, step_a)
-            ready_ids = @adapter.find_ready_steps(@workflow.id)
+            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
             assert_equal [step_b.id], ready_ids
           end
 
-          def test_find_ready_steps_handles_no_pending_steps
+          def test_list_ready_steps_handles_no_pending_steps
             create_step_record!(workflow_record: @workflow, state: "succeeded")
-            ready_ids = @adapter.find_ready_steps(@workflow.id)
+            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
             assert_empty ready_ids
           end
 

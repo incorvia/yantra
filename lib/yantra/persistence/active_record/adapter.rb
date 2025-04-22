@@ -29,8 +29,8 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Error finding workflow: #{e.message}"
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#persist_workflow
-        def persist_workflow(workflow_instance)
+        # @see Yantra::Persistence::RepositoryInterface#create_workflow
+        def create_workflow(workflow_instance)
           WorkflowRecord.create!(
             id: workflow_instance.id,
             klass: workflow_instance.klass.to_s,
@@ -104,8 +104,8 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Finding steps failed: #{e.message}"
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#persist_step
-        def persist_step(step_instance)
+        # @see Yantra::Persistence::RepositoryInterface#create_step
+        def create_step(step_instance)
           klass_name = step_instance.klass.is_a?(Class) ? step_instance.klass.to_s : step_instance.klass.to_s
           StepRecord.create!(
             id: step_instance.id,
@@ -125,8 +125,8 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Database error persisting step: #{e.message}"
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#persist_steps_bulk
-        def persist_steps_bulk(step_instances_array)
+        # @see Yantra::Persistence::RepositoryInterface#create_steps_bulk
+        def create_steps_bulk(step_instances_array)
           return true if step_instances_array.nil? || step_instances_array.empty?
           current_time = Time.current
           records_to_insert = step_instances_array.map do |step|
@@ -174,8 +174,8 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Error updating step: #{e.message}"
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#get_workflow_steps
-        def get_workflow_steps(workflow_id, status: nil)
+        # @see Yantra::Persistence::RepositoryInterface#list_steps
+        def list_steps(workflow_id:, status: nil)
           scope = StepRecord.where(workflow_id: workflow_id)
           scope = scope.where(state: status.to_s) if status
           scope.order(:created_at).to_a
@@ -193,8 +193,8 @@ module Yantra
           false
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#record_step_output
-        def record_step_output(step_id, output)
+        # @see Yantra::Persistence::RepositoryInterface#update_step_output
+        def update_step_output(step_id, output)
           step = StepRecord.find_by(id: step_id)
           return false unless step
           step.update(output: output)
@@ -203,9 +203,9 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Error recording step output: #{e.message}"
         end
 
-        # <<< CHANGED: Reverted record_step_error to original logic >>>
-        # @see Yantra::Persistence::RepositoryInterface#record_step_error
-        def record_step_error(step_id, error)
+        # <<< CHANGED: Reverted update_step_error to original logic >>>
+        # @see Yantra::Persistence::RepositoryInterface#update_step_error
+        def update_step_error(step_id, error)
           step = StepRecord.find_by(id: step_id)
           # Return error hash if step not found, consistent with returning hash on success
           return { class: 'PersistenceError', message: "Step not found: #{step_id}" } unless step
@@ -230,19 +230,19 @@ module Yantra
           # Return the formatted error data hash (Original Behavior)
           error_data
         rescue => e # Rescue StandardError as original likely did
-          log_error { "[AR Adapter] Failed record_step_error for #{step_id}: #{e.message}" }
+          log_error { "[AR Adapter] Failed update_step_error for #{step_id}: #{e.message}" }
           # Return error hash on failure (Original Behavior)
           { class: 'PersistenceError', message: "Failed to record original error: #{e.message}" }
         end
         # <<< END CHANGED >>>
 
-        # @see Yantra::Persistence::RepositoryInterface#fetch_step_states
-        def fetch_step_states(step_ids)
+        # @see Yantra::Persistence::RepositoryInterface#get_step_states
+        def get_step_states(step_ids)
           return {} if step_ids.nil? || step_ids.empty? || step_ids.all?(&:nil?)
           unique_ids = step_ids.uniq
           StepRecord.where(id: unique_ids).pluck(:id, :state).to_h
         rescue ::ActiveRecord::ActiveRecordError => e
-          log_error { "[AR Adapter] Failed fetch_step_states for IDs #{unique_ids.inspect}: #{e.message}" }
+          log_error { "[AR Adapter] Failed get_step_states for IDs #{unique_ids.inspect}: #{e.message}" }
           {}
         end
 
@@ -295,26 +295,30 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Bulk dependency insert failed: #{e.message}"
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#find_ready_steps
-        def find_ready_steps(workflow_id)
-          # ... (Restored original logic) ...
+        # @see Yantra::Persistence::RepositoryInterface#list_ready_steps
+        def list_ready_steps(workflow_id:)
           all_step_ids = StepRecord.where(workflow_id: workflow_id).pluck(:id)
           return [] if all_step_ids.empty?
+
           incomplete_deps = StepDependencyRecord
             .joins("INNER JOIN yantra_steps AS prerequisites ON prerequisites.id = yantra_step_dependencies.depends_on_step_id")
             .where(step_id: all_step_ids)
-            .where.not(prerequisites: { state: Yantra::Core::StateMachine::SUCCEEDED.to_s })
+          # Corrected: Use SQL string condition for the aliased table
+            .where.not("prerequisites.state = ?", Yantra::Core::StateMachine::SUCCEEDED.to_s)
             .pluck(:step_id).uniq
+
           pending_step_ids = StepRecord.where(workflow_id: workflow_id, state: Yantra::Core::StateMachine::PENDING.to_s).pluck(:id)
           ready_step_ids = pending_step_ids - incomplete_deps
           ready_step_ids
         rescue ::ActiveRecord::ActiveRecordError => e
-           log_error { "Error finding ready steps for workflow #{workflow_id}: #{e.message}" }
-           raise Yantra::Errors::PersistenceError, "Error finding ready steps: #{e.message}"
+          # Use Yantra.logger for consistency if defined, otherwise fallback
+          logger = defined?(Yantra.logger) && Yantra.logger ? Yantra.logger : Logger.new(STDOUT)
+          logger.error { "[Persistence] Error finding ready steps for workflow #{workflow_id}: #{e.message}" }
+          raise Yantra::Errors::PersistenceError, "Error finding ready steps: #{e.message}"
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#get_dependencies_ids
-        def get_dependencies_ids(step_id)
+        # @see Yantra::Persistence::RepositoryInterface#get_dependency_ids
+        def get_dependency_ids(step_id)
           # ... (Implementation as before) ...
           StepDependencyRecord.where(step_id: step_id).pluck(:depends_on_step_id)
         rescue ::ActiveRecord::ActiveRecordError => e
@@ -322,8 +326,8 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Error getting dependencies: #{e.message}"
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#get_dependencies_ids_bulk
-        def get_dependencies_ids_bulk(step_ids)
+        # @see Yantra::Persistence::RepositoryInterface#get_dependency_ids_bulk
+        def get_dependency_ids_bulk(step_ids)
           # ... (Implementation as before) ...
           return {} if step_ids.nil? || step_ids.empty? || step_ids.all?(&:nil?)
           unique_ids = step_ids.uniq
@@ -332,7 +336,7 @@ module Yantra
           unique_ids.each { |id| dependencies_map[id] ||= [] }
           dependencies_map
         rescue ::ActiveRecord::ActiveRecordError => e
-          log_error { "[AR Adapter] Failed get_dependencies_ids_bulk for IDs #{unique_ids.inspect}: #{e.message}" }
+          log_error { "[AR Adapter] Failed get_dependency_ids_bulk for IDs #{unique_ids.inspect}: #{e.message}" }
           {}
         end
 
@@ -368,11 +372,11 @@ module Yantra
         # ========================================================
 
         # @see Yantra::Persistence::RepositoryInterface#bulk_update_steps
-        def bulk_update_steps(step_ids, attributes)
+        def bulk_update_steps(step_ids, attributes_hash)
           # ... (Implementation as before) ...
           return true if step_ids.nil? || step_ids.empty?
-          return true if attributes.nil? || attributes.empty?
-          update_attrs = attributes.dup
+          return true if attributes_hash.nil? || attributes_hash.empty?
+          update_attrs = attributes_hash.dup
           if update_attrs.key?(:state) && update_attrs[:state].is_a?(Symbol)
             update_attrs[:state] = update_attrs[:state].to_s
           end
@@ -423,8 +427,8 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Error deleting expired workflows: #{e.message}"
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#fetch_step_outputs
-        def fetch_step_outputs(step_ids)
+        # @see Yantra::Persistence::RepositoryInterface#get_step_outputs
+        def get_step_outputs(step_ids)
           # ... (Implementation as before) ...
           return {} if step_ids.nil? || step_ids.empty? || step_ids.all?(&:nil?)
           unique_ids = step_ids.uniq

@@ -42,13 +42,13 @@ module Yantra
         log_debug "[Step#parent_outputs] Using provided parent_ids: #{@parent_ids.inspect}"
         @parent_ids
       else
-        unless @id && repository&.respond_to?(:get_dependencies_ids)
+        unless @id && repository&.respond_to?(:get_dependency_ids)
           log_warn "[Step#parent_outputs] Missing step ID or unsupported repository interface."
           return @_parent_outputs_cache = {}
         end
 
         begin
-          repository.get_dependencies_ids(@id).tap do |ids|
+          repository.get_dependency_ids(@id).tap do |ids|
             log_debug "[Step#parent_outputs] Dynamically fetched parent IDs: #{ids.inspect}"
           end
         rescue => e
@@ -59,13 +59,13 @@ module Yantra
 
       return @_parent_outputs_cache = {} if ids_to_fetch.empty?
 
-      unless repository&.respond_to?(:fetch_step_outputs)
-        log_error "[Step#parent_outputs] Repository does not support fetch_step_outputs."
+      unless repository&.respond_to?(:get_step_outputs)
+        log_error "[Step#parent_outputs] Repository does not support get_step_outputs."
         return @_parent_outputs_cache = {}
       end
 
       begin
-        fetched_outputs = repository.fetch_step_outputs(ids_to_fetch)
+        fetched_outputs = repository.get_step_outputs(ids_to_fetch)
         log_debug "[Step#parent_outputs] Outputs fetched: #{fetched_outputs.inspect}"
         @_parent_outputs_cache = fetched_outputs || {}
       rescue => e

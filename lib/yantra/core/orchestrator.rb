@@ -84,7 +84,7 @@ module Yantra
           expected_old_state: StateMachine::RUNNING
         )
 
-        repository.record_step_output(step_id, output)
+        repository.update_step_output(step_id, output)
         publish_step_succeeded_event(step_id) if updated
 
         step_finished(step_id)
@@ -167,7 +167,7 @@ module Yantra
       end
 
       def enqueue_initial_steps(workflow_id)
-        step_ids = repository.find_ready_steps(workflow_id)
+        step_ids = repository.list_ready_steps(workflow_id:)
         log_info "Initially ready steps for workflow #{workflow_id}: #{step_ids.inspect}"
         return if step_ids.empty?
 
@@ -259,14 +259,14 @@ module Yantra
         parent_map = {}
         all_parents = []
 
-        if repository.respond_to?(:get_dependencies_ids_bulk)
-          parent_map = repository.get_dependencies_ids_bulk(unique_ids)
+        if repository.respond_to?(:get_dependency_ids_bulk)
+          parent_map = repository.get_dependency_ids_bulk(unique_ids)
           unique_ids.each { |id| parent_map[id] ||= [] }
           all_parents = parent_map.values.flatten.uniq
         else
-          log_warn "Repository does not implement get_dependencies_ids_bulk"
+          log_warn "Repository does not implement get_dependency_ids_bulk"
           unique_ids.each do |id|
-            parents = repository.get_dependencies_ids(id)
+            parents = repository.get_dependency_ids(id)
             parent_map[id] = parents
             all_parents.concat(parents)
           end
@@ -280,9 +280,9 @@ module Yantra
         return {} if step_ids.nil? || step_ids.empty?
 
         unique_ids = step_ids.uniq
-        return repository.fetch_step_states(unique_ids) if repository.respond_to?(:fetch_step_states)
+        return repository.get_step_states(unique_ids) if repository.respond_to?(:get_step_states)
 
-        log_warn "Repository does not implement fetch_step_states"
+        log_warn "Repository does not implement get_step_states"
         states = {}
         unique_ids.each do |id|
           step = repository.find_step(id)
