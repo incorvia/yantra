@@ -42,13 +42,13 @@ module Yantra
         log_debug "[Step#parent_outputs] Using provided parent_ids: #{@parent_ids.inspect}"
         @parent_ids
       else
-        unless @id && repository&.respond_to?(:get_dependencies_ids)
+        unless @id && repository&.respond_to?(:get_dependency_ids)
           log_warn "[Step#parent_outputs] Missing step ID or unsupported repository interface."
           return @_parent_outputs_cache = {}
         end
 
         begin
-          repository.get_dependencies_ids(@id).tap do |ids|
+          repository.get_dependency_ids(@id).tap do |ids|
             log_debug "[Step#parent_outputs] Dynamically fetched parent IDs: #{ids.inspect}"
           end
         rescue => e

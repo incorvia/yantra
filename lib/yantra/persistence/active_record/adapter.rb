@@ -193,8 +193,8 @@ module Yantra
           false
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#record_step_output
-        def record_step_output(step_id, output)
+        # @see Yantra::Persistence::RepositoryInterface#update_step_output
+        def update_step_output(step_id, output)
           step = StepRecord.find_by(id: step_id)
           return false unless step
           step.update(output: output)
@@ -203,9 +203,9 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Error recording step output: #{e.message}"
         end
 
-        # <<< CHANGED: Reverted record_step_error to original logic >>>
-        # @see Yantra::Persistence::RepositoryInterface#record_step_error
-        def record_step_error(step_id, error)
+        # <<< CHANGED: Reverted update_step_error to original logic >>>
+        # @see Yantra::Persistence::RepositoryInterface#update_step_error
+        def update_step_error(step_id, error)
           step = StepRecord.find_by(id: step_id)
           # Return error hash if step not found, consistent with returning hash on success
           return { class: 'PersistenceError', message: "Step not found: #{step_id}" } unless step
@@ -230,7 +230,7 @@ module Yantra
           # Return the formatted error data hash (Original Behavior)
           error_data
         rescue => e # Rescue StandardError as original likely did
-          log_error { "[AR Adapter] Failed record_step_error for #{step_id}: #{e.message}" }
+          log_error { "[AR Adapter] Failed update_step_error for #{step_id}: #{e.message}" }
           # Return error hash on failure (Original Behavior)
           { class: 'PersistenceError', message: "Failed to record original error: #{e.message}" }
         end
@@ -317,8 +317,8 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Error finding ready steps: #{e.message}"
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#get_dependencies_ids
-        def get_dependencies_ids(step_id)
+        # @see Yantra::Persistence::RepositoryInterface#get_dependency_ids
+        def get_dependency_ids(step_id)
           # ... (Implementation as before) ...
           StepDependencyRecord.where(step_id: step_id).pluck(:depends_on_step_id)
         rescue ::ActiveRecord::ActiveRecordError => e
@@ -326,8 +326,8 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Error getting dependencies: #{e.message}"
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#get_dependencies_ids_bulk
-        def get_dependencies_ids_bulk(step_ids)
+        # @see Yantra::Persistence::RepositoryInterface#get_dependency_ids_bulk
+        def get_dependency_ids_bulk(step_ids)
           # ... (Implementation as before) ...
           return {} if step_ids.nil? || step_ids.empty? || step_ids.all?(&:nil?)
           unique_ids = step_ids.uniq
@@ -336,7 +336,7 @@ module Yantra
           unique_ids.each { |id| dependencies_map[id] ||= [] }
           dependencies_map
         rescue ::ActiveRecord::ActiveRecordError => e
-          log_error { "[AR Adapter] Failed get_dependencies_ids_bulk for IDs #{unique_ids.inspect}: #{e.message}" }
+          log_error { "[AR Adapter] Failed get_dependency_ids_bulk for IDs #{unique_ids.inspect}: #{e.message}" }
           {}
         end
 

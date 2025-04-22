@@ -56,7 +56,7 @@ module Yantra
             # Add stubs needed by StepExecutor's initializer validation checks
             # These are called when StepJob#step_executor calls StepExecutor.new
             @mock_repository.stubs(:respond_to?).with(:find_step).returns(true)
-            @mock_repository.stubs(:respond_to?).with(:record_step_error).returns(true)
+            @mock_repository.stubs(:respond_to?).with(:update_step_error).returns(true)
             # Add stubs for other checks if StepExecutor initializer has them
             # @mock_orchestrator.stubs(:respond_to?).with(:...)
             # @mock_notifier.stubs(:respond_to?).with(:...)

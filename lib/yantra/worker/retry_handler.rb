@@ -93,7 +93,7 @@ module Yantra
         # ... (logic remains the same) ...
         # Note: This still interacts directly with repository for retry prep.
         repository.increment_step_retries(step_record.id)
-        repository.record_step_error(step_record.id, @error) # Record error for each retry attempt
+        repository.update_step_error(step_record.id, @error) # Record error for each retry attempt
       end
 
     end
