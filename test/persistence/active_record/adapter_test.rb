@@ -174,48 +174,48 @@ module Yantra
           end
 
 
-          # --- Tests for find_ready_steps ---
-          # [ ... other find_ready_steps tests remain unchanged ... ]
-          def test_find_ready_steps_no_deps
+          # --- Tests for list_ready_steps ---
+          # [ ... other list_ready_steps tests remain unchanged ... ]
+          def test_list_ready_steps_no_deps
             step_a = create_step_record!(workflow_record: @workflow, state: "pending")
-            ready_ids = @adapter.find_ready_steps(@workflow.id)
+            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
             assert_equal [step_a.id], ready_ids
           end
 
-          def test_find_ready_steps_one_dep_succeeded
+          def test_list_ready_steps_one_dep_succeeded
             step_a = create_step_record!(workflow_record: @workflow, state: "succeeded")
             step_b = create_step_record!(workflow_record: @workflow, state: "pending")
             create_dependency!(step_b, step_a)
-            ready_ids = @adapter.find_ready_steps(@workflow.id)
+            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
             assert_equal [step_b.id], ready_ids
           end
 
-          def test_find_ready_steps_one_dep_not_succeeded
+          def test_list_ready_steps_one_dep_not_succeeded
             step_a = create_step_record!(workflow_record: @workflow, state: "running") # Not succeeded
             step_b = create_step_record!(workflow_record: @workflow, state: "pending")
             create_dependency!(step_b, step_a)
-            ready_ids = @adapter.find_ready_steps(@workflow.id)
+            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
             assert_empty ready_ids
           end
 
-          def test_find_ready_steps_multiple_deps_all_succeeded
+          def test_list_ready_steps_multiple_deps_all_succeeded
             step_a = create_step_record!(workflow_record: @workflow, state: "succeeded")
             step_b = create_step_record!(workflow_record: @workflow, state: "succeeded")
             step_c = create_step_record!(workflow_record: @workflow, state: "pending")
             create_dependency!(step_c, step_a)
             create_dependency!(step_c, step_b)
-            ready_ids = @adapter.find_ready_steps(@workflow.id)
+            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
             assert_equal [step_c.id], ready_ids
           end
 
-          def test_find_ready_steps_multiple_deps_one_not_succeeded
+          def test_list_ready_steps_multiple_deps_one_not_succeeded
             step_a = create_step_record!(workflow_record: @workflow, state: "succeeded")
             step_b = create_step_record!(workflow_record: @workflow, state: "pending") # Not succeeded
             step_c = create_step_record!(workflow_record: @workflow, state: "pending")
             create_dependency!(step_c, step_a)
             create_dependency!(step_c, step_b)
 
-            ready_ids = @adapter.find_ready_steps(@workflow.id)
+            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
 
             # --- FIXED Assertion ---
             # Step C is not ready because Step B is pending.
@@ -224,19 +224,19 @@ module Yantra
             # --- END FIX ---
           end
 
-          def test_find_ready_steps_returns_only_pending_steps
+          def test_list_ready_steps_returns_only_pending_steps
             step_a = create_step_record!(workflow_record: @workflow, state: "succeeded") # Prereq
             step_b = create_step_record!(workflow_record: @workflow, state: "pending") # Ready and Pending
             step_c = create_step_record!(workflow_record: @workflow, state: "enqueued") # Ready but Enqueued
             create_dependency!(step_b, step_a)
             create_dependency!(step_c, step_a)
-            ready_ids = @adapter.find_ready_steps(@workflow.id)
+            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
             assert_equal [step_b.id], ready_ids
           end
 
-          def test_find_ready_steps_handles_no_pending_steps
+          def test_list_ready_steps_handles_no_pending_steps
             create_step_record!(workflow_record: @workflow, state: "succeeded")
-            ready_ids = @adapter.find_ready_steps(@workflow.id)
+            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
             assert_empty ready_ids
           end
 

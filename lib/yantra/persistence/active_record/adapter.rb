@@ -295,8 +295,8 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Bulk dependency insert failed: #{e.message}"
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#find_ready_steps
-        def find_ready_steps(workflow_id)
+        # @see Yantra::Persistence::RepositoryInterface#list_ready_steps
+        def list_ready_steps(workflow_id:)
           all_step_ids = StepRecord.where(workflow_id: workflow_id).pluck(:id)
           return [] if all_step_ids.empty?
 

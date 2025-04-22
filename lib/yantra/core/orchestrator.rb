@@ -167,7 +167,7 @@ module Yantra
       end
 
       def enqueue_initial_steps(workflow_id)
-        step_ids = repository.find_ready_steps(workflow_id)
+        step_ids = repository.list_ready_steps(workflow_id:)
         log_info "Initially ready steps for workflow #{workflow_id}: #{step_ids.inspect}"
         return if step_ids.empty?
 

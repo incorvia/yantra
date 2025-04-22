@@ -116,7 +116,7 @@ module Yantra
           @notifier.expects(:publish)
                    .with('yantra.workflow.started', has_entries(workflow_id: @workflow_id))
                    .in_sequence(sequence)
-          @repo.expects(:find_ready_steps).with(@workflow_id).returns(ready_step_ids).in_sequence(sequence)
+          @repo.expects(:list_ready_steps).with(workflow_id: @workflow_id).returns(ready_step_ids).in_sequence(sequence)
 
           # --- Expectation for the delegation to StepEnqueuer ---
           @step_enqueuer.expects(:call)
@@ -147,9 +147,9 @@ module Yantra
           # Expect find_workflow to be called (e.g., for logging or checking state)
           @repo.expects(:find_workflow).with(@workflow_id).returns(workflow_running).in_sequence(sequence)
 
-          # Ensure downstream actions (publish, find_ready_steps, enqueuer.call) do not happen
+          # Ensure downstream actions (publish, list_ready_steps, enqueuer.call) do not happen
           @notifier.expects(:publish).never
-          @repo.expects(:find_ready_steps).never
+          @repo.expects(:list_ready_steps).never
           @step_enqueuer.expects(:call).never
 
           # Act
@@ -174,7 +174,7 @@ module Yantra
 
           # Ensure downstream actions do not happen
           @notifier.expects(:publish).never
-          @repo.expects(:find_ready_steps).never
+          @repo.expects(:list_ready_steps).never
           @step_enqueuer.expects(:call).never
 
           # Act

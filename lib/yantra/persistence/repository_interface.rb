@@ -28,7 +28,7 @@ module Yantra
       # Implement methods for Dependencies
       def add_step_dependencies_bulk(dependency_links_array); raise NotImplementedError; end
       def add_step_dependency(step_id, dependency_step_id); raise NotImplementedError; end
-      def find_ready_steps(workflow_id); raise NotImplementedError; end
+      def list_ready_steps(workflow_id:); raise NotImplementedError; end
       def get_dependencies_ids(step_id); raise NotImplementedError; end
       def get_dependencies_ids_bulk(step_ids); raise NotImplementedError; end
       def get_dependent_ids(step_id); raise NotImplementedError; end
