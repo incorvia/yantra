@@ -110,19 +110,19 @@ module Yantra
 
           # Expectations for start_workflow up to delegation
           @repo.expects(:update_workflow_attributes)
-               .with(@workflow_id, { state: StateMachine::RUNNING.to_s, started_at: FROZEN_TIME }, expected_old_state: StateMachine::PENDING)
-               .returns(true).in_sequence(sequence)
+            .with(@workflow_id, { state: StateMachine::RUNNING.to_s, started_at: FROZEN_TIME }, expected_old_state: StateMachine::PENDING)
+            .returns(true).in_sequence(sequence)
           @repo.expects(:find_workflow).with(@workflow_id).returns(workflow_running).in_sequence(sequence)
           @notifier.expects(:publish)
-                   .with('yantra.workflow.started', has_entries(workflow_id: @workflow_id))
-                   .in_sequence(sequence)
+            .with('yantra.workflow.started', has_entries(workflow_id: @workflow_id))
+            .in_sequence(sequence)
           @repo.expects(:list_ready_steps).with(workflow_id: @workflow_id).returns(ready_step_ids).in_sequence(sequence)
 
           # --- Expectation for the delegation to StepEnqueuer ---
           @step_enqueuer.expects(:call)
-                        .with(workflow_id: @workflow_id, step_ids_to_attempt: ready_step_ids)
-                        .returns(2) # Simulate service enqueuing 2 steps
-                        .in_sequence(sequence)
+            .with(workflow_id: @workflow_id, step_ids_to_attempt: ready_step_ids)
+            .returns(2) # Simulate service enqueuing 2 steps
+            .in_sequence(sequence)
 
           # Act
           result = @orchestrator.start_workflow(@workflow_id)
@@ -141,8 +141,8 @@ module Yantra
 
           # Expect update attempt to fail because the state is not PENDING
           @repo.expects(:update_workflow_attributes)
-               .with(@workflow_id, has_entries(state: StateMachine::RUNNING.to_s), expected_old_state: StateMachine::PENDING)
-               .returns(false).in_sequence(sequence) # Simulate DB constraint or check failure
+            .with(@workflow_id, has_entries(state: StateMachine::RUNNING.to_s), expected_old_state: StateMachine::PENDING)
+            .returns(false).in_sequence(sequence) # Simulate DB constraint or check failure
 
           # Expect find_workflow to be called (e.g., for logging or checking state)
           @repo.expects(:find_workflow).with(@workflow_id).returns(workflow_running).in_sequence(sequence)
@@ -166,8 +166,8 @@ module Yantra
         Time.stub :current, FROZEN_TIME do
           # Expect update attempt that fails for other reasons (e.g., DB error simulated by return false)
           @repo.expects(:update_workflow_attributes)
-               .with(@workflow_id, has_entries(state: StateMachine::RUNNING.to_s), expected_old_state: StateMachine::PENDING)
-               .returns(false) # Simulate failure
+            .with(@workflow_id, has_entries(state: StateMachine::RUNNING.to_s), expected_old_state: StateMachine::PENDING)
+            .returns(false) # Simulate failure
 
           # Expect find_workflow to be called after failed update attempt
           @repo.expects(:find_workflow).with(@workflow_id).returns(workflow_pending)
@@ -200,16 +200,16 @@ module Yantra
 
           # Expect successful update
           @repo.expects(:update_step_attributes)
-               .with(@step_a_id, has_entries(state: StateMachine::RUNNING.to_s, started_at: FROZEN_TIME), expected_old_state: StateMachine::ENQUEUED)
-               .returns(true).in_sequence(sequence)
+            .with(@step_a_id, has_entries(state: StateMachine::RUNNING.to_s, started_at: FROZEN_TIME), expected_old_state: StateMachine::ENQUEUED)
+            .returns(true).in_sequence(sequence)
 
           # Expect find_step again for the event payload generation
           @repo.expects(:find_step).with(@step_a_id).returns(step_running).in_sequence(sequence)
 
           # Expect publish event
           @notifier.expects(:publish)
-                   .with('yantra.step.started', has_entries(step_id: @step_a_id, started_at: FROZEN_TIME))
-                   .returns(nil).in_sequence(sequence) # Assuming publish returns nil
+            .with('yantra.step.started', has_entries(step_id: @step_a_id, started_at: FROZEN_TIME))
+            .returns(nil).in_sequence(sequence) # Assuming publish returns nil
 
           # Act
           result = @orchestrator.step_starting(@step_a_id)
@@ -229,8 +229,8 @@ module Yantra
 
           # Expect update attempt that fails
           @repo.expects(:update_step_attributes)
-               .with(@step_a_id, has_entries(state: StateMachine::RUNNING.to_s), expected_old_state: StateMachine::ENQUEUED)
-               .returns(false).in_sequence(sequence) # Simulate failure
+            .with(@step_a_id, has_entries(state: StateMachine::RUNNING.to_s), expected_old_state: StateMachine::ENQUEUED)
+            .returns(false).in_sequence(sequence) # Simulate failure
 
           # Ensure publish is never called
           @notifier.expects(:publish).never
@@ -278,8 +278,8 @@ module Yantra
 
           # 1. Update state
           @repo.expects(:update_step_attributes)
-              .with(@step_a_id, { state: StateMachine::SUCCEEDED.to_s, finished_at: FROZEN_TIME }, expected_old_state: StateMachine::RUNNING)
-              .returns(true).in_sequence(sequence)
+            .with(@step_a_id, { state: StateMachine::SUCCEEDED.to_s, finished_at: FROZEN_TIME }, expected_old_state: StateMachine::RUNNING)
+            .returns(true).in_sequence(sequence)
 
           # 2. Record output
           @repo.expects(:update_step_output).with(@step_a_id, output).returns(true).in_sequence(sequence)
@@ -289,8 +289,8 @@ module Yantra
 
           # 4. Publish event
           @notifier.expects(:publish)
-                   .with('yantra.step.succeeded', has_entries(step_id: @step_a_id, output: output))
-                   .in_sequence(sequence)
+            .with('yantra.step.succeeded', has_entries(step_id: @step_a_id, output: output))
+            .in_sequence(sequence)
 
           # 5. Delegate to step_finished (use expects to ensure it's called)
           # We mock the orchestrator itself to verify the internal call
@@ -323,16 +323,16 @@ module Yantra
           @repo.expects(:get_dependency_ids_bulk).with(ready_dependent_ids).returns({ dependent_step_id => [@step_a_id] }).in_sequence(sequence)
           ids_to_fetch_states = (ready_dependent_ids + [@step_a_id]).uniq
           @repo.expects(:get_step_states)
-               .with { |actual_ids| actual_ids.sort == ids_to_fetch_states.sort } # Check array content regardless of order
-               .returns({ @step_a_id => 'succeeded', dependent_step_id => 'pending' })
-               .in_sequence(sequence)
+            .with { |actual_ids| actual_ids.sort == ids_to_fetch_states.sort } # Check array content regardless of order
+            .returns({ @step_a_id => 'succeeded', dependent_step_id => 'pending' })
+            .in_sequence(sequence)
           # (is_ready_to_start? check happens internally in orchestrator based on fetched states)
 
           # --- Expect delegation to StepEnqueuer ---
           @step_enqueuer.expects(:call)
-                        .with(workflow_id: @workflow_id, step_ids_to_attempt: ready_dependent_ids)
-                        .returns(1) # Simulate 1 step enqueued
-                        .in_sequence(sequence)
+            .with(workflow_id: @workflow_id, step_ids_to_attempt: ready_dependent_ids)
+            .returns(1) # Simulate 1 step enqueued
+            .in_sequence(sequence)
 
           # --- check_workflow_completion internal logic (assuming B was enqueued) ---
           @repo.expects(:running_step_count).with(@workflow_id).returns(0).in_sequence(sequence)
@@ -366,9 +366,9 @@ module Yantra
           @repo.expects(:get_dependency_ids_bulk).with(dependents_of_a).returns({ dependent_step_id => dependencies_of_c }).in_sequence(sequence)
           ids_to_fetch_states = (dependents_of_a + dependencies_of_c).uniq.sort
           @repo.expects(:get_step_states)
-               .with { |actual_ids| actual_ids.sort == ids_to_fetch_states }
-               .returns({ @step_c_id => 'pending', @step_a_id => 'succeeded', @step_b_id => 'pending' }) # B is pending, so C is not ready
-               .in_sequence(sequence)
+            .with { |actual_ids| actual_ids.sort == ids_to_fetch_states }
+            .returns({ @step_c_id => 'pending', @step_a_id => 'succeeded', @step_b_id => 'pending' }) # B is pending, so C is not ready
+            .in_sequence(sequence)
 
           # --- Expect StepEnqueuer NOT to be called ---
           @step_enqueuer.expects(:call).never
@@ -383,12 +383,12 @@ module Yantra
           @repo.expects(:find_workflow).with(@workflow_id).returns(workflow_running).in_sequence(sequence)
           @repo.expects(:workflow_has_failures?).with(@workflow_id).returns(false).in_sequence(sequence) # No failures occurred
           @repo.expects(:update_workflow_attributes)
-               .with(@workflow_id, { state: StateMachine::SUCCEEDED.to_s, finished_at: FROZEN_TIME }, expected_old_state: StateMachine::RUNNING)
-               .returns(true).in_sequence(sequence)
+            .with(@workflow_id, { state: StateMachine::SUCCEEDED.to_s, finished_at: FROZEN_TIME }, expected_old_state: StateMachine::RUNNING)
+            .returns(true).in_sequence(sequence)
           @repo.expects(:find_workflow).with(@workflow_id).returns(workflow_succeeded).in_sequence(sequence) # For event payload
           @notifier.expects(:publish)
-                   .with('yantra.workflow.succeeded', has_entries(workflow_id: @workflow_id, state: 'succeeded'))
-                   .in_sequence(sequence)
+            .with('yantra.workflow.succeeded', has_entries(workflow_id: @workflow_id, state: 'succeeded'))
+            .in_sequence(sequence)
 
           # Act
           @orchestrator.step_finished(@step_a_id)
@@ -419,12 +419,12 @@ module Yantra
           @repo.expects(:find_workflow).with(@workflow_id).returns(workflow_running).in_sequence(sequence) # State before update
           @repo.expects(:workflow_has_failures?).with(@workflow_id).returns(true).in_sequence(sequence) # Failure occurred (A failed)
           @repo.expects(:update_workflow_attributes)
-               .with(@workflow_id, { state: StateMachine::FAILED.to_s, finished_at: FROZEN_TIME }, expected_old_state: StateMachine::RUNNING)
-               .returns(true).in_sequence(sequence)
+            .with(@workflow_id, { state: StateMachine::FAILED.to_s, finished_at: FROZEN_TIME }, expected_old_state: StateMachine::RUNNING)
+            .returns(true).in_sequence(sequence)
           @repo.expects(:find_workflow).with(@workflow_id).returns(workflow_failed).in_sequence(sequence) # For event payload
           @notifier.expects(:publish)
-                   .with('yantra.workflow.failed', has_entries(workflow_id: @workflow_id, state: 'failed'))
-                   .in_sequence(sequence)
+            .with('yantra.workflow.failed', has_entries(workflow_id: @workflow_id, state: 'failed'))
+            .in_sequence(sequence)
 
           # Act
           @orchestrator.step_finished(@step_a_id)
@@ -432,65 +432,70 @@ module Yantra
         end
       end
 
+      focus
       def test_step_finished_failure_cancels_dependents_recursively_and_fails_workflow
-        # Scenario: A failed. B depends on A. C depends on B. Both B and C are pending.
+        # ... (setup mock steps and workflows as before) ...
         step_a_failed = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, state: 'failed')
-        # Mock steps for post-cancellation state (needed for event payload generation)
         step_b_cancelled = MockStep.new(id: @step_b_id, workflow_id: @workflow_id, klass: 'StepB', state: 'cancelled', finished_at: FROZEN_TIME)
         step_c_cancelled = MockStep.new(id: @step_c_id, workflow_id: @workflow_id, klass: 'StepC', state: 'cancelled', finished_at: FROZEN_TIME)
-        # Workflow states
         workflow_running = MockWorkflow.new(id: @workflow_id, klass: 'MyWorkflow', state: 'running')
         workflow_failed = MockWorkflow.new(id: @workflow_id, klass: 'MyWorkflow', state: 'failed', finished_at: FROZEN_TIME)
 
         Time.stub :current, FROZEN_TIME do
           sequence = Mocha::Sequence.new('failure_cascade_cancels_and_fails_workflow')
 
+          # --- ADD Stubs for respond_to? ---
+          # Allow the respond_to? checks and make them return true to force bulk path
+          @repo.stubs(:respond_to?).with(:get_step_states).returns(true)
+          @repo.stubs(:respond_to?).with(:get_dependent_ids_bulk).returns(true)
+          # Add stubs for other repository methods if needed by other parts of the code being tested
+          @repo.stubs(:respond_to?).with(:bulk_update_steps).returns(true) # Example if needed
+          @repo.stubs(:respond_to?).with(:find_steps).returns(true) # Example if needed
+          # --- END Stubs ---
+
+
           # --- step_finished(A) ---
           @repo.expects(:find_step).with(@step_a_id).returns(step_a_failed).in_sequence(sequence)
-          @repo.expects(:get_dependent_ids).with(@step_a_id).returns([@step_b_id]).in_sequence(sequence) # B depends on A
+          # --- DependentProcessor#call -> cancel_downstream_dependents ---
+          @repo.expects(:get_dependent_ids).with(@step_a_id).returns([@step_b_id]).in_sequence(sequence) # Initial dependents
 
-          # --- process_dependents(A, :failed) -> cancel_downstream_dependents([B]) ---
-          # Expectations for finding all pending descendants of B (which includes C)
-          # Using simplified assumptions about internal calls - focus on bulk operations
+          # --- DependentProcessor#find_all_pending_descendants (Bulk Path) ---
           initial_dependents = [@step_b_id]
-          all_descendants_to_cancel = [@step_b_id, @step_c_id] # Assume B and C are found as pending descendants
+          all_descendants_to_cancel = [@step_b_id, @step_c_id]
 
-          # Mock the recursive search for pending descendants (simplified)
-          # Expect initial fetch for direct dependents
-          @repo.expects(:get_step_states).with(initial_dependents).returns({@step_b_id => 'pending'}).in_sequence(sequence)
-          # Expect fetching dependents of pending steps
+          # Expect bulk state fetch for initial batch (just B)
+          @repo.expects(:get_step_states).with(initial_dependents).returns({@step_b_id.to_s => 'pending'}).in_sequence(sequence)
+          # Expect bulk dependent fetch for initial batch (just B)
           @repo.expects(:get_dependent_ids_bulk).with([@step_b_id]).returns({@step_b_id => [@step_c_id]}).in_sequence(sequence)
-          # Expect fetching state of next level dependents
-          @repo.expects(:get_step_states).with([@step_c_id]).returns({@step_c_id => 'pending'}).in_sequence(sequence)
-          # Expect fetching dependents of next level (finds none)
+          # Expect bulk state fetch for next batch (just C)
+          @repo.expects(:get_step_states).with([@step_c_id]).returns({@step_c_id.to_s => 'pending'}).in_sequence(sequence)
+          # Expect bulk dependent fetch for next batch (just C)
           @repo.expects(:get_dependent_ids_bulk).with([@step_c_id]).returns({@step_c_id => []}).in_sequence(sequence)
-          # (Internal logic determines B and C need cancellation)
+          # --- End find_all_pending_descendants expectations ---
 
           # Expect bulk cancellation
           @repo.expects(:cancel_steps_bulk)
-              .with(all_descendants_to_cancel) # Order might not matter
-              .returns(2).in_sequence(sequence) # Simulate 2 steps cancelled
+            .with(all_descendants_to_cancel) # Order might not matter
+            .returns(2).in_sequence(sequence) # Simulate 2 steps cancelled
 
-          # Expect publishing cancellation events for B and C
+          # --- Orchestrator publishes events ---
           @repo.expects(:find_step).with(@step_b_id).returns(step_b_cancelled).in_sequence(sequence)
           @notifier.expects(:publish).with('yantra.step.cancelled', has_entries(step_id: @step_b_id)).in_sequence(sequence)
           @repo.expects(:find_step).with(@step_c_id).returns(step_c_cancelled).in_sequence(sequence)
           @notifier.expects(:publish).with('yantra.step.cancelled', has_entries(step_id: @step_c_id)).in_sequence(sequence)
-          # --- End cancellation expectations ---
 
-          # --- check_workflow_completion (called after A finishes, B & C cancelled) ---
+          # --- Orchestrator#check_workflow_completion ---
           @repo.expects(:running_step_count).with(@workflow_id).returns(0).in_sequence(sequence)
-          @repo.expects(:enqueued_step_count).with(@workflow_id).returns(0).in_sequence(sequence) # B/C were pending, now cancelled
-          @repo.expects(:find_workflow).with(@workflow_id).returns(workflow_running).in_sequence(sequence) # State before update
-          @repo.expects(:workflow_has_failures?).with(@workflow_id).returns(true).in_sequence(sequence) # A failed
+          @repo.expects(:enqueued_step_count).with(@workflow_id).returns(0).in_sequence(sequence)
+          @repo.expects(:find_workflow).with(@workflow_id).returns(workflow_running).in_sequence(sequence)
+          @repo.expects(:workflow_has_failures?).with(@workflow_id).returns(true).in_sequence(sequence)
           @repo.expects(:update_workflow_attributes)
-               .with(@workflow_id, has_entries(state: StateMachine::FAILED.to_s), expected_old_state: StateMachine::RUNNING)
-               .returns(true).in_sequence(sequence)
-          @repo.expects(:find_workflow).with(@workflow_id).returns(workflow_failed).in_sequence(sequence) # For event payload
+            .with(@workflow_id, has_entries(state: StateMachine::FAILED.to_s), expected_old_state: StateMachine::RUNNING)
+            .returns(true).in_sequence(sequence)
+          @repo.expects(:find_workflow).with(@workflow_id).returns(workflow_failed).in_sequence(sequence)
           @notifier.expects(:publish)
-                   .with('yantra.workflow.failed', has_entries(workflow_id: @workflow_id, state: 'failed'))
-                   .in_sequence(sequence)
-          # --- End check_workflow_completion expectations ---
+            .with('yantra.workflow.failed', has_entries(workflow_id: @workflow_id, state: 'failed'))
+            .in_sequence(sequence)
 
           # Act
           @orchestrator.step_finished(@step_a_id)
@@ -507,8 +512,8 @@ module Yantra
         # or carefully override the specific expectation on the existing @repo.
         error_message = "DB connection failed during find_step"
         @repo.expects(:find_step) # Override the general stub from setup
-             .with(@step_a_id)
-             .raises(Yantra::Errors::PersistenceError, error_message)
+          .with(@step_a_id)
+          .raises(Yantra::Errors::PersistenceError, error_message)
 
         # Ensure methods called *after* the failing find_step are never reached
         @repo.expects(:get_dependent_ids).never
