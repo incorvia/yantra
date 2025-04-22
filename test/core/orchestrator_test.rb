@@ -83,7 +83,7 @@ module Yantra
 
         # Stub common helper method checks used within Orchestrator logic
         @repo.stubs(:respond_to?).with(:get_dependencies_ids_bulk).returns(true)
-        @repo.stubs(:respond_to?).with(:fetch_step_states).returns(true)
+        @repo.stubs(:respond_to?).with(:get_step_states).returns(true)
 
         # Instantiate the orchestrator - this also instantiates StepEnqueuer
         @orchestrator = Orchestrator.new(
@@ -322,7 +322,7 @@ module Yantra
           # --- process_dependents internal logic (finding ready steps) ---
           @repo.expects(:get_dependencies_ids_bulk).with(ready_dependent_ids).returns({ dependent_step_id => [@step_a_id] }).in_sequence(sequence)
           ids_to_fetch_states = (ready_dependent_ids + [@step_a_id]).uniq
-          @repo.expects(:fetch_step_states)
+          @repo.expects(:get_step_states)
                .with { |actual_ids| actual_ids.sort == ids_to_fetch_states.sort } # Check array content regardless of order
                .returns({ @step_a_id => 'succeeded', dependent_step_id => 'pending' })
                .in_sequence(sequence)
@@ -365,7 +365,7 @@ module Yantra
           # --- process_dependents(A, :succeeded) -> find ready steps ---
           @repo.expects(:get_dependencies_ids_bulk).with(dependents_of_a).returns({ dependent_step_id => dependencies_of_c }).in_sequence(sequence)
           ids_to_fetch_states = (dependents_of_a + dependencies_of_c).uniq.sort
-          @repo.expects(:fetch_step_states)
+          @repo.expects(:get_step_states)
                .with { |actual_ids| actual_ids.sort == ids_to_fetch_states }
                .returns({ @step_c_id => 'pending', @step_a_id => 'succeeded', @step_b_id => 'pending' }) # B is pending, so C is not ready
                .in_sequence(sequence)
@@ -457,11 +457,11 @@ module Yantra
 
           # Mock the recursive search for pending descendants (simplified)
           # Expect initial fetch for direct dependents
-          @repo.expects(:fetch_step_states).with(initial_dependents).returns({@step_b_id => 'pending'}).in_sequence(sequence)
+          @repo.expects(:get_step_states).with(initial_dependents).returns({@step_b_id => 'pending'}).in_sequence(sequence)
           # Expect fetching dependents of pending steps
           @repo.expects(:get_dependent_ids_bulk).with([@step_b_id]).returns({@step_b_id => [@step_c_id]}).in_sequence(sequence)
           # Expect fetching state of next level dependents
-          @repo.expects(:fetch_step_states).with([@step_c_id]).returns({@step_c_id => 'pending'}).in_sequence(sequence)
+          @repo.expects(:get_step_states).with([@step_c_id]).returns({@step_c_id => 'pending'}).in_sequence(sequence)
           # Expect fetching dependents of next level (finds none)
           @repo.expects(:get_dependent_ids_bulk).with([@step_c_id]).returns({@step_c_id => []}).in_sequence(sequence)
           # (Internal logic determines B and C need cancellation)

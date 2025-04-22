@@ -118,7 +118,7 @@ class StepTest < Minitest::Test
     parent_id = SecureRandom.uuid
     expected_output = { "some_key" => "some_value" }
     step = @klass.new(workflow_id: @workflow_id, klass: @klass, parent_ids: [parent_id], repository: @mock_repo)
-    @mock_repo.expect(:fetch_step_outputs, { parent_id => expected_output }, [[parent_id]])
+    @mock_repo.expect(:get_step_outputs, { parent_id => expected_output }, [[parent_id]])
     step.stub(:repository, @mock_repo) do
       result = step.parent_outputs
       assert_equal({ parent_id => expected_output }, result)
@@ -130,7 +130,7 @@ class StepTest < Minitest::Test
     parent_id_2 = SecureRandom.uuid
     output_1 = { value: 1 }
     parent_ids = [parent_id_1, parent_id_2]
-    # Adjust expected result based on how fetch_step_outputs handles nil output
+    # Adjust expected result based on how get_step_outputs handles nil output
     expected_result = { parent_id_1.to_s => output_1, parent_id_2.to_s => {} } # Assuming nil becomes {}
 
     # --- FIX: Inject repository during initialization ---
@@ -144,7 +144,7 @@ class StepTest < Minitest::Test
     # --- END FIX ---
 
     # Set expectation directly on the injected mock repo
-    @mock_repo.expect(:fetch_step_outputs, expected_result, [parent_ids])
+    @mock_repo.expect(:get_step_outputs, expected_result, [parent_ids])
 
     # Call method directly
     result = step.parent_outputs
@@ -158,7 +158,7 @@ class StepTest < Minitest::Test
     parent_id = SecureRandom.uuid
     expected_output = { value: "cached" }
     step = @klass.new(workflow_id: @workflow_id, klass: @klass, parent_ids: [parent_id], repository: @mock_repo)
-    @mock_repo.expect(:fetch_step_outputs, { parent_id => expected_output }, [[parent_id]])
+    @mock_repo.expect(:get_step_outputs, { parent_id => expected_output }, [[parent_id]])
     step.stub(:repository, @mock_repo) do
       result1 = step.parent_outputs # First call
       result2 = step.parent_outputs # Second call (should use cache)
@@ -174,7 +174,7 @@ class StepTest < Minitest::Test
     # *** FIX HERE: Use a simple object that raises instead of Minitest::Mock ***
     error_repo = Object.new
     # Define the method directly on the object instance
-    def error_repo.fetch_step_outputs(ids)
+    def error_repo.get_step_outputs(ids)
       raise Yantra::Errors::PersistenceError, "DB connection failed"
     end
 

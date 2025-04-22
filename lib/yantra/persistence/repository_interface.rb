@@ -13,7 +13,7 @@ module Yantra
 
       # Implement methods for Step CRUD and state management
       def enqueued_step_count(workflow_id); raise NotImplementedError; end # Added for potential use
-      def fetch_step_states(step_ids); raise NotImplementedError; end
+      def get_step_states(step_ids); raise NotImplementedError; end
       def find_step(step_id); raise NotImplementedError; end
       def find_steps(step_ids); raise NotImplementedError; end
       def list_steps(workflow_id:, status: nil); raise NotImplementedError; end
@@ -39,7 +39,7 @@ module Yantra
       def cancel_steps_bulk(step_ids); raise NotImplementedError; end
       def delete_expired_workflows(cutoff_timestamp); raise NotImplementedError; end
       def delete_workflow(workflow_id); raise NotImplementedError; end
-      def fetch_step_outputs(step_ids); raise NotImplementedError; end
+      def get_step_outputs(step_ids); raise NotImplementedError; end
       def list_workflows(status: nil, limit: 50, offset: 0); raise NotImplementedError; end
     end
   end

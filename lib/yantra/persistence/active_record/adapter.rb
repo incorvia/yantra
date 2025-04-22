@@ -236,13 +236,13 @@ module Yantra
         end
         # <<< END CHANGED >>>
 
-        # @see Yantra::Persistence::RepositoryInterface#fetch_step_states
-        def fetch_step_states(step_ids)
+        # @see Yantra::Persistence::RepositoryInterface#get_step_states
+        def get_step_states(step_ids)
           return {} if step_ids.nil? || step_ids.empty? || step_ids.all?(&:nil?)
           unique_ids = step_ids.uniq
           StepRecord.where(id: unique_ids).pluck(:id, :state).to_h
         rescue ::ActiveRecord::ActiveRecordError => e
-          log_error { "[AR Adapter] Failed fetch_step_states for IDs #{unique_ids.inspect}: #{e.message}" }
+          log_error { "[AR Adapter] Failed get_step_states for IDs #{unique_ids.inspect}: #{e.message}" }
           {}
         end
 
@@ -427,8 +427,8 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Error deleting expired workflows: #{e.message}"
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#fetch_step_outputs
-        def fetch_step_outputs(step_ids)
+        # @see Yantra::Persistence::RepositoryInterface#get_step_outputs
+        def get_step_outputs(step_ids)
           # ... (Implementation as before) ...
           return {} if step_ids.nil? || step_ids.empty? || step_ids.all?(&:nil?)
           unique_ids = step_ids.uniq

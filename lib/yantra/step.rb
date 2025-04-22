@@ -59,13 +59,13 @@ module Yantra
 
       return @_parent_outputs_cache = {} if ids_to_fetch.empty?
 
-      unless repository&.respond_to?(:fetch_step_outputs)
-        log_error "[Step#parent_outputs] Repository does not support fetch_step_outputs."
+      unless repository&.respond_to?(:get_step_outputs)
+        log_error "[Step#parent_outputs] Repository does not support get_step_outputs."
         return @_parent_outputs_cache = {}
       end
 
       begin
-        fetched_outputs = repository.fetch_step_outputs(ids_to_fetch)
+        fetched_outputs = repository.get_step_outputs(ids_to_fetch)
         log_debug "[Step#parent_outputs] Outputs fetched: #{fetched_outputs.inspect}"
         @_parent_outputs_cache = fetched_outputs || {}
       rescue => e

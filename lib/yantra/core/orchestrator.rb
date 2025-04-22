@@ -280,9 +280,9 @@ module Yantra
         return {} if step_ids.nil? || step_ids.empty?
 
         unique_ids = step_ids.uniq
-        return repository.fetch_step_states(unique_ids) if repository.respond_to?(:fetch_step_states)
+        return repository.get_step_states(unique_ids) if repository.respond_to?(:get_step_states)
 
-        log_warn "Repository does not implement fetch_step_states"
+        log_warn "Repository does not implement get_step_states"
         states = {}
         unique_ids.each do |id|
           step = repository.find_step(id)
