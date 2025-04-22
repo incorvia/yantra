@@ -57,8 +57,8 @@ module Yantra
               log_warn "Could not find pre-fetched step data for #{step_id}, skipping enqueue."
               next
             end
-            unless step.state.to_sym == Yantra::Core::StateMachine::PENDING
-              log_warn "Step #{step_id} state was not PENDING (#{step.state}) when attempting enqueue, skipping."
+            unless Yantra::Core::StateMachine.can_enqueue?(step.state.to_sym)
+              log_warn "Step #{step_id} state was not releasable (#{step.state}) when attempting enqueue, skipping."
               next
             end
             valid_steps_to_enqueue << step

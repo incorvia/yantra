@@ -18,6 +18,9 @@ module Yantra
       ALL_STATES = Set[
         PENDING, ENQUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED
       ].freeze
+      RELEASABLE_FROM_STATES = Set[PENDING].freeze
+      PREREQUISITE_MET_STATES = Set[SUCCEEDED].freeze
+      CANCELLABLE_STATES = Set[PENDING, ENQUEUED].freeze
 
       # Terminal states (cannot transition from these)
       TERMINAL_STATES = Set[
@@ -33,6 +36,15 @@ module Yantra
         SUCCEEDED => Set[].freeze,
         CANCELLED => Set[].freeze
       }.freeze
+
+
+      def self.can_enqueue?(state_symbol)
+        RELEASABLE_FROM_STATES.include?(state_symbol)
+      end
+
+      def self.prerequisite_met?(state_symbol)
+        PREREQUISITE_MET_STATES.include?(state_symbol)
+      end
 
       # Returns true if transition from one state to another is valid
       def self.valid_transition?(from_state, to_state)

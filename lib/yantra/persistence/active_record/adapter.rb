@@ -300,18 +300,29 @@ module Yantra
           all_step_ids = StepRecord.where(workflow_id: workflow_id).pluck(:id)
           return [] if all_step_ids.empty?
 
+          # Convert StateMachine constants to string arrays for SQL queries
+          prerequisite_met_states_str = Yantra::Core::StateMachine::PREREQUISITE_MET_STATES.map(&:to_s)
+          releasable_states_str = Yantra::Core::StateMachine::RELEASABLE_FROM_STATES.map(&:to_s)
+
+          # Find IDs of steps that have at least one prerequisite NOT in a met state
           incomplete_deps = StepDependencyRecord
             .joins("INNER JOIN yantra_steps AS prerequisites ON prerequisites.id = yantra_step_dependencies.depends_on_step_id")
             .where(step_id: all_step_ids)
-          # Corrected: Use SQL string condition for the aliased table
-            .where.not("prerequisites.state = ?", Yantra::Core::StateMachine::SUCCEEDED.to_s)
+          # Use the constant-derived list of states
+            .where("prerequisites.state NOT IN (?)", prerequisite_met_states_str)
             .pluck(:step_id).uniq
 
-          pending_step_ids = StepRecord.where(workflow_id: workflow_id, state: Yantra::Core::StateMachine::PENDING.to_s).pluck(:id)
-          ready_step_ids = pending_step_ids - incomplete_deps
+          # Find IDs of steps that are in a state from which they can be released/started
+          candidate_step_ids = StepRecord.where(
+            workflow_id: workflow_id,
+            # Use the constant-derived list of states
+            state: releasable_states_str
+          ).pluck(:id)
+
+          # Ready steps are those candidates that do NOT have incomplete dependencies
+          ready_step_ids = candidate_step_ids - incomplete_deps
           ready_step_ids
         rescue ::ActiveRecord::ActiveRecordError => e
-          # Use Yantra.logger for consistency if defined, otherwise fallback
           logger = defined?(Yantra.logger) && Yantra.logger ? Yantra.logger : Logger.new(STDOUT)
           logger.error { "[Persistence] Error finding ready steps for workflow #{workflow_id}: #{e.message}" }
           raise Yantra::Errors::PersistenceError, "Error finding ready steps: #{e.message}"
@@ -389,20 +400,25 @@ module Yantra
 
         # @see Yantra::Persistence::RepositoryInterface#cancel_steps_bulk
         def cancel_steps_bulk(step_ids)
-          # ... (Implementation as before) ...
           return 0 if step_ids.nil? || step_ids.empty?
-          cancellable_states = [
-            Yantra::Core::StateMachine::PENDING.to_s,
-            Yantra::Core::StateMachine::ENQUEUED.to_s
-          ]
-          updated_count = StepRecord.where(id: step_ids, state: cancellable_states).update_all(
-            state: Yantra::Core::StateMachine::CANCELLED.to_s,
-            finished_at: Time.current,
-            updated_at: Time.current
+
+          # Use the constant from StateMachine
+          cancellable_states_str = Yantra::Core::StateMachine::CANCELLABLE_STATES.map(&:to_s)
+          cancelled_state_str = Yantra::Core::StateMachine::CANCELLED.to_s
+          now = Time.current
+
+          updated_count = StepRecord.where(
+            id: step_ids,
+            state: cancellable_states_str # Use the constant-derived list
+          ).update_all(
+            state: cancelled_state_str,
+            finished_at: now,
+            updated_at: now
           )
           updated_count
         rescue ::ActiveRecord::StatementInvalid, ::ActiveRecord::ActiveRecordError => e
-          log_error { "Bulk step cancellation failed for IDs #{step_ids.inspect}: #{e.message}" }
+          logger = defined?(Yantra.logger) && Yantra.logger ? Yantra.logger : Logger.new(STDOUT)
+          logger.error { "[Persistence] Bulk step cancellation failed for IDs #{step_ids.inspect}: #{e.message}" }
           raise Yantra::Errors::PersistenceError, "Bulk job cancellation failed: #{e.message}"
         end
 
