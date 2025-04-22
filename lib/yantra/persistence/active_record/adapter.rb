@@ -29,8 +29,8 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Error finding workflow: #{e.message}"
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#persist_workflow
-        def persist_workflow(workflow_instance)
+        # @see Yantra::Persistence::RepositoryInterface#create_workflow
+        def create_workflow(workflow_instance)
           WorkflowRecord.create!(
             id: workflow_instance.id,
             klass: workflow_instance.klass.to_s,
@@ -297,20 +297,24 @@ module Yantra
 
         # @see Yantra::Persistence::RepositoryInterface#find_ready_steps
         def find_ready_steps(workflow_id)
-          # ... (Restored original logic) ...
           all_step_ids = StepRecord.where(workflow_id: workflow_id).pluck(:id)
           return [] if all_step_ids.empty?
+
           incomplete_deps = StepDependencyRecord
             .joins("INNER JOIN yantra_steps AS prerequisites ON prerequisites.id = yantra_step_dependencies.depends_on_step_id")
             .where(step_id: all_step_ids)
-            .where.not(prerequisites: { state: Yantra::Core::StateMachine::SUCCEEDED.to_s })
+          # Corrected: Use SQL string condition for the aliased table
+            .where.not("prerequisites.state = ?", Yantra::Core::StateMachine::SUCCEEDED.to_s)
             .pluck(:step_id).uniq
+
           pending_step_ids = StepRecord.where(workflow_id: workflow_id, state: Yantra::Core::StateMachine::PENDING.to_s).pluck(:id)
           ready_step_ids = pending_step_ids - incomplete_deps
           ready_step_ids
         rescue ::ActiveRecord::ActiveRecordError => e
-           log_error { "Error finding ready steps for workflow #{workflow_id}: #{e.message}" }
-           raise Yantra::Errors::PersistenceError, "Error finding ready steps: #{e.message}"
+          # Use Yantra.logger for consistency if defined, otherwise fallback
+          logger = defined?(Yantra.logger) && Yantra.logger ? Yantra.logger : Logger.new(STDOUT)
+          logger.error { "[Persistence] Error finding ready steps for workflow #{workflow_id}: #{e.message}" }
+          raise Yantra::Errors::PersistenceError, "Error finding ready steps: #{e.message}"
         end
 
         # @see Yantra::Persistence::RepositoryInterface#get_dependencies_ids

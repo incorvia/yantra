@@ -7,7 +7,7 @@ module Yantra
     module RepositoryInterface
       # Implement methods for Workflow CRUD and state management
       def find_workflow(workflow_id); raise NotImplementedError; end
-      def persist_workflow(workflow_instance); raise NotImplementedError; end
+      def create_workflow(workflow_instance); raise NotImplementedError; end
       def update_workflow_attributes(workflow_id, attributes_hash, expected_old_state: nil); raise NotImplementedError; end
       def workflow_has_failures?(workflow_id); raise NotImplementedError; end
 

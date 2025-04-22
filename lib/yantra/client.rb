@@ -28,7 +28,7 @@ module Yantra
       repo = Yantra.repository
 
       # Persist the main workflow record
-      unless repo.persist_workflow(wf_instance)
+      unless repo.create_workflow(wf_instance)
         raise Yantra::Errors::PersistenceError, "Failed to persist workflow record for ID: #{wf_instance.id}"
       end
 

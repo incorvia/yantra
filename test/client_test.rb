@@ -83,7 +83,7 @@ module Yantra
         assert_equal "pending", wf_record.state # Initial state
         # Check persisted positional args - should be empty now
         assert_equal [], wf_record.arguments
-        # Check persisted keyword args (ensure your persist_workflow handles kwargs if needed - currently it doesn't)
+        # Check persisted keyword args (ensure your create_workflow handles kwargs if needed - currently it doesn't)
         # assert_equal({ "user_id" => user_id_arg, "report_type" => report_type_kwarg }, wf_record.kwargs) # If kwargs were persisted
         assert_equal({ "tenant_id" => "abc" }, wf_record.globals) # Check persisted globals
         refute wf_record.has_failures # Should initially be false
