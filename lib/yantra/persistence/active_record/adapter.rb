@@ -372,11 +372,11 @@ module Yantra
         # ========================================================
 
         # @see Yantra::Persistence::RepositoryInterface#bulk_update_steps
-        def bulk_update_steps(step_ids, attributes)
+        def bulk_update_steps(step_ids, attributes_hash)
           # ... (Implementation as before) ...
           return true if step_ids.nil? || step_ids.empty?
-          return true if attributes.nil? || attributes.empty?
-          update_attrs = attributes.dup
+          return true if attributes_hash.nil? || attributes_hash.empty?
+          update_attrs = attributes_hash.dup
           if update_attrs.key?(:state) && update_attrs[:state].is_a?(Symbol)
             update_attrs[:state] = update_attrs[:state].to_s
           end
