@@ -62,7 +62,7 @@ module Yantra
         ready_step_ids = find_ready_dependents
 
         if ready_step_ids.any?
-          log_info "Steps ready to enqueue after #{@finished_step_id} finished: #{ready_step_ids.inspect}"
+          # log_info "Steps ready to enqueue after #{@finished_step_id} finished: #{ready_step_ids.inspect}"
           @step_enqueuer.call(workflow_id: @workflow_id, step_ids_to_attempt: ready_step_ids)
         # else # Removed debug log for no ready dependents
         #   log_debug "No direct dependents became ready after #{@finished_step_id} finished."
@@ -82,16 +82,23 @@ module Yantra
 
       def find_ready_dependents
         @dependents_ids.select do |step_id|
-          is_pending = (@states[step_id.to_s] == StateMachine::PENDING.to_s)
+          # Use StateMachine method to check if the step itself is in a valid state to start
+          can_be_enqueued = StateMachine.can_enqueue?(@states[step_id.to_s]&.to_sym) # Pass symbol
+
+          # Use StateMachine method to check if all prerequisites are met
           prereqs = @parent_map[step_id] || []
-          all_prereqs_succeeded = are_all_prerequisites_succeeded?(prereqs)
-          is_pending && all_prereqs_succeeded
+          all_prereqs_met = are_all_prerequisites_met?(prereqs) # Renamed helper
+
+          can_be_enqueued && all_prereqs_met
         end
       end
 
-      def are_all_prerequisites_succeeded?(prerequisite_ids)
+      def are_all_prerequisites_met?(prerequisite_ids) # Renamed helper
         return true if prerequisite_ids.empty?
-        prerequisite_ids.all? { |prereq_id| @states[prereq_id.to_s] == StateMachine::SUCCEEDED.to_s }
+        prerequisite_ids.all? do |prereq_id|
+          # Use StateMachine method to check prerequisite state
+          StateMachine.prerequisite_met?(@states[prereq_id.to_s]&.to_sym) # Pass symbol
+        end
       end
 
       def fetch_states_for_steps(step_ids)
@@ -122,7 +129,7 @@ module Yantra
         descendants_to_cancel_ids = find_all_pending_descendants(initial_step_ids)
         return [] if descendants_to_cancel_ids.empty?
 
-        log_info "Bulk cancelling #{descendants_to_cancel_ids.size} pending descendant steps: #{descendants_to_cancel_ids.inspect}"
+        # log_info "Bulk cancelling #{descendants_to_cancel_ids.size} pending descendant steps: #{descendants_to_cancel_ids.inspect}"
         cancelled_count = repository.cancel_steps_bulk(descendants_to_cancel_ids)
         log_info "Repository reported #{cancelled_count} steps cancelled."
         return descendants_to_cancel_ids

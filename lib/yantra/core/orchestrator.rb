@@ -140,7 +140,7 @@ module Yantra
           )
 
           if cancelled_step_ids&.any?
-            log_info "Publishing cancellation events for steps: #{cancelled_step_ids.inspect}"
+            # log_info "Publishing cancellation events for steps: #{cancelled_step_ids.inspect}"
             cancelled_step_ids.each { |cancelled_id| publish_step_cancelled_event(cancelled_id) }
           end
 
