@@ -34,7 +34,7 @@ module Yantra
 
       # Persist the steps if any are defined
       if wf_instance.steps.any?
-        unless repo.persist_steps_bulk(wf_instance.steps)
+        unless repo.create_steps_bulk(wf_instance.steps)
           raise Yantra::Errors::PersistenceError, "Failed to persist step records for workflow ID: #{wf_instance.id}"
         end
       end

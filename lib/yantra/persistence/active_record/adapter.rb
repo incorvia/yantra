@@ -104,8 +104,8 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Finding steps failed: #{e.message}"
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#persist_step
-        def persist_step(step_instance)
+        # @see Yantra::Persistence::RepositoryInterface#create_step
+        def create_step(step_instance)
           klass_name = step_instance.klass.is_a?(Class) ? step_instance.klass.to_s : step_instance.klass.to_s
           StepRecord.create!(
             id: step_instance.id,
@@ -125,8 +125,8 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Database error persisting step: #{e.message}"
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#persist_steps_bulk
-        def persist_steps_bulk(step_instances_array)
+        # @see Yantra::Persistence::RepositoryInterface#create_steps_bulk
+        def create_steps_bulk(step_instances_array)
           return true if step_instances_array.nil? || step_instances_array.empty?
           current_time = Time.current
           records_to_insert = step_instances_array.map do |step|

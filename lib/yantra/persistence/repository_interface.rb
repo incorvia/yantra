@@ -18,8 +18,8 @@ module Yantra
       def find_steps(step_ids); raise NotImplementedError; end
       def get_workflow_steps(workflow_id, status: nil); raise NotImplementedError; end
       def increment_step_retries(step_id); raise NotImplementedError; end
-      def persist_step(step_instance); raise NotImplementedError; end
-      def persist_steps_bulk(step_instances_array); raise NotImplementedError; end
+      def create_step(step_instance); raise NotImplementedError; end
+      def create_steps_bulk(step_instances_array); raise NotImplementedError; end
       def record_step_error(step_id, error); raise NotImplementedError; end
       def record_step_output(step_id, output); raise NotImplementedError; end
       def running_step_count(workflow_id); raise NotImplementedError; end

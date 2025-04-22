@@ -104,9 +104,9 @@ module Yantra
              mock_relation.verify
           end
 
-          # --- Tests for persist_steps_bulk ---
-          # [ ... existing persist_steps_bulk tests remain unchanged ... ]
-          def test_persist_steps_bulk_success
+          # --- Tests for create_steps_bulk ---
+          # [ ... existing create_steps_bulk tests remain unchanged ... ]
+          def test_create_steps_bulk_success
             step1_id = SecureRandom.uuid
             step2_id = SecureRandom.uuid
             # Use OpenStruct or simple Hashes mimicking Yantra::Step instance attributes
@@ -117,7 +117,7 @@ module Yantra
 
             # --- FIXED: Replace assert_difference ---
             initial_count = StepRecord.count
-            assert @adapter.persist_steps_bulk(step_instances), "persist_steps_bulk should return true"
+            assert @adapter.create_steps_bulk(step_instances), "create_steps_bulk should return true"
             final_count = StepRecord.count
             assert_equal initial_count + 2, final_count, "StepRecord count should increase by 2"
             # --- END FIX ---
@@ -138,17 +138,17 @@ module Yantra
             assert_equal "q2", record2.queue
           end
 
-          def test_persist_steps_bulk_empty_array
-            assert @adapter.persist_steps_bulk([])
+          def test_create_steps_bulk_empty_array
+            assert @adapter.create_steps_bulk([])
             # Count assertion removed as setup might create records
           end
 
-          def test_persist_steps_bulk_nil_input
-             assert @adapter.persist_steps_bulk(nil)
+          def test_create_steps_bulk_nil_input
+             assert @adapter.create_steps_bulk(nil)
              # Count assertion removed as setup might create records
           end
 
-          def test_persist_steps_bulk_raises_persistence_error_on_duplicate_id
+          def test_create_steps_bulk_raises_persistence_error_on_duplicate_id
             step1_id = SecureRandom.uuid
             StepRecord.create!(id: step1_id, workflow_record: @workflow, klass: "ExistingJob", state: "pending")
 
@@ -157,17 +157,17 @@ module Yantra
             ]
 
             error = assert_raises(Yantra::Errors::PersistenceError) do
-              @adapter.persist_steps_bulk(step_instances)
+              @adapter.create_steps_bulk(step_instances)
             end
             assert_match(/Bulk step insert failed due to unique constraint/, error.message)
           end
 
-          def test_persist_steps_bulk_raises_persistence_error_on_db_error
+          def test_create_steps_bulk_raises_persistence_error_on_db_error
             step_instances = [ OpenStruct.new(id: SecureRandom.uuid, workflow_id: @workflow.id, klass: TestJobClassA, arguments: {}, queue_name: 'q1') ]
             # Stub insert_all! to raise error
             StepRecord.stub(:insert_all!, ->(*) { raise ::ActiveRecord::StatementInvalid, "DB Insert Error" }) do
                error = assert_raises(Yantra::Errors::PersistenceError) do
-                 @adapter.persist_steps_bulk(step_instances)
+                 @adapter.create_steps_bulk(step_instances)
                end
                assert_match(/Bulk step insert failed: DB Insert Error/, error.message)
             end
