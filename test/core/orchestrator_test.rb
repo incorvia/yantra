@@ -452,7 +452,6 @@ module Yantra
           @repo.stubs(:respond_to?).with(:find_steps).returns(true) # Example if needed
           # --- END Stubs ---
 
-
           # --- step_finished(A) ---
           @repo.expects(:find_step).with(@step_a_id).returns(step_a_failed).in_sequence(sequence)
           # --- DependentProcessor#call -> cancel_downstream_dependents ---
