@@ -432,7 +432,6 @@ module Yantra
         end
       end
 
-      focus
       def test_step_finished_failure_cancels_dependents_recursively_and_fails_workflow
         # ... (setup mock steps and workflows as before) ...
         step_a_failed = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, state: 'failed')
