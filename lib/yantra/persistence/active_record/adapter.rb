@@ -174,8 +174,8 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Error updating step: #{e.message}"
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#get_workflow_steps
-        def get_workflow_steps(workflow_id, status: nil)
+        # @see Yantra::Persistence::RepositoryInterface#list_steps
+        def list_steps(workflow_id:, status: nil)
           scope = StepRecord.where(workflow_id: workflow_id)
           scope = scope.where(state: status.to_s) if status
           scope.order(:created_at).to_a

@@ -23,8 +23,8 @@ module Yantra
         )
 
         # Validation checks (repository still needs bulk_update_steps)
-        unless repository&.respond_to?(:get_workflow_steps) && repository&.respond_to?(:bulk_update_steps)
-          raise ArgumentError, "WorkflowRetryService requires a repository implementing #get_workflow_steps and #bulk_update_steps"
+        unless repository&.respond_to?(:list_steps) && repository&.respond_to?(:bulk_update_steps)
+          raise ArgumentError, "WorkflowRetryService requires a repository implementing #list_steps and #bulk_update_steps"
         end
         # No longer need to validate worker_adapter here directly
       end
@@ -90,7 +90,7 @@ module Yantra
 
       # Finds all failed steps for this workflow (Implementation remains the same)
       def find_failed_steps
-        repository.get_workflow_steps(workflow_id, status: :failed)
+        repository.list_steps(workflow_id:, status: :failed)
       rescue => e
         Yantra.logger&.error { "[WorkflowRetryService] Error fetching failed steps for #{workflow_id}: #{e.message}" }
         []

@@ -82,8 +82,8 @@ module Yantra
     # @param workflow_id [String] The ID of the workflow.
     # @param status [String, Symbol, nil] Optional filter by step status.
     # @return [Array<Yantra::StepStatus>] A list of step status objects.
-    def self.get_workflow_steps(workflow_id, status: nil)
-      Yantra.repository.get_workflow_steps(workflow_id, status: status)
+    def self.list_steps(workflow_id:, status: nil)
+      Yantra.repository.list_steps(workflow_id:, status: status)
     end
 
     # Attempts to cancel a running or pending workflow and its eligible steps.
@@ -143,7 +143,7 @@ module Yantra
       end
 
       # Cancel associated pending/enqueued steps
-      steps_to_cancel = repo.get_workflow_steps(workflow_id)
+      steps_to_cancel = repo.list_steps(workflow_id:)
                             .select { |j| [Core::StateMachine::PENDING.to_s, Core::StateMachine::ENQUEUED.to_s].include?(j.state.to_s) }
 
       step_ids = steps_to_cancel.map(&:id)

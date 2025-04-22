@@ -203,8 +203,8 @@ module Yantra
 
       def test_linear_workflow_success_end_to_end
         workflow_id = Client.create_workflow(LinearSuccessWorkflow)
-        step_a_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'IntegrationStepA' }
-        step_b_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'IntegrationStepB' }
+        step_a_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepA' }
+        step_b_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepB' }
         refute_nil step_a_record, 'Step A record should exist'
         refute_nil step_b_record, 'Step B record should exist'
 
@@ -273,8 +273,8 @@ module Yantra
 
       def test_linear_workflow_failure_end_to_end
         workflow_id = Client.create_workflow(LinearFailureWorkflow)
-        step_f_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'IntegrationStepFails' }
-        step_a_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'IntegrationStepA' }
+        step_f_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepFails' }
+        step_a_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepA' }
         refute_nil step_f_record
         refute_nil step_a_record
 
@@ -328,10 +328,10 @@ module Yantra
 
       def test_complex_graph_success_end_to_end
         workflow_id = Client.create_workflow(ComplexGraphWorkflow)
-        step_a = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'IntegrationStepA' }
-        step_b = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'IntegrationStepB' }
-        step_c = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'IntegrationStepC' }
-        step_d = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'IntegrationStepD' }
+        step_a = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepA' }
+        step_b = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepB' }
+        step_c = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepC' }
+        step_d = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepD' }
         [step_a, step_b, step_c, step_d].each { |s| refute_nil s, 'Setup: Step record missing' }
 
         # Act 1: Start
@@ -418,8 +418,8 @@ module Yantra
 
       def test_workflow_with_retries
         workflow_id = Client.create_workflow(RetryWorkflow)
-        step_r_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'IntegrationJobRetry' }
-        step_a_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'IntegrationStepA' }
+        step_r_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationJobRetry' }
+        step_a_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepA' }
         refute_nil step_r_record
         refute_nil step_a_record
 
@@ -502,8 +502,8 @@ module Yantra
 
       def test_pipelining_workflow
         workflow_id = Client.create_workflow(PipeliningWorkflow)
-        producer_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'PipeProducer' }
-        consumer_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'PipeConsumer' }
+        producer_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'PipeProducer' }
+        consumer_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'PipeConsumer' }
         refute_nil producer_record
         refute_nil consumer_record
 
@@ -576,8 +576,8 @@ module Yantra
 
       def test_cancel_workflow_cancels_running_workflow
         workflow_id = Client.create_workflow(LinearSuccessWorkflow)
-        step_a_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'IntegrationStepA' }
-        step_b_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'IntegrationStepB' }
+        step_a_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepA' }
+        step_b_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepB' }
         Client.start_workflow(workflow_id)
         perform_enqueued_jobs # Run A, enqueue B
         @test_notifier.clear!
@@ -606,8 +606,8 @@ module Yantra
 
       def test_cancel_workflow_cancels_pending_workflow
         workflow_id = Client.create_workflow(LinearSuccessWorkflow)
-        step_a_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'IntegrationStepA' }
-        step_b_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'IntegrationStepB' }
+        step_a_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepA' }
+        step_b_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepB' }
         wf_record = repository.find_workflow(workflow_id)
         assert_equal 'pending', wf_record.reload.state
         assert_equal 'pending', step_a_record.reload.state
@@ -655,8 +655,8 @@ module Yantra
       def test_retry_failed_steps_restarts_failed_workflow
         # Arrange: Create and run a workflow that fails
         workflow_id = Client.create_workflow(LinearFailureWorkflow)
-        step_f_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'IntegrationStepFails' }
-        step_a_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'IntegrationStepA' }
+        step_f_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepFails' }
+        step_a_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepA' }
         Client.start_workflow(workflow_id)
         perform_enqueued_jobs # Runs F, fails permanently
         assert_equal 'failed', repository.find_workflow(workflow_id).state
@@ -729,7 +729,7 @@ module Yantra
       def test_retry_failed_steps_handles_failed_workflow_with_no_failed_steps
         # Arrange: Create workflow, mark failed manually without failing steps
         workflow_id = Client.create_workflow(LinearSuccessWorkflow)
-        step_a_record = repository.get_workflow_steps(workflow_id).find { |s| s.klass == 'IntegrationStepA' }
+        step_a_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepA' }
         repository.update_workflow_attributes(workflow_id, { state: 'failed', has_failures: true }, expected_old_state: 'pending') # Use string state
         assert_equal 'failed', repository.find_workflow(workflow_id).state
         assert_equal 'pending', step_a_record.reload.state # Step A never failed
@@ -752,7 +752,7 @@ module Yantra
         workflow_id = Client.create_workflow(ParallelStartWorkflow)
 
         # Fetch all step records, identifying them by klass defined in the workflow
-        all_steps = repository.get_workflow_steps(workflow_id)
+        all_steps = repository.list_steps(workflow_id:)
         step_a = all_steps.find { |s| s.klass == 'IntegrationStepA' }
         step_e = all_steps.find { |s| s.klass == 'IntegrationStepE' } # Find E now
         step_c = all_steps.find { |s| s.klass == 'IntegrationStepC' }
@@ -818,7 +818,7 @@ module Yantra
         workflow_id = Client.create_workflow(MultiBranchWorkflow)
 
         # Fetch all step records, identifying them by klass
-        all_steps = repository.get_workflow_steps(workflow_id)
+        all_steps = repository.list_steps(workflow_id:)
         step_a = all_steps.find { |s| s.klass == 'IntegrationStepA' }
         step_b = all_steps.find { |s| s.klass == 'IntegrationStepB' }
         step_c = all_steps.find { |s| s.klass == 'IntegrationStepC' }

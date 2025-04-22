@@ -261,10 +261,10 @@ puts "Step output: #{step&.output.inspect}"
 puts "Step error: #{step&.error.inspect}" # Use .inspect for better hash/string visibility
 
 # Get all steps for a workflow
-steps = Yantra::Client.get_workflow_steps(workflow_id)
+steps = Yantra::Client.list_steps(workflow_id:)
 
 # Get steps with a specific status
-failed_steps = Yantra::Client.get_workflow_steps(workflow_id, status: :failed)
+failed_steps = Yantra::Client.list_steps(workflow_id:, status: :failed)
 
 # Cancel a running or pending workflow
 Yantra::Client.cancel_workflow(workflow_id)

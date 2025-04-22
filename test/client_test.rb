@@ -137,7 +137,7 @@ module Yantra
           klass: "ClientTestWorkflow",
           state: 'running' # Start in a cancellable state
         )
-        # Mock step records returned by get_workflow_steps
+        # Mock step records returned by list_steps
         mock_steps_to_cancel = [
           OpenStruct.new(id: SecureRandom.uuid, state: :pending),
           OpenStruct.new(id: SecureRandom.uuid, state: :enqueued)
@@ -186,7 +186,7 @@ module Yantra
               end
 
               # 5. Get steps to cancel (after workflow marked cancelled)
-              mock_repo.expect(:get_workflow_steps, mock_steps_to_cancel, [workflow_id])
+              mock_repo.expect(:list_steps, mock_steps_to_cancel, workflow_id: workflow_id)
 
               # 6. Bulk cancel steps
               mock_repo.expect(:cancel_steps_bulk, step_ids_to_cancel.size, [step_ids_to_cancel])

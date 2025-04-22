@@ -16,7 +16,7 @@ module Yantra
       def fetch_step_states(step_ids); raise NotImplementedError; end
       def find_step(step_id); raise NotImplementedError; end
       def find_steps(step_ids); raise NotImplementedError; end
-      def get_workflow_steps(workflow_id, status: nil); raise NotImplementedError; end
+      def list_steps(workflow_id:, status: nil); raise NotImplementedError; end
       def increment_step_retries(step_id); raise NotImplementedError; end
       def create_step(step_instance); raise NotImplementedError; end
       def create_steps_bulk(step_instances_array); raise NotImplementedError; end
