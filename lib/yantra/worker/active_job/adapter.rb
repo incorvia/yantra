@@ -51,6 +51,25 @@ module Yantra
             raise Yantra::Errors::WorkerError, "ActiveJob enqueuing failed: #{e.message}"
           end
         end
+
+        def enqueue_in(delay_seconds, step_id, workflow_id, step_klass_name, queue_name)
+          # Ensure delay is positive, otherwise enqueue immediately (or raise?)
+          # Let's enqueue immediately if delay is not positive for robustness.
+          if delay_seconds.nil? || delay_seconds <= 0
+            return enqueue(step_id, workflow_id, step_klass_name, queue_name)
+          end
+
+          job_args = [step_id, workflow_id, step_klass_name]
+          job = StepJob.set(wait: delay_seconds.seconds) # Use ActiveSupport duration helper
+          job = job.set(queue: queue_name.to_sym) if queue_name.present?
+          job.perform_later(*job_args)
+          true # Indicate success
+        rescue StandardError => e
+          # Log error appropriately
+          logger = defined?(Yantra.logger) && Yantra.logger ? Yantra.logger : Logger.new(STDOUT)
+          logger.error { "[AJ Adapter] Failed to enqueue delayed job for step #{step_id}: #{e.class} - #{e.message}" }
+          false # Indicate failure
+        end
       end
     end
   end

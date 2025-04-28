@@ -472,7 +472,7 @@ module Yantra
           # --- End find_all_pending_descendants expectations ---
 
           # Expect bulk cancellation
-          @repo.expects(:cancel_steps_bulk)
+          @repo.expects(:bulk_cancel_steps)
             .with(all_descendants_to_cancel) # Order might not matter
             .returns(2).in_sequence(sequence) # Simulate 2 steps cancelled
 

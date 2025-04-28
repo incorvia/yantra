@@ -36,9 +36,9 @@ module Yantra
             @workflow = create_workflow_record!(state: "running")
           end
 
-          # --- Tests for cancel_steps_bulk (Existing) ---
-          # [ ... existing cancel_steps_bulk tests remain unchanged ... ]
-          def test_cancel_steps_bulk_cancels_only_cancellable_states
+          # --- Tests for bulk_cancel_steps (Existing) ---
+          # [ ... existing bulk_cancel_steps tests remain unchanged ... ]
+          def test_bulk_cancel_steps_cancels_only_cancellable_states
             # Arrange: Create jobs in various states
             step_pending = create_step_record!(workflow_record: @workflow, state: "pending")
             step_enqueued = create_step_record!(workflow_record: @workflow, state: "enqueued")
@@ -54,7 +54,7 @@ module Yantra
             time_before_cancel = Time.current
 
             # Act: Call the method under test
-            updated_count = @adapter.cancel_steps_bulk(step_ids_to_cancel)
+            updated_count = @adapter.bulk_cancel_steps(step_ids_to_cancel)
 
             # Assert: Check return value (count of *updated* records)
             # Only pending and enqueued should be cancelled by the adapter method
@@ -73,23 +73,23 @@ module Yantra
             assert_equal "cancelled", step_cancelled_already.reload.state
           end
 
-          def test_cancel_steps_bulk_handles_empty_array
-            assert_equal 0, @adapter.cancel_steps_bulk([]), "Should return 0 for empty array"
+          def test_bulk_cancel_steps_handles_empty_array
+            assert_equal 0, @adapter.bulk_cancel_steps([]), "Should return 0 for empty array"
           end
 
-          def test_cancel_steps_bulk_handles_nil_input
-            assert_equal 0, @adapter.cancel_steps_bulk(nil), "Should return 0 for nil input"
+          def test_bulk_cancel_steps_handles_nil_input
+            assert_equal 0, @adapter.bulk_cancel_steps(nil), "Should return 0 for nil input"
           end
 
-          def test_cancel_steps_bulk_handles_non_existent_ids
+          def test_bulk_cancel_steps_handles_non_existent_ids
             step_pending = create_step_record!(workflow_record: @workflow, state: "pending")
             non_existent_id = SecureRandom.uuid
-            updated_count = @adapter.cancel_steps_bulk([step_pending.id, non_existent_id])
+            updated_count = @adapter.bulk_cancel_steps([step_pending.id, non_existent_id])
             assert_equal 1, updated_count
             assert_equal "cancelled", step_pending.reload.state
           end
 
-          def test_cancel_steps_bulk_raises_persistence_error_on_db_error
+          def test_bulk_cancel_steps_raises_persistence_error_on_db_error
              step_pending = create_step_record!(workflow_record: @workflow, state: "pending")
              step_ids = [step_pending.id]
              # Stub update_all on the relation to raise error
@@ -97,7 +97,7 @@ module Yantra
              mock_relation.expect(:update_all, nil) { raise ::ActiveRecord::StatementInvalid, "DB Update Error" }
              StepRecord.stub(:where, mock_relation) do
                error = assert_raises(Yantra::Errors::PersistenceError) do
-                  @adapter.cancel_steps_bulk(step_ids)
+                  @adapter.bulk_cancel_steps(step_ids)
                end
                assert_match(/Bulk job cancellation failed: DB Update Error/, error.message)
              end
@@ -347,6 +347,89 @@ module Yantra
             assert_nil WorkflowRecord.find_by(id: wf_expired2.id)
             refute_nil WorkflowRecord.find_by(id: wf_not_expired1.id)
             refute_nil WorkflowRecord.find_by(id: wf_not_expired2.id)
+          end
+
+          def test_bulk_upsert_steps_updates_existing_records_with_varying_data
+            # Arrange: Create existing steps
+            now = Time.current
+            step1_id = SecureRandom.uuid
+            step2_id = SecureRandom.uuid
+            step3_id = SecureRandom.uuid # Step to remain unchanged
+
+            # Create records, storing them for reference
+            step1 = StepRecord.create!(id: step1_id, workflow_record: @workflow, klass: 'Step1', state: 'pending', max_attempts: 3, created_at: now - 1.minute, updated_at: now - 1.minute)
+            step2 = StepRecord.create!(id: step2_id, workflow_record: @workflow, klass: 'Step2', state: 'pending', max_attempts: 3, created_at: now - 1.minute, updated_at: now - 1.minute)
+            step3_unchanged = StepRecord.create!(id: step3_id, workflow_record: @workflow, klass: 'Step3', state: 'pending', max_attempts: 3, created_at: now - 1.minute, updated_at: now - 1.minute)
+
+            # Prepare update data
+            time_for_update = Time.current # Use a consistent time for updates
+            delay_time = time_for_update + 300.seconds
+            updates_array = [
+              { # Update step 1: immediate enqueue
+                id: step1.id,
+                # --- ADDED required fields for upsert ---
+                workflow_id: step1.workflow_id,
+                klass: step1.klass,
+                max_attempts: step1.max_attempts,
+                retries: step1.retries,
+                created_at: step1.created_at, # Keep original created_at
+                # --- END ADDED ---
+                state: Yantra::Core::StateMachine::ENQUEUED.to_s,
+                enqueued_at: time_for_update,
+                delayed_until: nil, # Explicitly nil for immediate
+                updated_at: time_for_update
+              },
+              { # Update step 2: delayed enqueue
+                id: step2.id,
+                # --- ADDED required fields for upsert ---
+                workflow_id: step2.workflow_id,
+                klass: step2.klass,
+                max_attempts: step2.max_attempts,
+                retries: step2.retries,
+                created_at: step2.created_at, # Keep original created_at
+                # --- END ADDED ---
+                state: Yantra::Core::StateMachine::ENQUEUED.to_s,
+                enqueued_at: time_for_update, # Also set enqueued_at
+                delayed_until: delay_time,    # Set future time
+                updated_at: time_for_update
+              }
+              # Step 3 is NOT included in the update array
+            ]
+
+            # Act: Perform the bulk upsert
+            affected_count = @adapter.bulk_upsert_steps(updates_array)
+
+            # Assert: Return value (optional, behavior might vary)
+            # assert_equal 2, affected_count # upsert_all might return different counts
+
+            # Assert: Database state
+            step1_updated = StepRecord.find(step1_id)
+            step2_updated = StepRecord.find(step2_id)
+            step3_reloaded = StepRecord.find(step3_id) # Reload step 3
+
+            # Check Step 1 (immediate)
+            assert_equal 'enqueued', step1_updated.state
+            assert_in_delta time_for_update, step1_updated.enqueued_at, 1.second
+            assert_nil step1_updated.delayed_until
+            assert_in_delta time_for_update, step1_updated.updated_at, 1.second
+
+            # Check Step 2 (delayed)
+            assert_equal 'enqueued', step2_updated.state
+            assert_in_delta time_for_update, step2_updated.enqueued_at, 1.second
+            refute_nil step2_updated.delayed_until
+            assert_in_delta delay_time, step2_updated.delayed_until, 1.second
+            assert_in_delta time_for_update, step2_updated.updated_at, 1.second
+
+            # Check Step 3 (unchanged)
+            assert_equal 'pending', step3_reloaded.state
+            assert_nil step3_reloaded.enqueued_at
+            assert_nil step3_reloaded.delayed_until
+            assert_in_delta now - 1.minute, step3_reloaded.updated_at, 1.second # updated_at should not change
+          end
+
+          def test_bulk_upsert_steps_handles_empty_array
+            assert_equal 0, @adapter.bulk_upsert_steps([]), "Should return 0 for empty array"
+            assert_equal 0, @adapter.bulk_upsert_steps(nil), "Should return 0 for nil input"
           end
 
           # --- Private Helper Methods ---

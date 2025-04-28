@@ -152,7 +152,7 @@ module Yantra
       if step_ids.any?
         log.call(:info, "Attempting to cancel #{step_ids.size} steps in repository.")
         begin
-          cancelled_count = repo.cancel_steps_bulk(step_ids)
+          cancelled_count = repo.bulk_cancel_steps(step_ids)
           log.call(:info, "Repository confirmed cancellation of #{cancelled_count} steps.")
 
           # Publish step cancelled events

@@ -188,7 +188,7 @@ module Yantra
         @repository.expects(:get_dependent_ids).with(@dependent1_id).returns([])
         @repository.expects(:find_step).with(@dependent2_id).returns(MockStep.new(id: @dependent2_id, state: 'running'))
         # Expect bulk cancellation ONLY for dependent1
-        @repository.expects(:cancel_steps_bulk).with([@dependent1_id]).returns(1)
+        @repository.expects(:bulk_cancel_steps).with([@dependent1_id]).returns(1)
 
         # Act
         cancelled_ids = @processor.call(
@@ -221,9 +221,9 @@ module Yantra
 
         # --- CORRECTED: Expect the exact array or use a more robust matcher ---
         # Option A: Expect exact array (if order is predictable)
-        # @repository.expects(:cancel_steps_bulk).with(expected_cancelled_ids).returns(2)
+        # @repository.expects(:bulk_cancel_steps).with(expected_cancelled_ids).returns(2)
         # Option B: Use a block matcher for unordered comparison (Safer)
-        @repository.expects(:cancel_steps_bulk).with do |actual_ids|
+        @repository.expects(:bulk_cancel_steps).with do |actual_ids|
           actual_ids.is_a?(Array) && actual_ids.sort == expected_cancelled_ids.sort
         end.returns(2)
         # --- END CORRECTION ---

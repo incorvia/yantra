@@ -41,24 +41,27 @@ module Yantra
     # @param after [Array] dependencies (by name)
     # @param name [String, Symbol] optional name for the step
     # @return [Symbol] the reference name for the step
-    def run(step_klass, params: {}, after: [], name: nil)
+    def run(step_klass, params: {}, after: [], name: nil, delay: nil) # Removed queue:
       unless step_klass.is_a?(Class) && step_klass < Yantra::Step
         raise ArgumentError, "#{step_klass} must be a subclass of Yantra::Step"
       end
 
+      # --- Name generation logic ---
       base_ref_name = (name || step_klass.to_s).to_s
       step_ref_name = base_ref_name
       current_count = @step_name_counts[base_ref_name]
-
       step_ref_name = "#{base_ref_name}_#{current_count}" if current_count > 0
-
       while @step_lookup.key?(step_ref_name)
         current_count += 1
         step_ref_name = "#{base_ref_name}_#{current_count}"
-        break if current_count > 1_000_000
+        break if current_count > 1_000_000 # Safety break
       end
-
       @step_name_counts[base_ref_name] += 1
+      # --- End Name generation ---
+
+      # --- Process delay option ---
+      delay_in_seconds = calculate_delay_seconds(delay)
+      # --- End Process delay ---
 
       step_id = SecureRandom.uuid
       step = step_klass.new(
@@ -66,25 +69,43 @@ module Yantra
         workflow_id: @id,
         klass: step_klass,
         arguments: params,
-        dsl_name: step_ref_name
+        dsl_name: step_ref_name,
+        # --- Pass delay to Step ---
+        delay_seconds: delay_in_seconds
+        # Removed queue_name: queue&.to_s
+        # --- End pass ---
       )
 
       @steps << step
       @step_lookup[step_ref_name] = step
 
+      # --- Dependency logic ---
       dependency_ids = Array(after).flatten.map do |ref|
         dep = find_step_by_ref(ref.to_s)
         raise Yantra::Errors::DependencyNotFound, "Dependency '#{ref}' not found for step '#{step_ref_name}'." unless dep
         dep.id
       end
-
       @dependencies[step.id] = dependency_ids unless dependency_ids.empty?
-      step_ref_name.to_sym
+      # --- End Dependency logic ---
+
+      step_ref_name.to_sym # Return the reference
     end
 
     # Looks up a step by its reference name.
     def find_step_by_ref(ref_name)
       @step_lookup[ref_name]
+    end
+
+    def calculate_delay_seconds(delay_input)
+      return nil if delay_input.nil?
+
+      if delay_input.is_a?(Numeric) && delay_input >= 0
+        delay_input.to_i
+      elsif delay_input.respond_to?(:to_i) && delay_input.to_i >= 0 # Handle ActiveSupport::Duration
+        delay_input.to_i
+      else
+        raise ArgumentError, "Invalid :delay value: '#{delay_input}'. Must be a non-negative Numeric or ActiveSupport::Duration."
+      end
     end
 
     # Serializes workflow metadata.
