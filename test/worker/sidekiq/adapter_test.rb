@@ -40,8 +40,6 @@ if SIDEKIQ_LOADED
             @workflow_id = SecureRandom.uuid
             @step_klass_name = "MyTestStep"
             @queue_name = "yantra_test_queue"
-
-            Yantra.stubs(:logger).returns(nil)
           end
 
           def teardown
@@ -92,6 +90,86 @@ if SIDEKIQ_LOADED
             assert_equal 0, ::Sidekiq::Queues[@queue_name].size
             assert_equal 0, Yantra::Worker::Sidekiq::StepJob.jobs.size
           end
+
+           def test_enqueue_in_schedules_job_with_positive_delay
+          delay = 300 # 5 minutes
+          mock_configured_job = mock('ConfiguredJob')
+          # Sidekiq adapter uses string keys for options hash passed to set
+          expected_options = { 'queue' => @queue_name.to_s }
+          expected_args = [@step_id, @workflow_id, @step_klass_name]
+
+          # Expect StepJob.set().perform_in() chain
+          StepJob.expects(:set).with(expected_options).returns(mock_configured_job)
+          mock_configured_job.expects(:perform_in).with(delay, *expected_args).returns("jid123") # perform_in returns JID
+
+          # Act
+          result = @adapter.enqueue_in(delay, @step_id, @workflow_id, @step_klass_name, @queue_name)
+
+          # Assert
+          assert result, "enqueue_in should return true on success"
+        end
+
+        def test_enqueue_in_schedules_job_without_queue
+          delay = 60
+          mock_configured_job = mock('ConfiguredJob')
+          expected_options = {} # No queue option if queue_name is nil
+          expected_args = [@step_id, @workflow_id, @step_klass_name]
+
+          # Expect StepJob.set().perform_in() chain
+          StepJob.expects(:set).with(expected_options).returns(mock_configured_job)
+          mock_configured_job.expects(:perform_in).with(delay, *expected_args).returns("jid456")
+
+          # Act
+          result = @adapter.enqueue_in(delay, @step_id, @workflow_id, @step_klass_name, nil) # Pass nil queue_name
+
+          # Assert
+          assert result, "enqueue_in should return true on success without queue"
+        end
+
+        def test_enqueue_in_calls_enqueue_for_zero_delay
+          delay = 0
+          # Expect the immediate enqueue method to be called
+          # Stubbing the instance method on the object under test
+          @adapter.expects(:enqueue).with(@step_id, @workflow_id, @step_klass_name, @queue_name).returns(true)
+
+          # Act
+          result = @adapter.enqueue_in(delay, @step_id, @workflow_id, @step_klass_name, @queue_name)
+
+          # Assert
+          assert result, "enqueue_in should return true when delegating to enqueue"
+        end
+
+         def test_enqueue_in_calls_enqueue_for_nil_delay
+          delay = nil
+          # Expect the immediate enqueue method to be called
+          @adapter.expects(:enqueue).with(@step_id, @workflow_id, @step_klass_name, @queue_name).returns(true)
+
+          # Act
+          result = @adapter.enqueue_in(delay, @step_id, @workflow_id, @step_klass_name, @queue_name)
+
+          # Assert
+          assert result, "enqueue_in should return true when delegating to enqueue"
+        end
+
+        def test_enqueue_in_handles_error_and_returns_false
+          delay = 300
+          mock_configured_job = mock('ConfiguredJob')
+          expected_options = { 'queue' => @queue_name.to_s }
+          expected_args = [@step_id, @workflow_id, @step_klass_name]
+
+          StepJob.expects(:set).with(expected_options).returns(mock_configured_job)
+          # Simulate perform_in raising an error
+          mock_configured_job.expects(:perform_in).with(delay, *expected_args).raises(StandardError, "Redis down")
+
+          # Expect error log
+          Yantra.logger.expects(:error)
+
+          # Act
+          result = @adapter.enqueue_in(delay, @step_id, @workflow_id, @step_klass_name, @queue_name)
+
+          # Assert
+          refute result, "enqueue_in should return false on error"
+        end
         end # class AdapterTest
       end # module Sidekiq
     end # module Worker
