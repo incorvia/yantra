@@ -139,7 +139,7 @@ module Yantra
               arguments: step.arguments,
               state: Yantra::Core::StateMachine::PENDING.to_s,
               queue: step.queue_name,
-              delay_seconds: step_instance.delay_seconds&.to_i,
+              delay_seconds: step.delay_seconds&.to_i,
               retries: 0,
               created_at: current_time,
               updated_at: current_time

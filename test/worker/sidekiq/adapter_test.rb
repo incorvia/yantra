@@ -80,7 +80,8 @@ if SIDEKIQ_LOADED
           def test_enqueue_returns_false_on_standard_error
             assert defined?(Yantra::Worker::Sidekiq::StepJob), "StepJob class not defined"
             mock_chain = mock('sidekiq_chain')
-            Yantra::Worker::Sidekiq::StepJob.stubs(:set).with(queue: @queue_name).returns(mock_chain)
+            expected_options = { 'queue' => @queue_name.to_s }
+            Yantra::Worker::Sidekiq::StepJob.stubs(:set).with(expected_options).returns(mock_chain)
             mock_chain.stubs(:perform_async).raises(StandardError, "Redis down")
 
             # Act

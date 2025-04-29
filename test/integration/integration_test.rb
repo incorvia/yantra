@@ -665,10 +665,13 @@ module Yantra
         @test_notifier.clear! # Clear events from initial failure
 
         # Act: Retry
-        reenqueued_count = Client.retry_failed_steps(workflow_id)
+        reenqueued_result = Client.retry_failed_steps(workflow_id) # Capture the array
 
         # Assert: State reset, job re-enqueued, events published
-        assert_equal 1, reenqueued_count # Only Step F was failed and retryable
+        assert_instance_of Array, reenqueued_result, "retry_failed_steps should return an array"
+        assert_equal 1, reenqueued_result.size, "Should re-enqueue exactly 1 step"
+        assert_equal step_f_record.id, reenqueued_result.first, "Should re-enqueue the correct failed step ID"
+
         assert_equal 'running', repository.find_workflow(workflow_id).state
         refute repository.find_workflow(workflow_id).has_failures
         assert_nil repository.find_workflow(workflow_id).finished_at
