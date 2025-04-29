@@ -156,7 +156,13 @@ class MultiBranchWorkflow < Yantra::Workflow
   end
 end
 
-
+class DelayedStepWorkflow < Yantra::Workflow
+  def perform
+    step_a_ref = run IntegrationStepA, name: :start_step, params: { msg: 'Start Delayed' }
+    # Step E runs 5 minutes after Step A finishes
+    run IntegrationStepE, name: :delayed_step, after: step_a_ref, delay: 5.minutes
+  end
+end
 
 module Yantra
   # Keep original conditional test class definition
@@ -164,6 +170,7 @@ module Yantra
 
     class ActiveJobWorkflowExecutionTest < YantraActiveRecordTestCase
       include ActiveJob::TestHelper
+      include ActiveSupport::Testing::TimeHelpers
 
       def setup
         super
@@ -499,6 +506,7 @@ module Yantra
         assert_equal 0, enqueued_jobs.size
         assert_equal 'succeeded', repository.find_workflow(workflow_id).state
       end
+
 
       def test_pipelining_workflow
         workflow_id = Client.create_workflow(PipeliningWorkflow)
@@ -892,7 +900,99 @@ module Yantra
         assert_equal 2, @test_notifier.find_events('yantra.step.succeeded').count
         assert_equal 1, @test_notifier.find_events('yantra.workflow.succeeded').count
 
-      end # class ActiveJobWorkflowExecutionTest
+      end
+
+      def test_delayed_step_workflow
+        # Arrange: Create workflow with a delayed step
+        workflow_id = Client.create_workflow(DelayedStepWorkflow)
+        step_a = repository.list_steps(workflow_id: workflow_id).find { |s| s.klass == 'IntegrationStepA' }
+        step_e_delayed = repository.list_steps(workflow_id: workflow_id).find { |s| s.klass == 'IntegrationStepE' }
+
+        refute_nil step_a, "Step A record should exist"
+        refute_nil step_e_delayed, "Step E record should exist"
+        assert_equal 300, step_e_delayed.delay_seconds # 5.minutes = 300 seconds
+
+        # Act 1: Start workflow
+        @test_notifier.clear!
+        Client.start_workflow(workflow_id)
+
+        # Assert 1: Only Step A is enqueued immediately
+        assert_equal 1, enqueued_jobs.size, "Only Step A should be enqueued initially"
+        assert_enqueued_with(job: Yantra::Worker::ActiveJob::StepJob, args: [step_a.id, workflow_id, 'IntegrationStepA'])
+        assert_equal 'enqueued', step_a.reload.state
+        assert_equal 'pending', step_e_delayed.reload.state # Step E still pending
+
+        # Assert Events after Start
+        assert_equal 2, @test_notifier.published_events.count, 'Should publish workflow.started, step.enqueued(A)'
+        assert_equal 'yantra.step.bulk_enqueued', @test_notifier.published_events[1][:name]
+        assert_equal [step_a.id], @test_notifier.published_events[1][:payload][:enqueued_ids]
+
+        # Act 2: Perform Step A
+        @test_notifier.clear!
+        perform_enqueued_jobs # Runs A
+
+        # Assert 2: Step A succeeded, Step E is now 'enqueued' but delayed
+        step_a.reload
+        step_e_delayed.reload
+        assert_equal 'succeeded', step_a.state
+        assert_equal 1, enqueued_jobs.size, "Queue should be empty immediately after A runs (E is delayed)"
+
+        # Assert 2.1: Check Step E's state and delayed_until timestamp
+        assert_equal 'enqueued', step_e_delayed.state # Marked enqueued by StepEnqueuer
+        refute_nil step_e_delayed.enqueued_at
+        refute_nil step_e_delayed.delayed_until
+        # Check that delayed_until is approx 5 minutes after enqueued_at
+        expected_run_time = step_e_delayed.enqueued_at + 5.minutes
+        assert_in_delta expected_run_time, step_e_delayed.delayed_until, 1.second
+
+        # Assert 2.2: Check Events after A runs
+        # Should be A.started, A.succeeded, E.bulk_enqueued (even though delayed)
+        assert_equal 3, @test_notifier.published_events.count, 'Should publish A.started, A.succeeded, E.enqueued'
+        assert_equal 'yantra.step.started', @test_notifier.published_events[0][:name]
+        assert_equal 'yantra.step.succeeded', @test_notifier.published_events[1][:name]
+        assert_equal 'yantra.step.bulk_enqueued', @test_notifier.published_events[2][:name]
+        assert_equal [step_e_delayed.id], @test_notifier.published_events[2][:payload][:enqueued_ids]
+
+        # Act 3: Advance time past the delay and perform jobs again
+        @test_notifier.clear!
+        # Travel slightly past the expected run time
+        # Find the enqueued job for Step E in the adapter
+        enqueued_step_e_job = enqueued_jobs.find do |j|
+          j[:args][0] == step_e_delayed.id
+        end
+
+        refute_nil enqueued_step_e_job, "Step E job should be enqueued"
+
+        # Confirm that Step E was scheduled to run in the future (i.e., it is a delayed job)
+        assert enqueued_step_e_job[:at], "Step E job should have a scheduled :at timestamp"
+
+        scheduled_at = Time.at(enqueued_step_e_job[:at])
+
+        # Confirm that scheduled time is roughly 5 minutes after it was enqueued
+        # (matching delay_seconds = 300)
+        expected_scheduled_time = step_e_delayed.enqueued_at + 5.minutes
+        assert_in_delta expected_scheduled_time.to_f, scheduled_at.to_f, 5.0, "Step E job scheduled time should be about 5 minutes later"
+
+
+        scheduled_at = Time.at(enqueued_step_e_job[:at])
+
+        perform_enqueued_jobs # Should now pick up and run Step E
+
+        # Assert 3: Step E succeeded, Workflow succeeded
+        step_e_delayed.reload
+        assert_equal 'succeeded', step_e_delayed.state
+        assert_equal 0, enqueued_jobs.size, "Queue should be empty after E runs"
+        assert_equal 'succeeded', repository.find_workflow(workflow_id).state
+
+        # Assert 3.1: Check Events after E runs
+        # Should be E.started, E.succeeded, Workflow.succeeded
+        assert_equal 3, @test_notifier.published_events.count
+        assert_equal 'yantra.step.started', @test_notifier.published_events[0][:name]
+        assert_equal step_e_delayed.id, @test_notifier.published_events[0][:payload][:step_id]
+        assert_equal 'yantra.step.succeeded', @test_notifier.published_events[1][:name]
+        assert_equal step_e_delayed.id, @test_notifier.published_events[1][:payload][:step_id]
+        assert_equal 'yantra.workflow.succeeded', @test_notifier.published_events[2][:name]
+      end
 
     end
 
