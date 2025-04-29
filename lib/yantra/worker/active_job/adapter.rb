@@ -72,6 +72,16 @@ module Yantra
           logger.error { "[AJ Adapter] Failed to enqueue delayed job for step #{step_id}: #{e.class} - #{e.message}" }
           false # Indicate failure
         end
+
+        private
+
+        # --- Added Logging Helpers ---
+        # Logging helpers expecting STRING
+        def log_info(msg);  Yantra.logger&.info("[SidekiqAdapter] #{msg}") end
+        def log_debug(msg); Yantra.logger&.debug("[SidekiqAdapter] #{msg}") end
+        def log_warn(msg);  Yantra.logger&.warn("[SidekiqAdapter] #{msg}") end
+        def log_error(msg); Yantra.logger&.error("[SidekiqAdapter] #{msg}") end
+        # --- End Added Logging Helpers ---
       end
     end
   end
