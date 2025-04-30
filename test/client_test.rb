@@ -189,7 +189,7 @@ module Yantra
               mock_repo.expect(:list_steps, mock_steps_to_cancel, workflow_id: workflow_id)
 
               # 6. Bulk cancel steps
-              mock_repo.expect(:cancel_steps_bulk, step_ids_to_cancel.size, [step_ids_to_cancel])
+              mock_repo.expect(:bulk_cancel_steps, step_ids_to_cancel.size, [step_ids_to_cancel])
               # --- End Expectations ---
 
               # Act

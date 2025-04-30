@@ -6,7 +6,7 @@ require 'active_support/core_ext/string/inflections'
 module Yantra
   # Base class for defining steps in a workflow.
   class Step
-    attr_reader :id, :workflow_id, :arguments, :queue_name, :parent_ids, :klass, :dsl_name
+    attr_reader :id, :workflow_id, :arguments, :queue_name, :parent_ids, :klass, :dsl_name, :delay_seconds
     attr_reader :repository
 
     def initialize(
@@ -16,18 +16,20 @@ module Yantra
       step_id: nil,
       queue_name: nil,
       parent_ids: [],
+      delay_seconds: nil,
       dsl_name: nil,
       repository: nil,
       **_options
     )
-      @id           = step_id || SecureRandom.uuid
-      @workflow_id  = workflow_id
-      @arguments    = arguments || {}
-      @klass        = klass
-      @queue_name   = queue_name || default_queue_name
-      @parent_ids   = parent_ids || []
-      @dsl_name     = dsl_name
-      @repository   = repository
+      @id            = step_id || SecureRandom.uuid
+      @workflow_id   = workflow_id
+      @arguments     = arguments || {}
+      @klass         = klass
+      @queue_name    = queue_name || default_queue_name
+      @parent_ids    = parent_ids || []
+      @dsl_name      = dsl_name
+      @delay_seconds = delay_seconds&.to_i
+      @repository    = repository
       @_parent_outputs_cache = nil
     end
 

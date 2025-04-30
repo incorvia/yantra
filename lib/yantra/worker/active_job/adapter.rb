@@ -51,6 +51,37 @@ module Yantra
             raise Yantra::Errors::WorkerError, "ActiveJob enqueuing failed: #{e.message}"
           end
         end
+
+        def enqueue_in(delay_seconds, step_id, workflow_id, step_klass_name, queue_name)
+          # Ensure delay is positive, otherwise enqueue immediately
+          if delay_seconds.nil? || delay_seconds <= 0
+            log_info("Delay is zero or nil for step #{step_id}, enqueuing immediately.")
+            return enqueue(step_id, workflow_id, step_klass_name, queue_name)
+          end
+
+          job_args = [step_id, workflow_id, step_klass_name]
+
+          options = { wait: delay_seconds.seconds }
+          options[:queue] = queue_name.to_sym if queue_name.present?
+          StepJob.set(options).perform_later(*job_args)
+
+          true # Indicate success
+        rescue StandardError => e
+          # Log error appropriately
+          logger = defined?(Yantra.logger) && Yantra.logger ? Yantra.logger : Logger.new(STDOUT)
+          logger.error { "[AJ Adapter] Failed to enqueue delayed job for step #{step_id}: #{e.class} - #{e.message}" }
+          false # Indicate failure
+        end
+
+        private
+
+        # --- Added Logging Helpers ---
+        # Logging helpers expecting STRING
+        def log_info(msg);  Yantra.logger&.info("[SidekiqAdapter] #{msg}") end
+        def log_debug(msg); Yantra.logger&.debug("[SidekiqAdapter] #{msg}") end
+        def log_warn(msg);  Yantra.logger&.warn("[SidekiqAdapter] #{msg}") end
+        def log_error(msg); Yantra.logger&.error("[SidekiqAdapter] #{msg}") end
+        # --- End Added Logging Helpers ---
       end
     end
   end

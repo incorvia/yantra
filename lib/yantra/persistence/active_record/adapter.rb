@@ -107,6 +107,7 @@ module Yantra
         # @see Yantra::Persistence::RepositoryInterface#create_step
         def create_step(step_instance)
           klass_name = step_instance.klass.is_a?(Class) ? step_instance.klass.to_s : step_instance.klass.to_s
+
           StepRecord.create!(
             id: step_instance.id,
             workflow_id: step_instance.workflow_id,
@@ -114,6 +115,7 @@ module Yantra
             arguments: step_instance.arguments,
             state: Yantra::Core::StateMachine::PENDING.to_s,
             queue: step_instance.queue_name,
+            delay_seconds: step_instance.delay_seconds&.to_i,
             retries: 0
           )
           true
@@ -137,6 +139,7 @@ module Yantra
               arguments: step.arguments,
               state: Yantra::Core::StateMachine::PENDING.to_s,
               queue: step.queue_name,
+              delay_seconds: step.delay_seconds&.to_i,
               retries: 0,
               created_at: current_time,
               updated_at: current_time
@@ -398,8 +401,35 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Bulk step update failed: #{e.message}"
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#cancel_steps_bulk
-        def cancel_steps_bulk(step_ids)
+        def bulk_upsert_steps(updates_array)
+          return 0 if updates_array.nil? || updates_array.empty?
+
+          # Ensure updated_at is set if not provided, as upsert_all bypasses callbacks
+          now = Time.current
+          updates_array.each do |attrs|
+            attrs[:updated_at] ||= now
+            # Ensure state is string if passed as symbol
+            attrs[:state] = attrs[:state].to_s if attrs[:state].is_a?(Symbol)
+            # Ensure other necessary fields are present if needed by DB constraints
+          end
+
+          # Perform the bulk insert/update operation
+          result = StepRecord.upsert_all(
+            updates_array,
+            unique_by: :id # Target the primary key for update-on-conflict
+          )
+
+          # Return the number of rows affected/processed.
+          # Note: `upsert_all` return value might vary slightly across Rails versions.
+          # Returning the count of processed hashes is a reasonable proxy.
+          result.count # Or potentially updates_array.size depending on desired return semantic
+        rescue ::ActiveRecord::StatementInvalid, ::ActiveRecord::ActiveRecordError => e
+          log_error { "Bulk upsert steps failed: #{e.message}" }
+          raise Yantra::Errors::PersistenceError, "Bulk upsert steps failed: #{e.message}"
+        end
+
+        # @see Yantra::Persistence::RepositoryInterface#bulk_cancel_steps
+        def bulk_cancel_steps(step_ids)
           return 0 if step_ids.nil? || step_ids.empty?
 
           # Use the constant from StateMachine

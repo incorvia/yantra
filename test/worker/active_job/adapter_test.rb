@@ -146,6 +146,67 @@ module Yantra
           end
           # --- End Test from Previous Error ---
 
+          def test_enqueue_in_schedules_job_with_positive_delay
+          delay = 300 # 5 minutes
+          mock_configured_job = mock('ConfiguredJob')
+          expected_options = { wait: delay.seconds, queue: @queue_name.to_sym }
+          expected_args = [@step_id, @workflow_id, @step_klass_name]
+
+          # Expect StepJob.set().perform_later() chain
+          StepJob.expects(:set).with(expected_options).returns(mock_configured_job)
+          mock_configured_job.expects(:perform_later).with(*expected_args).returns(true)
+
+          # Act
+          result = @adapter.enqueue_in(delay, @step_id, @workflow_id, @step_klass_name, @queue_name)
+
+          # Assert
+          assert result, "enqueue_in should return true on success"
+        end
+
+        def test_enqueue_in_calls_enqueue_for_zero_delay
+          delay = 0
+          # Expect the immediate enqueue method to be called
+          @adapter.expects(:enqueue).with(@step_id, @workflow_id, @step_klass_name, @queue_name).returns(true)
+
+          # Act
+          result = @adapter.enqueue_in(delay, @step_id, @workflow_id, @step_klass_name, @queue_name)
+
+          # Assert
+          assert result, "enqueue_in should return true when delegating to enqueue"
+        end
+
+        def test_enqueue_in_calls_enqueue_for_nil_delay
+          delay = nil
+          # Expect the immediate enqueue method to be called
+          @adapter.expects(:enqueue).with(@step_id, @workflow_id, @step_klass_name, @queue_name).returns(true)
+
+          # Act
+          result = @adapter.enqueue_in(delay, @step_id, @workflow_id, @step_klass_name, @queue_name)
+
+          # Assert
+          assert result, "enqueue_in should return true when delegating to enqueue"
+        end
+
+        def test_enqueue_in_handles_error_and_returns_false
+          delay = 300
+          mock_configured_job = mock('ConfiguredJob')
+          expected_options = { wait: delay.seconds, queue: @queue_name.to_sym }
+          expected_args = [@step_id, @workflow_id, @step_klass_name]
+
+          StepJob.expects(:set).with(expected_options).returns(mock_configured_job)
+          # Simulate perform_later raising an error
+          mock_configured_job.expects(:perform_later).with(*expected_args).raises(StandardError, "Connection failed")
+
+          # Expect error log
+          Yantra.logger.expects(:error)
+
+          # Act
+          result = @adapter.enqueue_in(delay, @step_id, @workflow_id, @step_klass_name, @queue_name)
+
+          # Assert
+          refute result, "enqueue_in should return false on error"
+        end
+
 
           private
 

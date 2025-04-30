@@ -29,6 +29,10 @@ module Yantra
       def enqueue(step_id, workflow_id, step_klass_name, queue_name)
         raise NotImplementedError, "#{self.class.name}#enqueue is not implemented"
       end
+
+      def enqueue_in(delay_seconds, step_id, workflow_id, step_klass_name, queue_name)
+        raise NotImplementedError, "#{self.class.name}#enqueue_in is not implemented"
+      end
     end
   end
 end

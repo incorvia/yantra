@@ -7,6 +7,7 @@ require "securerandom" # Needed for generating IDs in tests
 require "logger"       # Needed for logger below
 require 'mocha/minitest'
 require 'minitest/focus'
+require 'active_support/testing/time_helpers'
 require File.expand_path('dummy/config/environment', __dir__)
 
 
