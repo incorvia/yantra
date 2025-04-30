@@ -19,6 +19,7 @@ Yantra focuses on:
 * Backend-agnostic persistence via a Repository pattern (ActiveRecord adapter included).
 * Background job processing via adapters (Active Job adapter included).
 * Configurable automatic retries for failed steps.
+* **Delayed step execution:** Schedule steps to run after a specified delay.
 * Workflow and step cancellation.
 * Simple data pipelining between dependent steps.
 * Event-driven notifications for observability (adapters for Null, Logger, ActiveSupport::Notifications included).
@@ -29,27 +30,27 @@ Yantra focuses on:
 Yantra employs a layered architecture to separate concerns (core logic, persistence, background job queuing) and allow for flexibility through adapters.
 
 ```text
-+-------------------+      +---------------------+      +--------------------+
-| User Application  | ---> | Yantra::Client      | ---> | Yantra Core Logic  |
-| (Defines Wf/Jobs) |      | (Public API)        |      | (Orchestration, State) |
-+-------------------+      +---------------------+      +--------------------+
-                                                       |
-                                                       | Uses Interfaces
-                                                       V
-+----------------------------+      +----------------------------+
-| Yantra::Persistence::Repo  |      | Yantra::Worker::Adapter    |
-| (Interface)                |      | (Interface)                |
-+----------------------------+      +----------------------------+
-  | Implemented By                    | Implemented By
-  V                                   V
-+----------------------------------+  +----------------------------+
++-------------------+     +---------------------+     +--------------------+
+| User Application  | --->| Yantra::Client      | --->| Yantra Core Logic  |
+| (Defines Wf/Jobs) |     | (Public API)        |     | (Orchestration, State) |
++-------------------+     +---------------------+     +--------------------+
+                                                      |
+                                                      | Uses Interfaces
+                                                      V
++----------------------------+     +----------------------------+
+| Yantra::Persistence::Repo  |     | Yantra::Worker::Adapter    |
+| (Interface)                |     | (Interface)                |
++----------------------------+     +----------------------------+
+  | Implemented By                 | Implemented By
+  V                              V
++----------------------------------+ +----------------------------+
 | ActiveRecord Adapter | Redis Adpt*| | ActiveJob Adapter | Sidekiq Adpt*| ...
-+----------------------------------+  +----------------------------+
-  | Uses                              | Uses
-  V                                   V
-+----------+  +-------+            +-----------+  +---------+
-| Postgres |  | Redis |            | ActiveJob |  | Sidekiq | ...
-+----------+  +-------+            +-----------+  +---------+
++----------------------------------+ +----------------------------+
+  | Uses                           | Uses
+  V                              V
++----------+ +-------+           +-----------+ +---------+
+| Postgres | | Redis |           | ActiveJob | | Sidekiq | ...
++----------+ +-------+           +-----------+ +---------+
 ```
 
 ## Installation
@@ -71,7 +72,7 @@ $ bundle install
 Yantra core has no runtime dependencies. However, you will need to add gems for the specific adapters you choose to use:
 
 * For `persistence_adapter: :active_record`: Add `gem 'activerecord'` (and likely `gem 'pg'` or `gem 'sqlite3'`).
-* For `worker_adapter: :active_job`: Add `gem 'activejob'`.
+* For `worker_adapter: :active_job`: Add `gem 'activejob'` (and likely `gem 'activesupport'`).
 * For `notification_adapter: :active_support_notifications`: Add `gem 'activesupport'`.
 * *(Other adapters like Redis, Sidekiq, etc., will require their respective gems when implemented).*
 
@@ -132,12 +133,23 @@ end
 
 If you are using the `:active_record` persistence adapter, you need to generate and run the database migrations:
 
-1.  **Generate Migrations:**
+1.  **Generate Initial Migrations:**
     ```bash
     $ rails g yantra:install
     ```
-    This will copy the necessary migration files into your application's `db/migrate/` directory.
-2.  **Run Migrations:**
+    This will copy the necessary migration files (`create_yantra_workflows`, `create_yantra_steps`, `create_yantra_step_dependencies`) into your application's `db/migrate/` directory.
+2.  **Generate Delay Migration (if using :delay feature):**
+    You will also need to add the migration to support the delay feature. Copy the migration file (e.g., `add_delay_to_yantra_steps.rb`) from the Yantra gem source or documentation into your `db/migrate/` folder. Ensure its timestamp is later than the initial install migrations.
+    ```ruby
+    # Example: db/migrate/YYYYMMDDHHMMSS_add_delay_to_yantra_steps.rb
+    class AddDelayToYantraSteps < ActiveRecord::Migration[7.0] # Use your Rails version
+      def change
+        add_column :yantra_steps, :delay_seconds, :integer, null: true
+        add_column :yantra_steps, :delayed_until, :datetime, precision: nil, null: true
+      end
+    end
+    ```
+3.  **Run Migrations:**
     ```bash
     $ rails db:migrate
     ```
@@ -150,19 +162,22 @@ Workflows orchestrate steps. Define a workflow by inheriting from `Yantra::Workf
 
 ```ruby
 # app/workflows/order_processing_workflow.rb
+require 'active_support/core_ext/numeric/time' # For 5.minutes etc.
+
 class OrderProcessingWorkflow < Yantra::Workflow
   def perform(order_id:, user_id:)
     # Define steps using the `run` DSL
-    # run StepClass, name: :symbolic_name (optional), params: {..}, after: [dependency_ref, ...]
+    # run StepClass, name: :symbolic_name (optional), params: {..}, after: [dependency_ref, ...], delay: duration
 
     charge_step = run ChargeCreditCardStep, name: :charge, params: { order_id: order_id, amount: 100.00 }
 
+    # This step runs immediately after charge_step succeeds
     update_step = run UpdateInventoryStep, name: :inventory, params: { order_id: order_id }, after: charge_step
 
-    # This step runs after charge_step succeeds
-    email_step = run SendConfirmationEmailStep, name: :email, params: { order_id: order_id, user_id: user_id }, after: charge_step
+    # This step runs 5 minutes after charge_step succeeds
+    email_step = run SendConfirmationEmailStep, name: :email, params: { order_id: order_id, user_id: user_id }, after: charge_step, delay: 5.minutes
 
-    # This step runs after both inventory and email steps succeed
+    # This step runs after both inventory and email steps succeed (email might be delayed)
     run ArchiveOrderStep, name: :archive, params: { order_id: order_id }, after: [update_step, email_step]
   end
 end
@@ -172,6 +187,7 @@ end
 * `name:`: An optional symbolic name for the step within the workflow definition (used for dependencies). If omitted, a default name is generated.
 * `params:`: A hash of arguments passed to the step's `perform` method. Must be JSON-serializable.
 * `after:`: Specifies dependencies. Can be a single step reference variable (like `charge_step`) or an array of references (`[update_step, email_step]`). A step only runs after all its dependencies have successfully completed.
+* `delay:`: **(New)** An optional delay before the step is enqueued *after* its dependencies are met. Accepts seconds (integer/float) or an `ActiveSupport::Duration` (e.g., `10.seconds`, `1.hour`). The underlying job backend handles the scheduled execution.
 
 ### Defining a Step
 
@@ -231,7 +247,7 @@ class SendConfirmationEmailStep < Yantra::Step
     amount = charge_step_output['charged_amount'] if charge_step_output
 
     unless transaction_id && amount
-       raise "Could not find required charge details in parent output: #{parent_outputs.inspect}"
+      raise "Could not find required charge details in parent output: #{parent_outputs.inspect}"
     end
 
     Yantra.logger.info {"Sending confirmation for order #{order_id}, transaction #{transaction_id}"}
@@ -247,6 +263,8 @@ end
 
 ### Monitoring and Management
 
+Use the `Yantra::Client` API or query the persistence layer directly (if using ActiveRecord) to monitor workflows.
+
 ```ruby
 # Find workflow status
 workflow = Yantra::Client.find_workflow(workflow_id)
@@ -259,12 +277,18 @@ puts "Step state: #{step&.state}"
 # Access output/error (may be string or hash depending on persistence/serialization)
 puts "Step output: #{step&.output.inspect}"
 puts "Step error: #{step&.error.inspect}" # Use .inspect for better hash/string visibility
+# Access delay info
+puts "Step Delay Specified (seconds): #{step&.delay_seconds}" # Original delay requested
+puts "Step Delayed Until (Timestamp): #{step&.delayed_until}" # Actual time it was scheduled for
 
 # Get all steps for a workflow
-steps = Yantra::Client.list_steps(workflow_id:)
+steps = Yantra::Client.list_steps(workflow_id: workflow_id)
 
 # Get steps with a specific status
-failed_steps = Yantra::Client.list_steps(workflow_id:, status: :failed)
+failed_steps = Yantra::Client.list_steps(workflow_id: workflow_id, status: :failed)
+enqueued_steps = Yantra::Client.list_steps(workflow_id: workflow_id, status: :enqueued)
+# Note: 'enqueued' includes steps waiting for delay AND steps waiting for worker.
+# Use the 'delayed_until' attribute to differentiate if needed.
 
 # Cancel a running or pending workflow
 Yantra::Client.cancel_workflow(workflow_id)
@@ -284,13 +308,13 @@ Yantra publishes events at key lifecycle points using the configured `notificati
 * `yantra.workflow.succeeded`
 * `yantra.workflow.failed`
 * `yantra.workflow.cancelled`
-* `yantra.step.enqueued`
+* `yantra.step.bulk_enqueued` (Published when steps are handed off to the job backend, includes immediately enqueued and delayed steps)
 * `yantra.step.started`
 * `yantra.step.succeeded`
 * `yantra.step.failed` (Published on permanent failure after retries)
 * `yantra.step.cancelled`
 
-**Payloads:** Event payloads are hashes containing relevant IDs, class names, state, timestamps, and potentially output or error information.
+**Payloads:** Event payloads are hashes containing relevant IDs, class names, state, timestamps, and potentially output or error information. The `yantra.step.bulk_enqueued` payload includes an `enqueued_ids` array containing IDs for both immediate and delayed steps processed in that batch.
 
 **Subscribing (Example using ActiveSupport::Notifications):**
 
@@ -344,7 +368,6 @@ For this cooperative system to work correctly, the underlying job runner must ex
 * **Customizing Attempts (Advanced):** If you have a specific need to change the number of backend retry attempts for Yantra jobs (e.g., increase it beyond the default 25), you may need to investigate advanced techniques like subclassing Yantra's adapter job or checking if Yantra offers configuration overrides via `config.worker_adapter_options`.
 
 **In summary:** Yantra is designed to work with standard backend retry mechanisms enabled, and it includes internal defaults to facilitate this. Ensure you don't disable backend retries, and Yantra's retry system should work as expected.
-
 
 ## Development
 
