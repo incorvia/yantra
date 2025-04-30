@@ -162,7 +162,8 @@ Workflows orchestrate steps. Define a workflow by inheriting from `Yantra::Workf
 
 ```ruby
 # app/workflows/order_processing_workflow.rb
-require 'active_support/core_ext/numeric/time' # For 5.minutes etc.
+# You may need this if using ActiveSupport durations like 5.minutes
+# require 'active_support/core_ext/numeric/time'
 
 class OrderProcessingWorkflow < Yantra::Workflow
   def perform(order_id:, user_id:)
@@ -175,6 +176,7 @@ class OrderProcessingWorkflow < Yantra::Workflow
     update_step = run UpdateInventoryStep, name: :inventory, params: { order_id: order_id }, after: charge_step
 
     # This step runs 5 minutes after charge_step succeeds
+    # Using ActiveSupport::Duration requires activesupport gem to be loaded.
     email_step = run SendConfirmationEmailStep, name: :email, params: { order_id: order_id, user_id: user_id }, after: charge_step, delay: 5.minutes
 
     # This step runs after both inventory and email steps succeed (email might be delayed)
@@ -187,7 +189,7 @@ end
 * `name:`: An optional symbolic name for the step within the workflow definition (used for dependencies). If omitted, a default name is generated.
 * `params:`: A hash of arguments passed to the step's `perform` method. Must be JSON-serializable.
 * `after:`: Specifies dependencies. Can be a single step reference variable (like `charge_step`) or an array of references (`[update_step, email_step]`). A step only runs after all its dependencies have successfully completed.
-* `delay:`: **(New)** An optional delay before the step is enqueued *after* its dependencies are met. Accepts seconds (integer/float) or an `ActiveSupport::Duration` (e.g., `10.seconds`, `1.hour`). The underlying job backend handles the scheduled execution.
+* `delay:`: **(New)** An optional delay before the step is enqueued *after* its dependencies are met. Accepts a non-negative **Numeric value representing seconds** (integer or float). If `activesupport` is loaded in your application, you can also conveniently use `ActiveSupport::Duration` objects (e.g., `10.seconds`, `1.hour`). The underlying job backend handles the scheduled execution.
 
 ### Defining a Step
 
