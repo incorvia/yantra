@@ -172,14 +172,13 @@ module Yantra
         @repository.expects(:bulk_update_steps).with(expected_enqueued_ids, has_key(:enqueued_at)).returns(3)
 
         # Expect one event with all three IDs
-        @notifier.expects(:publish).with(
-          'yantra.step.bulk_enqueued',
-          has_entries(
-            workflow_id: @workflow_id,
-            enqueued_ids: match_array_including_only(expected_enqueued_ids),
-            enqueued_at: kind_of(Time)
-          )
-        )
+        @notifier.expects(:publish).with do |event, payload|
+          event == 'yantra.step.bulk_enqueued' &&
+            payload[:workflow_id] == @workflow_id &&
+            payload[:enqueued_ids].sort == expected_enqueued_ids.sort &&
+            payload[:enqueued_at].is_a?(Time)
+        end
+
 
         processed_ids = @enqueuer.call(workflow_id: @workflow_id, step_ids_to_attempt: step_ids)
         assert_equal expected_enqueued_ids.sort, processed_ids.sort
