@@ -58,43 +58,46 @@ module Yantra
 
       # Use setup to define instance variables used across tests
       def setup
-        # IDs
+        # Use mocks for dependencies
+        @repo = mock('Repository')
+        @worker = mock('WorkerAdapter')
+        @notifier = mock('Notifier')
+        @logger = mock('Logger')
+        @transition_service = mock('StateTransitionService') # Mock the service
+
+        # Stub logger methods
+        @logger.stubs(:debug)
+        @logger.stubs(:info)
+        @logger.stubs(:warn)
+        @logger.stubs(:error)
+
+        # Stub global accessors to return mocks
+        Yantra.stubs(:repository).returns(@repo)
+        Yantra.stubs(:worker_adapter).returns(@worker)
+        Yantra.stubs(:notifier).returns(@notifier)
+        Yantra.stubs(:logger).returns(@logger)
+
+        # --- MODIFIED: Stub StateTransitionService.new ---
+        # Stub the .new method BEFORE Orchestrator is initialized
+        # to ensure Orchestrator receives the mock service instance.
+        StateTransitionService.stubs(:new)
+                              .with(repository: @repo, logger: @logger) # Match initializer args
+                              .returns(@transition_service)
+        # --- END MODIFIED ---
+
+        # Instantiate Orchestrator - it will now get the mocked service
+        @orchestrator = Orchestrator.new(repository: @repo, worker_adapter: @worker, notifier: @notifier)
+        # Remove stubbing of the reader method - no longer needed
+        # @orchestrator.stubs(:transition_service).returns(@transition_service)
+
+        # Common IDs
         @workflow_id = "wf-#{SecureRandom.uuid}"
         @step_a_id = "step-a-#{SecureRandom.uuid}"
         @step_b_id = "step-b-#{SecureRandom.uuid}"
         @step_c_id = "step-c-#{SecureRandom.uuid}"
 
-        # Mocks - instantiate here to be available in all tests
-        @repo = mock('repository')
-        @worker = mock('worker_adapter')
-        @notifier = mock('notifier')
-
-        # --- Common Stubs needed for Orchestrator/Service Initialization ---
-        # Stub interface checks
-        @repo.stubs(:is_a?).with(Yantra::Persistence::RepositoryInterface).returns(true)
-        @worker.stubs(:is_a?).with(Yantra::Worker::EnqueuingInterface).returns(true)
-        @notifier.stubs(:is_a?).with(Yantra::Events::NotifierInterface).returns(true)
-        @notifier.stubs(:respond_to?).with(:publish).returns(true)
-
-        # Stub checks required by StepEnqueuer initializer
-        @repo.stubs(:respond_to?).with(:find_steps).returns(true)
-        @repo.stubs(:respond_to?).with(:bulk_update_steps).returns(true)
-        @worker.stubs(:respond_to?).with(:enqueue).returns(true)
-
-        # Stub common helper method checks used within Orchestrator logic
-        @repo.stubs(:respond_to?).with(:get_dependency_ids_bulk).returns(true)
-        @repo.stubs(:respond_to?).with(:get_step_states).returns(true)
-
-        # Instantiate the orchestrator - this also instantiates StepEnqueuer
-        @orchestrator = Orchestrator.new(
-          repository: @repo,
-          worker_adapter: @worker,
-          notifier: @notifier
-        )
-
-        # Convenience accessor for the internally created service
-        @step_enqueuer = @orchestrator.step_enqueuer
-        refute_nil @step_enqueuer, "StepEnqueuer should be initialized in setup"
+        # Define a consistent time for tests involving time
+        @frozen_time = Time.parse("2025-01-15 10:30:00 UTC")
       end
 
       # =========================================================================
@@ -217,17 +220,32 @@ module Yantra
       end
 
       def test_step_starting_does_not_publish_if_update_fails
-        step_enqueued = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: 'StepA', state: 'enqueued')
+        step_scheduling = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: 'StepA', state: 'scheduling')
+        expected_state_to_set = StateMachine::RUNNING
+        expected_current_state = StateMachine::SCHEDULING
 
-        Time.stub :current, FROZEN_TIME do
-          sequence = Mocha::Sequence.new('step_starting_no_publish_on_fail')
+        Time.stub :current, @frozen_time do
+          # Expect initial find_step
+          @repo.expects(:find_step).with(@step_a_id).returns(step_scheduling)
 
-          @repo.expects(:find_step).with(@step_a_id).returns(step_enqueued).in_sequence(sequence)
+          # --- CORRECTED: Expectation for transition_step ---
+          # Expect the call to the transition service, mock it to return false
+          # Pass positional args first, then keyword args as a hash
+          @transition_service.expects(:transition_step)
+            .with(
+              @step_a_id,
+              expected_state_to_set,
+              # Keyword args grouped in a hash:
+              {
+                expected_old_state: expected_current_state,
+                extra_attrs: has_key(:started_at) # Use has_key within the hash
+              }
+            )
+            .returns(false) # Simulate update failure
+          # --- END CORRECTION ---
 
-          # Expect update attempt that fails
-          @repo.expects(:update_step_attributes)
-            .with(@step_a_id, has_entries(state: StateMachine::RUNNING.to_s), expected_old_state: StateMachine::ENQUEUED)
-            .returns(false).in_sequence(sequence) # Simulate failure
+          # When transition_service returns false, attempt_transition_to_running re-checks state
+          @repo.expects(:find_step).with(@step_a_id).returns(step_scheduling) # Still scheduling
 
           # Ensure publish is never called
           @notifier.expects(:publish).never
@@ -235,11 +253,8 @@ module Yantra
           # Act
           result = @orchestrator.step_starting(@step_a_id)
 
-          # Assert: Behavior depends on Orchestrator#step_starting implementation.
-          # If it returns true even on update failure (as original code might suggest):
-          assert result, "step_starting returned true even though update failed (as per original behavior assumption)"
-          # If it *should* return false on update failure, change assertion:
-          # refute result, "step_starting should return false if update fails"
+          # Assert: step_starting should return false if update fails and state is not RUNNING
+          refute result, "step_starting should return false if update fails"
         end
       end
 
