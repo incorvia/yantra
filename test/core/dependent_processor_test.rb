@@ -204,7 +204,12 @@ module Yantra
         # No get_dependent_ids for dep2 as it's not cancellable
 
         # Expect bulk cancellation ONLY for dependent1
-        @repository.expects(:bulk_cancel_steps).with([@dependent1_id]).returns(1)
+        @repository.expects(:bulk_update_steps).with do |ids, attrs|
+          ids == [@dependent1_id] &&
+            attrs[:state] == 'cancelled' &&
+            attrs.key?(:finished_at) &&
+            attrs.key?(:updated_at)
+        end.returns(1)
 
         # Act
         cancelled_ids = @processor.process_failure_cascade(
