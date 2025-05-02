@@ -236,8 +236,11 @@ module Yantra
         @repository.expects(:get_dependent_ids).with(@grandchild1_id).returns([])
 
         # Expect bulk cancellation for dep1 and grandchild1
-        @repository.expects(:bulk_cancel_steps).with do |actual_ids|
-          actual_ids.is_a?(Array) && actual_ids.sort == expected_cancelled_ids.sort
+        @repository.expects(:bulk_update_steps).with do |ids, attrs|
+          ids.sort == expected_cancelled_ids.sort &&
+            attrs[:state] == 'cancelled' &&
+            attrs.key?(:finished_at) &&
+            attrs.key?(:updated_at)
         end.returns(2)
 
          # Act
