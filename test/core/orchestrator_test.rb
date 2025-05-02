@@ -45,7 +45,7 @@ MockWorkflow = Struct.new(
 
   # Allow mock to respond to state.to_s for compatibility if needed
   def state
-    super.to_s
+    self[:state].to_s
   end
 end
 
@@ -412,23 +412,26 @@ module Yantra
         end
       end
 
-       def test_check_workflow_completion_marks_failed
+      def test_check_workflow_completion_marks_failed
         workflow_running = MockWorkflow.new(id: @workflow_id, klass: 'MyWorkflow', state: :running)
         workflow_failed = MockWorkflow.new(id: @workflow_id, klass: 'MyWorkflow', state: :failed, finished_at: @frozen_time)
 
         Time.stub :current, @frozen_time do
           sequence = Mocha::Sequence.new('workflow_completion_failed')
 
+          # Expect check for steps in progress (returns false)
           @repo.expects(:has_steps_in_states?)
-              .with(workflow_id: @workflow_id, states: StateMachine::WORK_IN_PROGRESS_STATES.map(&:to_s))
+              .with(workflow_id: @workflow_id, states: StateMachine::WORK_IN_PROGRESS_STATES)
               .returns(false).in_sequence(sequence)
           @repo.expects(:find_workflow).with(@workflow_id).returns(workflow_running).in_sequence(sequence)
           # Expect check for failures (returns true)
           @repo.expects(:workflow_has_failures?).with(@workflow_id).returns(true).in_sequence(sequence)
-          # Expect transition to failed via service
-          @transition_service.expects(:transition_workflow)
-              .with(@workflow_id, FAILED, expected_old_state: RUNNING, extra_attrs: { finished_at: @frozen_time })
+          # --- MODIFIED: Expect direct repo call ---
+          # Expect update_workflow_attributes directly
+          @repo.expects(:update_workflow_attributes)
+              .with(@workflow_id, { state: FAILED.to_s, finished_at: @frozen_time }, expected_old_state: RUNNING)
               .returns(true).in_sequence(sequence)
+          # --- END MODIFIED ---
           @repo.expects(:find_workflow).with(@workflow_id).returns(workflow_failed).in_sequence(sequence) # For event payload
           @notifier.expects(:publish).with('yantra.workflow.failed', any_parameters).in_sequence(sequence)
 
