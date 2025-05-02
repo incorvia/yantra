@@ -229,19 +229,17 @@ module Yantra
         step1 = MockStepRecord.new(id: @step1_id, state: 'pending', klass: 'Step1', workflow_id: @workflow_id, delay_seconds: nil, queue: 'q1', max_attempts: 1, retries: 0, created_at: @now)
 
         @repository.expects(:find_steps).with(step_ids).returns([step1])
-        # Simulate Phase 1 failure
-        @repository.expects(:bulk_upsert_steps).with(any_parameters).raises(Yantra::Errors::PersistenceError, "Phase 1 DB write failed")
-        # Expect NO adapter calls, NO phase 3 update, NO event
+        @repository.expects(:bulk_upsert_steps).with(any_parameters)
+          .raises(Yantra::Errors::PersistenceError, "Phase 1 DB write failed")
         @worker_adapter.expects(:enqueue).never
         @worker_adapter.expects(:enqueue_in).never
-        @repository.expects(:bulk_update_steps).never # Check this specific method isn't called
+        @repository.expects(:bulk_update_steps).never
         @notifier.expects(:publish).never
-        # --- MODIFIED: Simplify logger expectation ---
-        @logger.expects(:error) # Just expect error was called
-        # --- END MODIFIED ---
+        @logger.expects(:error)
 
-        processed_ids = @enqueuer.call(workflow_id: @workflow_id, step_ids_to_attempt: step_ids)
-        assert_equal [], processed_ids, "Should return empty array if Phase 1 fails"
+        assert_raises Yantra::Errors::PersistenceError do
+          @enqueuer.call(workflow_id: @workflow_id, step_ids_to_attempt: step_ids)
+        end
       end
 
       def test_call_handles_bulk_update_failure_phase3
