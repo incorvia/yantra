@@ -216,7 +216,6 @@ module Yantra
         @worker_adapter.expects(:enqueue_in).with(delay, step1.id, @workflow_id, step1.klass, step1.queue).returns(false)
         @repository.expects(:bulk_update_steps).never
         @notifier.expects(:publish).never
-        @logger.expects(:warn)
         @logger.expects(:error) # Now expected when EnqueueFailed is raised
 
         error = assert_raises(Yantra::Errors::EnqueueFailed) do
