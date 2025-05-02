@@ -440,21 +440,22 @@ module Yantra
         end
       end
 
-       def test_check_workflow_completion_does_nothing_if_steps_in_progress
+      def test_check_workflow_completion_does_nothing_if_steps_in_progress
         # Expect check for steps in progress (returns true)
         @repo.expects(:has_steps_in_states?)
-            .with(workflow_id: @workflow_id, states: StateMachine::WORK_IN_PROGRESS_STATES.map(&:to_s))
-            .returns(true) # Simulate steps still running/scheduling etc.
+          .with(workflow_id: @workflow_id, states: StateMachine::WORK_IN_PROGRESS_STATES)
+          .returns(true) # Simulate steps still running/scheduling etc.
 
         # Ensure no other methods are called
         @repo.expects(:find_workflow).never
         @repo.expects(:workflow_has_failures?).never
-        @transition_service.expects(:transition_workflow).never
+        @repo.expects(:update_workflow_attributes).never
         @notifier.expects(:publish).never
 
         # Act
         @orchestrator.send(:check_workflow_completion, @workflow_id)
-        # Assert handled by mock verification
+
+        # Assert: all verified through Mocha expectations
       end
 
       # =========================================================================
