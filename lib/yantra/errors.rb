@@ -23,6 +23,7 @@ module Yantra
     class PersistenceError        < Yantra::Error; end
     class WorkerError             < Yantra::Error; end
     class StepDefinitionError     < Yantra::Error; end
+    class EnqueueFailed           < Yantra::Error; end
     class UpdateConflictError     < PersistenceError; end
   end
 end
