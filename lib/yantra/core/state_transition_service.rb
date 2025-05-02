@@ -58,14 +58,6 @@ module Yantra
          raise e # Re-raise unexpected errors
       end
 
-      # Add similar method for workflows: transition_workflow(...)
-      def transition_workflow(workflow_id, new_state_sym, expected_old_state: nil, extra_attrs: {})
-         # ... implementation similar to transition_step ...
-         current_workflow = repository.find_workflow(workflow_id)
-         # ... find, validate, update ...
-         # Return true/false
-      end
-
       private
 
       def log_info(msg);  @logger&.info  { "[StateTransitionService] #{msg}" } end
