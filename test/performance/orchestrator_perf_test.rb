@@ -80,7 +80,7 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase
     @test_worker_adapter.clear! # Clear start job
 
     # Simulate the starting step finishing successfully
-    update_step_state(@start_step_uuid, :succeeded)
+    update_step_state(@start_step_uuid, :post_processing)
 
     # Measure the time for the orchestrator to process the finished step
     measurement_finish = Benchmark.measure do
@@ -149,7 +149,7 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase
     puts "\n--- Testing Fan-In Readiness Check (N=#{@num_parallel_steps}) ---"
     # Setup: Start workflow, process start step completion (triggers parallel enqueues)
     @orchestrator.start_workflow(@workflow_uuid) # Enqueues Start Job (1)
-    update_step_state(@start_step_uuid, :succeeded)
+    update_step_state(@start_step_uuid, :post_processing)
     @test_worker_adapter.clear! # Clear the start job
     @orchestrator.handle_post_processing(@start_step_uuid) # This now "enqueues" N parallel jobs to an empty queue
     assert_equal @num_parallel_steps, @test_worker_adapter.enqueued_jobs.size, "Should have recorded N parallel jobs after start finished" # Verify parallel jobs recorded
@@ -166,7 +166,7 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase
     end
 
     # Now, simulate the *last* parallel step finishing
-    update_step_state(last_parallel_step_uuid, :succeeded)
+    update_step_state(last_parallel_step_uuid, :post_processing)
 
     # Measure the time for processing the last parallel step's completion.
     # This involves: get_dependents(last_parallel) -> [final], fetch_dependencies(final) -> [all parallel],
