@@ -247,22 +247,16 @@ module Yantra
         step1 = MockStepRecord.new(id: @step1_id, state: 'pending', klass: 'Step1', workflow_id: @workflow_id, delay_seconds: nil, queue: 'q1', max_attempts: 1, retries: 0, created_at: @now)
 
         @repository.expects(:find_steps).with(step_ids).returns([step1])
-        # Phase 1: Success
         @repository.expects(:bulk_upsert_steps).with(any_parameters).returns(1)
-        # Phase 2: Success
         @worker_adapter.expects(:enqueue).with(step1.id, @workflow_id, step1.klass, step1.queue).returns(true)
-        # Phase 3: Simulate failure
-        @repository.expects(:bulk_update_steps).with([@step1_id], any_parameters).raises(Yantra::Errors::PersistenceError, "Phase 3 DB write failed")
-        # Expect NO event publish
+        @repository.expects(:bulk_update_steps).with([@step1_id], any_parameters)
+          .raises(Yantra::Errors::PersistenceError, "Phase 3 DB write failed")
         @notifier.expects(:publish).never
-        # --- MODIFIED: Simplify logger expectation ---
-        @logger.expects(:error) # Just expect error was called
-        # --- END MODIFIED ---
+        @logger.expects(:error) # Logging expected
 
-        processed_ids = @enqueuer.call(workflow_id: @workflow_id, step_ids_to_attempt: step_ids)
-        # Note: Step was already sent to adapter, so we still return its ID
-        assert_equal [@step1_id], processed_ids, "Should return ID even if Phase 3 update fails"
-        # Assert step state remains 'scheduling' (optional)
+        assert_raises Yantra::Errors::PersistenceError do
+          @enqueuer.call(workflow_id: @workflow_id, step_ids_to_attempt: step_ids)
+        end
       end
 
       # Helper to match array contents regardless of order
