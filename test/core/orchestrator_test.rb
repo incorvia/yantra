@@ -90,6 +90,9 @@ module Yantra
         # Remove stubbing of the reader method - no longer needed
         # @orchestrator.stubs(:transition_service).returns(@transition_service)
 
+        @step_enqueuer = @orchestrator.step_enqueuer
+        refute_nil @step_enqueuer, "StepEnqueuer should be initialized in setup"
+
         # Common IDs
         @workflow_id = "wf-#{SecureRandom.uuid}"
         @step_a_id = "step-a-#{SecureRandom.uuid}"
