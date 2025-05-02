@@ -189,7 +189,12 @@ module Yantra
               mock_repo.expect(:list_steps, mock_steps_to_cancel, workflow_id: workflow_id)
 
               # 6. Bulk cancel steps
-              mock_repo.expect(:bulk_cancel_steps, step_ids_to_cancel.size, [step_ids_to_cancel])
+              mock_repo.expect(:bulk_update_steps, step_ids_to_cancel.size) do |ids, attrs|
+                ids == step_ids_to_cancel &&
+                  attrs[:state] == Yantra::Core::StateMachine::CANCELLED.to_s &&
+                  attrs[:finished_at] == @frozen_time &&
+                  attrs[:updated_at] == @frozen_time
+              end
               # --- End Expectations ---
 
               # Act
