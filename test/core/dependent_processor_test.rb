@@ -183,7 +183,6 @@ module Yantra
         @repository.stubs(:respond_to?).with(:get_dependent_ids_bulk).returns(false)
 
         @repository.expects(:get_dependent_ids).with(@finished_step_id).returns(dependents)
-        # Expectations within find_all_pending_descendants loop (non-bulk)
         @repository.expects(:find_step).with(@dependent1_id).returns(MockStep.new(id: @dependent1_id, state: 'pending'))
         @repository.expects(:get_dependent_ids).with(@dependent1_id).returns([])
         @repository.expects(:find_step).with(@dependent2_id).returns(MockStep.new(id: @dependent2_id, state: 'running'))
@@ -212,7 +211,6 @@ module Yantra
         @repository.stubs(:respond_to?).with(:get_dependent_ids_bulk).returns(false)
 
         @repository.expects(:get_dependent_ids).with(@finished_step_id).returns(dependents)
-        # Expectations within find_all_pending_descendants loop (non-bulk)
         @repository.expects(:find_step).with(@dependent1_id).returns(MockStep.new(id: @dependent1_id, state: 'pending'))
         @repository.expects(:get_dependent_ids).with(@dependent1_id).returns([@grandchild1_id])
         @repository.expects(:find_step).with(@dependent2_id).returns(MockStep.new(id: @dependent2_id, state: 'running'))

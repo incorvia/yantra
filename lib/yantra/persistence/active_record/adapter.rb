@@ -249,20 +249,14 @@ module Yantra
           {}
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#running_step_count
-        def running_step_count(workflow_id)
-          StepRecord.where(workflow_id: workflow_id, state: Yantra::Core::StateMachine::RUNNING.to_s).count
+        # @see Yantra::Persistence::RepositoryInterface#has_steps_in_states?
+        def has_steps_in_states?(workflow_id:, states:)
+          return false if states.nil? || states.empty?
+          state_strings = states.map(&:to_s)
+          StepRecord.where(workflow_id: workflow_id, state: state_strings).exists?
         rescue ::ActiveRecord::ActiveRecordError => e
-          log_error { "Error counting running steps for workflow #{workflow_id}: #{e.message}" }
-          raise Yantra::Errors::PersistenceError, "Error counting running steps: #{e.message}"
-        end
-
-        # @see Yantra::Persistence::RepositoryInterface#enqueued_step_count
-        def enqueued_step_count(workflow_id)
-          StepRecord.where(workflow_id: workflow_id, state: Yantra::Core::StateMachine::ENQUEUED.to_s).count
-        rescue ::ActiveRecord::ActiveRecordError => e
-          log_error { "Error counting enqueued steps for workflow #{workflow_id}: #{e.message}" }
-          raise Yantra::Errors::PersistenceError, "Error counting enqueued steps: #{e.message}"
+          log_error { "Error checking for steps in states #{states.inspect} for workflow #{workflow_id}: #{e.message}" }
+          raise Yantra::Errors::PersistenceError, "Error checking step states: #{e.message}"
         end
 
         # ========================================================
@@ -296,39 +290,6 @@ module Yantra
         rescue ::ActiveRecord::StatementInvalid, ::ActiveRecord::ActiveRecordError => e
           log_error { "Bulk dependency insert failed: #{e.message}" }
           raise Yantra::Errors::PersistenceError, "Bulk dependency insert failed: #{e.message}"
-        end
-
-        # @see Yantra::Persistence::RepositoryInterface#list_ready_steps
-        def list_ready_steps(workflow_id:)
-          all_step_ids = StepRecord.where(workflow_id: workflow_id).pluck(:id)
-          return [] if all_step_ids.empty?
-
-          # Convert StateMachine constants to string arrays for SQL queries
-          prerequisite_met_states_str = Yantra::Core::StateMachine::PREREQUISITE_MET_STATES.map(&:to_s)
-          releasable_states_str = Yantra::Core::StateMachine::RELEASABLE_FROM_STATES.map(&:to_s)
-
-          # Find IDs of steps that have at least one prerequisite NOT in a met state
-          incomplete_deps = StepDependencyRecord
-            .joins("INNER JOIN yantra_steps AS prerequisites ON prerequisites.id = yantra_step_dependencies.depends_on_step_id")
-            .where(step_id: all_step_ids)
-          # Use the constant-derived list of states
-            .where("prerequisites.state NOT IN (?)", prerequisite_met_states_str)
-            .pluck(:step_id).uniq
-
-          # Find IDs of steps that are in a state from which they can be released/started
-          candidate_step_ids = StepRecord.where(
-            workflow_id: workflow_id,
-            # Use the constant-derived list of states
-            state: releasable_states_str
-          ).pluck(:id)
-
-          # Ready steps are those candidates that do NOT have incomplete dependencies
-          ready_step_ids = candidate_step_ids - incomplete_deps
-          ready_step_ids
-        rescue ::ActiveRecord::ActiveRecordError => e
-          logger = defined?(Yantra.logger) && Yantra.logger ? Yantra.logger : Logger.new(STDOUT)
-          logger.error { "[Persistence] Error finding ready steps for workflow #{workflow_id}: #{e.message}" }
-          raise Yantra::Errors::PersistenceError, "Error finding ready steps: #{e.message}"
         end
 
         # @see Yantra::Persistence::RepositoryInterface#get_dependency_ids
