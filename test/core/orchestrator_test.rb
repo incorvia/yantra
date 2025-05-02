@@ -107,34 +107,47 @@ module Yantra
 
       def test_start_workflow_enqueues_initial_jobs
         ready_step_ids = [@step_a_id, @step_b_id]
+
+        pending_steps = [
+          MockStep.new(id: @step_a_id, dependencies: []),
+          MockStep.new(id: @step_b_id, dependencies: [])
+        ]
+
         workflow_running = MockWorkflow.new(id: @workflow_id, klass: 'TestWorkflow', state: :running, started_at: @frozen_time)
 
         Time.stub :current, @frozen_time do
           sequence = Mocha::Sequence.new('start_workflow_calls_enqueuer')
 
-          # Expect transition service call for workflow state update
-          @transition_service.expects(:transition_workflow)
-            .with(@workflow_id, RUNNING, expected_old_state: PENDING, extra_attrs: { started_at: @frozen_time })
+          # Expect update to running state (replaces old transition_service call)
+          @repo.expects(:update_workflow_attributes)
+            .with(@workflow_id,
+                  { state: StateMachine::RUNNING.to_s, started_at: @frozen_time },
+                  expected_old_state: StateMachine::PENDING)
             .returns(true).in_sequence(sequence)
 
-          # Expect find for event publishing
-          @repo.expects(:find_workflow).with(@workflow_id).returns(workflow_running).in_sequence(sequence)
-          @notifier.expects(:publish).with('yantra.workflow.started', any_parameters).in_sequence(sequence)
+          # Workflow used for event payload
+          @repo.expects(:find_workflow)
+            .with(@workflow_id)
+            .returns(workflow_running).in_sequence(sequence)
 
-          # Expect call to find ready steps (now uses list_steps)
-          @repo.expects(:list_steps).with(workflow_id: @workflow_id, status: :pending).returns([
-            MockStep.new(id: @step_a_id, state: :pending),
-            MockStep.new(id: @step_b_id, state: :pending)
-          ]).in_sequence(sequence)
-          # Expect dependency check (returns empty for initial steps)
-          @repo.expects(:get_dependency_ids_bulk).with(ready_step_ids).returns({@step_a_id => [], @step_b_id => []}).in_sequence(sequence)
+          @notifier.expects(:publish)
+            .with('yantra.workflow.started', any_parameters)
+            .in_sequence(sequence)
 
+          # Expect listing of pending steps
+          @repo.expects(:list_steps)
+            .with(workflow_id: @workflow_id, status: :pending)
+            .returns(pending_steps).in_sequence(sequence)
 
-          # Expect delegation to StepEnqueuer
+          # Expect call to get dependencies
+          @repo.expects(:get_dependency_ids_bulk)
+            .with(ready_step_ids)
+            .returns({ @step_a_id => [], @step_b_id => [] }).in_sequence(sequence)
+
+          # Expect step enqueuer call
           @step_enqueuer.expects(:call)
             .with(workflow_id: @workflow_id, step_ids_to_attempt: ready_step_ids)
-            .returns(ready_step_ids) # Return the array of IDs
-            .in_sequence(sequence)
+            .returns(ready_step_ids).in_sequence(sequence)
 
           # Act
           result = @orchestrator.start_workflow(@workflow_id)
@@ -143,6 +156,8 @@ module Yantra
           assert result, "start_workflow should return true on success"
         end
       end
+
+
 
       def test_start_workflow_does_nothing_if_update_fails
         # Covers both "not pending" and other update failures
