@@ -13,13 +13,13 @@ require 'yantra/errors'
 
 # --- Mocks ---
 # Simple mock for step records used in tests
-# --- MODIFIED: Added :enqueued_at ---
+# --- CORRECTED: Added :enqueued_at ---
 MockStepRecord = Struct.new(
   :id, :workflow_id, :klass, :state, :queue, :delay_seconds, :enqueued_at,
   :max_attempts, :retries, :created_at,
   keyword_init: true
 )
-# --- END MODIFIED ---
+# --- END CORRECTED ---
 
 module Yantra
   module Core
@@ -76,7 +76,7 @@ module Yantra
           workflow_id: @workflow_id
         )
 
-        # Assert: No error raised, step_enqueuer not called (verified by teardown)
+        # Assert: No error raised, mocks verified by teardown
       end
 
       def test_process_successors_one_dependent_ready
@@ -87,7 +87,6 @@ module Yantra
         # Mock StepRecord objects for find_steps
         step1_pending = MockStepRecord.new(id: @dependent1_id, state: 'pending', enqueued_at: nil)
         finished_step = MockStepRecord.new(id: @finished_step_id, state: 'succeeded')
-        steps_map = { @dependent1_id.to_s => step1_pending, @finished_step_id.to_s => finished_step }
 
         @repository.expects(:get_dependent_ids).with(@finished_step_id).returns(dependents)
         @repository.expects(:get_dependency_ids_bulk).with(dependents).returns(parents_map)
@@ -229,7 +228,7 @@ module Yantra
 
         @repository.expects(:get_dependent_ids).with(@finished_step_id).returns(dependents)
         # Expectations within find_all_cancellable_descendants loop (non-bulk)
-        @repository.expects(:find_step).with(@dependent1_id).returns(MockStepRecord.new(id: @dependent1_id, state: 'pending'))
+        @repository.expects(:find_step).with(@dependent1_id).returns(MockStepRecord.new(id: @dependent1_id, state: 'pending', enqueued_at: nil)) # Added enqueued_at
         @repository.expects(:get_dependent_ids).with(@dependent1_id).returns([@grandchild1_id])
         @repository.expects(:find_step).with(@dependent2_id).returns(MockStepRecord.new(id: @dependent2_id, state: 'running')) # Not cancellable
         # Next batch

@@ -14,7 +14,7 @@ require 'yantra/errors'
 # --- Mocks ---
 # Simple mock for step records used in tests
 MockStepRecord = Struct.new(
-  :id, :workflow_id, :klass, :state, :queue, :delay_seconds,
+  :id, :workflow_id, :klass, :state, :queue, :delay_seconds, :enqueued_at,
   :max_attempts, :retries, :created_at,
   keyword_init: true
 )
