@@ -148,14 +148,16 @@ module Yantra
         # Covers both "not pending" and other update failures
 
         Time.stub :current, @frozen_time do
-          # Expect transition attempt to fail
-          @transition_service.expects(:transition_workflow)
-            .with(@workflow_id, RUNNING, expected_old_state: PENDING, extra_attrs: { started_at: @frozen_time })
-            .returns(false) # Simulate failure
+          # Expect update to fail
+          @repo.expects(:update_workflow_attributes)
+            .with(@workflow_id,
+                  { state: StateMachine::RUNNING.to_s, started_at: @frozen_time },
+                  expected_old_state: StateMachine::PENDING)
+            .returns(false)
 
           # Ensure downstream actions do not happen
           @notifier.expects(:publish).never
-          @repo.expects(:list_steps).never # Should not be called if update fails
+          @repo.expects(:list_steps).never
           @step_enqueuer.expects(:call).never
 
           # Act
@@ -165,6 +167,8 @@ module Yantra
           refute result, "start_workflow should return false on update failure"
         end
       end
+
+
 
       # =========================================================================
       # Step Starting Tests
