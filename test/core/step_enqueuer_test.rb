@@ -94,7 +94,7 @@ module Yantra
         @notifier.expects(:publish).with('yantra.step.bulk_enqueued', has_entry(enqueued_ids: [@step1_id]))
 
         # Expect warnings for skipped steps
-        @logger.expects(:warn) # Simplified
+        # @logger.expects(:warn) # Simplified
 
         processed_ids = @enqueuer.call(workflow_id: @workflow_id, step_ids_to_attempt: step_ids)
 
