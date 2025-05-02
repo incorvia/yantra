@@ -109,7 +109,6 @@ module Yantra
               failed_enqueue_ids << step_id # Track failure
             end
           rescue StandardError => e
-            log_error "Phase 2: Error during adapter enqueue/enqueue_in for step #{step_id}: #{e.class} - #{e.message}"
             failed_enqueue_ids << step_id # Track failure
           end
         end
