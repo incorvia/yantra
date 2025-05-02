@@ -16,44 +16,50 @@ module Yantra
 
     # Creates and persists a new workflow instance, its steps, and dependencies.
     def self.create_workflow(workflow_klass, *args, **kwargs)
+      # Let ArgumentError bubble out
       unless workflow_klass.is_a?(Class) && workflow_klass < Yantra::Workflow
         raise ArgumentError, "#{workflow_klass} must be a subclass of Yantra::Workflow"
       end
 
-      wf_instance = workflow_klass.new(*args, **kwargs)
-      repo = Yantra.repository
+      begin
+        wf_instance = workflow_klass.new(*args, **kwargs)
+        repo = Yantra.repository
 
-      unless repo.create_workflow(wf_instance)
-        raise Yantra::Errors::PersistenceError, "Failed to persist workflow record for ID: #{wf_instance.id}"
-      end
-
-      if wf_instance.steps.any?
-        unless repo.create_steps_bulk(wf_instance.steps)
-          raise Yantra::Errors::PersistenceError, "Failed to persist step records for workflow ID: #{wf_instance.id}"
+        unless repo.create_workflow(wf_instance)
+          raise Yantra::Errors::PersistenceError, "Failed to persist workflow record for ID: #{wf_instance.id}"
         end
-      end
 
-      if wf_instance.dependencies.any?
-        links_array = wf_instance.dependencies.flat_map do |step_id, dep_ids|
-          dep_ids.map { |dep_id| { step_id: step_id, depends_on_step_id: dep_id } }
+        if wf_instance.steps.any?
+          unless repo.create_steps_bulk(wf_instance.steps)
+            raise Yantra::Errors::PersistenceError, "Failed to persist step records for workflow ID: #{wf_instance.id}"
+          end
         end
-        unless repo.add_step_dependencies_bulk(links_array)
-          raise Yantra::Errors::PersistenceError, "Failed to persist dependency links for workflow ID: #{wf_instance.id}"
-        end
-      end
 
-      wf_instance.id
-    rescue Yantra::Errors::WorkflowDefinitionError, Yantra::Errors::DependencyNotFound => e
+        if wf_instance.dependencies.any?
+          links_array = wf_instance.dependencies.flat_map do |step_id, dep_ids|
+            dep_ids.map { |dep_id| { step_id: step_id, depends_on_step_id: dep_id } }
+          end
+          unless repo.add_step_dependencies_bulk(links_array)
+            raise Yantra::Errors::PersistenceError, "Failed to persist dependency links for workflow ID: #{wf_instance.id}"
+          end
+        end
+
+        wf_instance.id
+
+      rescue Yantra::Errors::WorkflowDefinitionError, Yantra::Errors::DependencyNotFound => e
         log_error("Workflow definition error: #{e.message}")
         raise e
-    rescue Yantra::Errors::PersistenceError => e
+      rescue Yantra::Errors::PersistenceError => e
         log_error("Persistence error during workflow creation: #{e.message}")
         raise e
-    rescue StandardError => e
+      rescue StandardError => e
         backtrace_str = e.backtrace&.take(5)&.join("\n") || "No backtrace"
         log_error("Unexpected error during workflow creation: #{e.class} - #{e.message}\n#{backtrace_str}")
         raise Yantra::Errors::WorkflowError, "Unexpected error creating workflow: #{e.message}"
+      end
     end
+
+
 
     # Initiates the execution of a previously created workflow.
     def self.start_workflow(workflow_id)

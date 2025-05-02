@@ -26,6 +26,7 @@ module Yantra
     class InvalidWorkflowState    < Yantra::Error; end
     class WorkflowError           < Yantra::Error; end
     class UpdateConflictError     < PersistenceError; end
+    class WorkflowDefinitionError < StandardError; end
 
     class EnqueueFailed < StandardError
       attr_reader :failed_ids

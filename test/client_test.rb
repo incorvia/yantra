@@ -122,9 +122,10 @@ module Yantra
 
       # Test input validation
       def test_create_workflow_raises_error_for_invalid_class
-        assert_raises(ArgumentError, /must be a Class inheriting from Yantra::Workflow/) do
-          Client.create_workflow(NotAWorkflow) # Pass a class that doesn't inherit
+        error = assert_raises(ArgumentError) do
+          Client.create_workflow(NotAWorkflow)
         end
+        assert_match(/must be a subclass of Yantra::Workflow/, error.message)
       end
 
       def test_cancel_workflow_publishes_event_on_success
