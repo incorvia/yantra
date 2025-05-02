@@ -186,23 +186,29 @@ module Yantra
 
       def test_call_handles_adapter_enqueue_failure
         step_ids = [@step1_id]
-        step1 = MockStepRecord.new(id: @step1_id, state: 'pending', klass: 'Step1', workflow_id: @workflow_id, delay_seconds: nil, queue: 'q1', max_attempts: 1, retries: 0, created_at: @now)
+        step1 = MockStepRecord.new(
+          id: @step1_id,
+          state: 'pending',
+          klass: 'Step1',
+          workflow_id: @workflow_id,
+          delay_seconds: nil,
+          queue: 'q1',
+          max_attempts: 1,
+          retries: 0,
+          created_at: @now
+        )
 
         @repository.expects(:find_steps).with(step_ids).returns([step1])
-        # Phase 1: Update state to scheduling
         @repository.expects(:bulk_upsert_steps).with(any_parameters).returns(1)
-        # Phase 2: Simulate adapter failure
         @worker_adapter.expects(:enqueue).with(step1.id, @workflow_id, step1.klass, step1.queue).returns(false)
-        # Phase 3: Expect NO timestamp update
         @repository.expects(:bulk_update_steps).never
         @notifier.expects(:publish).never
-        # Expect warning log
         @logger.expects(:warn)
+        @logger.expects(:error)
 
-        processed_ids = @enqueuer.call(workflow_id: @workflow_id, step_ids_to_attempt: step_ids)
-        assert_equal [], processed_ids, "Should return empty array if enqueue fails"
-        # Assert step state remains 'scheduling' (optional)
-        # assert_equal 'scheduling', repository.find_step(@step1_id).state
+        assert_raises Yantra::Errors::EnqueueFailed do
+          @enqueuer.call(workflow_id: @workflow_id, step_ids_to_attempt: step_ids)
+        end
       end
 
       def test_call_handles_adapter_enqueue_in_failure
