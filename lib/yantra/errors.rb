@@ -24,6 +24,8 @@ module Yantra
     class WorkerError             < Yantra::Error; end
     class StepDefinitionError     < Yantra::Error; end
     class EnqueueFailed           < Yantra::Error; end
+    class InvalidWorkflowState    < Yantra::Error; end
+    class WorkflowError           < Yantra::Error; end
     class UpdateConflictError     < PersistenceError; end
   end
 end

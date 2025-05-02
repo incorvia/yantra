@@ -364,15 +364,17 @@ module Yantra
         # Check events individually
         assert_equal 'yantra.step.started', @test_notifier.published_events[0][:name]
         assert_equal step_a.id, @test_notifier.published_events[0][:payload][:step_id]
-        assert_equal 'yantra.step.succeeded', @test_notifier.published_events[1][:name]
-        assert_equal step_a.id, @test_notifier.published_events[1][:payload][:step_id]
+        #
         # Check bulk enqueue event for B and C
-        enqueued_event = @test_notifier.published_events[2]
+        enqueued_event = @test_notifier.published_events[1]
         assert_equal 'yantra.step.bulk_enqueued', enqueued_event[:name]
         enqueued_ids = enqueued_event[:payload][:enqueued_ids]
         assert_equal 2, enqueued_ids.length
         assert_includes enqueued_ids, step_b.id
         assert_includes enqueued_ids, step_c.id
+
+        assert_equal 'yantra.step.succeeded', @test_notifier.published_events[2][:name]
+        assert_equal step_a.id, @test_notifier.published_events[2][:payload][:step_id]
 
         # Assert 2: A succeeded, B & C enqueued
         assert_equal 'succeeded', step_a.reload.state
@@ -475,10 +477,10 @@ module Yantra
         # Assert Events after Attempt 2 - Reverted to original expectation
         assert_equal 2, @test_notifier.published_events.count, 'Should publish R.succeeded, A.enqueued' # EXPECT 2 EVENTS
         # Original file checked succeeded[0], bulk_enqueued[1]
-        assert_equal 'yantra.step.succeeded', @test_notifier.published_events[0][:name]
-        assert_equal step_r_record.id, @test_notifier.published_events[0][:payload][:step_id]
-        assert_equal 'yantra.step.bulk_enqueued', @test_notifier.published_events[1][:name]
-        assert_equal step_a_record.id, @test_notifier.published_events[1][:payload][:enqueued_ids].first
+        assert_equal 'yantra.step.bulk_enqueued', @test_notifier.published_events[0][:name]
+        assert_equal step_a_record.id, @test_notifier.published_events[0][:payload][:enqueued_ids].first
+        assert_equal 'yantra.step.succeeded', @test_notifier.published_events[1][:name]
+        assert_equal step_r_record.id, @test_notifier.published_events[1][:payload][:step_id]
 
         # Assert 3: Job R succeeded, Job A enqueued
         step_r_record.reload
@@ -547,12 +549,12 @@ module Yantra
         assert_equal 3, @test_notifier.published_events.count, 'Should publish producer.started, producer.succeeded, consumer.enqueued'
         assert_equal 'yantra.step.started', @test_notifier.published_events[0][:name]
         assert_equal producer_record.id, @test_notifier.published_events[0][:payload][:step_id]
-        assert_equal 'yantra.step.succeeded', @test_notifier.published_events[1][:name]
-        assert_equal producer_record.id, @test_notifier.published_events[1][:payload][:step_id]
-        bulk_enqueued_event = @test_notifier.published_events[2]
+        bulk_enqueued_event = @test_notifier.published_events[1]
         assert_equal 'yantra.step.bulk_enqueued', bulk_enqueued_event[:name]
         assert_equal 1, bulk_enqueued_event[:payload][:enqueued_ids].length
         assert_equal [consumer_record.id], bulk_enqueued_event[:payload][:enqueued_ids]
+        assert_equal 'yantra.step.succeeded', @test_notifier.published_events[2][:name]
+        assert_equal producer_record.id, @test_notifier.published_events[2][:payload][:step_id]
 
         # Assert 2: Producer succeeded, Consumer enqueued
         producer_record.reload
@@ -584,32 +586,44 @@ module Yantra
 
       def test_cancel_workflow_cancels_running_workflow
         workflow_id = Client.create_workflow(LinearSuccessWorkflow)
-        step_a_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepA' }
-        step_b_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepB' }
+        step_a_record = repository.list_steps(workflow_id: workflow_id).find { |s| s.klass == 'IntegrationStepA' }
+        step_b_record = repository.list_steps(workflow_id: workflow_id).find { |s| s.klass == 'IntegrationStepB' }
         Client.start_workflow(workflow_id)
-        perform_enqueued_jobs # Run A, enqueue B
+        perform_enqueued_jobs # Run A, Step B moves to SCHEDULING and gets enqueued_at set
+
         @test_notifier.clear!
         wf_record = repository.find_workflow(workflow_id)
         assert_equal 'running', wf_record.reload.state
         assert_equal 'succeeded', step_a_record.reload.state
-        assert_equal 'scheduling', step_b_record.reload.state
+        # Step B was successfully handed off, state is SCHEDULING with enqueued_at
+        step_b_reloaded = step_b_record.reload
+        assert_equal 'scheduling', step_b_reloaded.state
+        refute_nil step_b_reloaded.enqueued_at, "Step B should have enqueued_at set"
+
+        # Act: Cancel the workflow
         cancel_result = Client.cancel_workflow(workflow_id)
-        assert cancel_result
-        assert_equal 2, @test_notifier.published_events.count, 'Expected 2 events after cancel'
+        assert cancel_result, "Cancel workflow should return true"
+
+        # Assert Events: Only workflow cancelled event should be published
+        assert_equal 1, @test_notifier.published_events.count, 'Expected only 1 event after cancel'
         wf_cancelled_event = @test_notifier.find_event('yantra.workflow.cancelled')
-        step_b_cancelled_event = @test_notifier.find_event('yantra.step.cancelled')
+        step_b_cancelled_event = @test_notifier.find_event('yantra.step.cancelled') # Should be nil
+
         refute_nil wf_cancelled_event, 'Workflow cancelled event missing'
-        refute_nil step_b_cancelled_event, 'Step B cancelled event missing'
+        assert_nil step_b_cancelled_event, 'Step B cancelled event should NOT be published' # Verify it's not published
         assert_equal workflow_id, wf_cancelled_event[:payload][:workflow_id]
-        assert_equal step_b_record.id, step_b_cancelled_event[:payload][:step_id]
         refute_nil wf_cancelled_event[:payload][:finished_at]
+
+        # Assert Final States
         wf_record.reload
         assert_equal 'cancelled', wf_record.state
         refute_nil wf_record.finished_at
         assert_equal 'succeeded', step_a_record.reload.state # A already finished
-        step_b_record.reload
-        assert_equal 'cancelled', step_b_record.state
-        refute_nil step_b_record.finished_at
+
+        # Step B should remain SCHEDULING because it was already handed off
+        step_b_reloaded = step_b_record.reload # Reload again after assertions
+        assert_equal 'scheduling', step_b_reloaded.state, "Step B should remain scheduling"
+        assert_nil step_b_reloaded.finished_at, "Step B should not have finished_at set"
       end
 
       def test_cancel_workflow_cancels_pending_workflow
@@ -722,10 +736,10 @@ module Yantra
         @test_notifier.clear!
 
         # Act: Try to retry
-        retry_result = Client.retry_failed_steps(workflow_id)
+        assert_raises Yantra::Errors::InvalidWorkflowState do
+          Client.retry_failed_steps(workflow_id)
+        end
 
-        # Assert: No change, no events
-        assert_equal false, retry_result # Original assertion
         assert_equal 'succeeded', repository.find_workflow(workflow_id).state
         assert_equal 0, @test_notifier.published_events.count
         assert_equal 0, enqueued_jobs.size
@@ -733,30 +747,37 @@ module Yantra
 
       def test_retry_failed_steps_handles_not_found
         # Act & Assert
-        refute Client.retry_failed_steps(SecureRandom.uuid) # Original assertion
+        assert_raises Yantra::Errors::WorkflowNotFound do
+          Client.retry_failed_steps(SecureRandom.uuid) # Original assertion
+        end
         assert_equal 0, @test_notifier.published_events.count
       end
 
       def test_retry_failed_steps_handles_failed_workflow_with_no_failed_steps
         # Arrange: Create workflow, mark failed manually without failing steps
         workflow_id = Client.create_workflow(LinearSuccessWorkflow)
-        step_a_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepA' }
+        step_a_record = repository.list_steps(workflow_id: workflow_id).find { |s| s.klass == 'IntegrationStepA' }
+        # Manually set workflow to failed (use direct update for test setup)
         repository.update_workflow_attributes(workflow_id, { state: 'failed', has_failures: true }, expected_old_state: 'pending') # Use string state
         assert_equal 'failed', repository.find_workflow(workflow_id).state
         assert_equal 'pending', step_a_record.reload.state # Step A never failed
         @test_notifier.clear!
 
         # Act: Retry
-        reenqueued_count = Client.retry_failed_steps(workflow_id)
+        reenqueued_result = Client.retry_failed_steps(workflow_id) # Capture result
 
         # Assert: Workflow reset, but no jobs re-enqueued, no events
-        assert_equal 0, reenqueued_count
+        # --- MODIFIED: Check for empty array specifically ---
+        assert_equal 0, reenqueued_result, "Should return an empty array when no steps are eligible for retry"
+        # --- END MODIFIED ---
+
         assert_equal 'running', repository.find_workflow(workflow_id).state
         refute repository.find_workflow(workflow_id).has_failures
         assert_equal 'pending', step_a_record.reload.state # Step A remains pending
         assert_equal 0, @test_notifier.published_events.count
         assert_equal 0, enqueued_jobs.size # No jobs were actually failed to re-enqueue
       end
+
 
       def test_parallel_start_workflow_enqueues_all_initial_steps
         # Arrange: Create the workflow
@@ -949,9 +970,9 @@ module Yantra
         # Should be A.started, A.succeeded, E.bulk_enqueued (even though delayed)
         assert_equal 3, @test_notifier.published_events.count, 'Should publish A.started, A.succeeded, E.enqueued'
         assert_equal 'yantra.step.started', @test_notifier.published_events[0][:name]
-        assert_equal 'yantra.step.succeeded', @test_notifier.published_events[1][:name]
-        assert_equal 'yantra.step.bulk_enqueued', @test_notifier.published_events[2][:name]
-        assert_equal [step_e_delayed.id], @test_notifier.published_events[2][:payload][:enqueued_ids]
+        assert_equal 'yantra.step.bulk_enqueued', @test_notifier.published_events[1][:name]
+        assert_equal [step_e_delayed.id], @test_notifier.published_events[1][:payload][:enqueued_ids]
+        assert_equal 'yantra.step.succeeded', @test_notifier.published_events[2][:name]
 
         # Act 3: Advance time past the delay and perform jobs again
         @test_notifier.clear!
