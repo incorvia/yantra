@@ -144,7 +144,13 @@ module Yantra
 
         if step_ids.any?
           log.call(:info, "Attempting to cancel #{step_ids.size} steps in repository.")
-          cancelled_count = repo.bulk_cancel_steps(step_ids)
+
+          cancel_attrs = {
+            state: Core::StateMachine::CANCELLED.to_s,
+            finished_at: Time.current, # Use the same timestamp logic as before
+            updated_at: Time.current
+          }
+          cancelled_count = repo.bulk_update_steps(step_ids, cancel_attrs)
           log.call(:info, "Repository confirmed cancellation of #{cancelled_count} steps.")
 
           # Publish step cancelled events

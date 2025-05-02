@@ -389,30 +389,6 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Bulk upsert steps failed: #{e.message}"
         end
 
-        # @see Yantra::Persistence::RepositoryInterface#bulk_cancel_steps
-        def bulk_cancel_steps(step_ids)
-          return 0 if step_ids.nil? || step_ids.empty?
-
-          # Use the constant from StateMachine
-          cancellable_states_str = Yantra::Core::StateMachine::CANCELLABLE_STATES.map(&:to_s)
-          cancelled_state_str = Yantra::Core::StateMachine::CANCELLED.to_s
-          now = Time.current
-
-          updated_count = StepRecord.where(
-            id: step_ids,
-            state: cancellable_states_str # Use the constant-derived list
-          ).update_all(
-            state: cancelled_state_str,
-            finished_at: now,
-            updated_at: now
-          )
-          updated_count
-        rescue ::ActiveRecord::StatementInvalid, ::ActiveRecord::ActiveRecordError => e
-          logger = defined?(Yantra.logger) && Yantra.logger ? Yantra.logger : Logger.new(STDOUT)
-          logger.error { "[Persistence] Bulk step cancellation failed for IDs #{step_ids.inspect}: #{e.message}" }
-          raise Yantra::Errors::PersistenceError, "Bulk job cancellation failed: #{e.message}"
-        end
-
         # @see Yantra::Persistence::RepositoryInterface#delete_workflow
         def delete_workflow(workflow_id)
           # ... (Implementation as before) ...

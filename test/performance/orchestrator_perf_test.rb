@@ -84,9 +84,9 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase
 
     # Measure the time for the orchestrator to process the finished step
     measurement_finish = Benchmark.measure do
-      @orchestrator.step_finished(@start_step_uuid)
+      @orchestrator.handle_post_processing(@start_step_uuid)
     end
-    puts format_benchmark("Fan-Out (step_finished -> record N)", measurement_finish)
+    puts format_benchmark("Fan-Out (handle_post_processing -> record N)", measurement_finish)
 
     # Assert that the correct number of jobs were recorded by the test adapter
     assert_equal @num_parallel_steps, @test_worker_adapter.enqueued_jobs.size, "Should have recorded N parallel jobs"
@@ -122,7 +122,7 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase
     measurement = Benchmark.measure do
       @orchestrator.step_failed(step_to_fail_uuid, simulated_error)
     end
-    puts format_benchmark("Failure Handling & Cascade (step_failed -> step_finished)", measurement)
+    puts format_benchmark("Failure Handling & Cascade (step_failed -> handle_post_processing)", measurement)
 
     # Verify workflow has failures flag is set and state is failed
     wf_check = @repository.find_workflow(@workflow_uuid)
@@ -151,7 +151,7 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase
     @orchestrator.start_workflow(@workflow_uuid) # Enqueues Start Job (1)
     update_step_state(@start_step_uuid, :succeeded)
     @test_worker_adapter.clear! # Clear the start job
-    @orchestrator.step_finished(@start_step_uuid) # This now "enqueues" N parallel jobs to an empty queue
+    @orchestrator.handle_post_processing(@start_step_uuid) # This now "enqueues" N parallel jobs to an empty queue
     assert_equal @num_parallel_steps, @test_worker_adapter.enqueued_jobs.size, "Should have recorded N parallel jobs after start finished" # Verify parallel jobs recorded
     @test_worker_adapter.clear! # Clear parallel jobs before simulating their completion
 
@@ -172,9 +172,9 @@ class OrchestratorPerfTest < YantraActiveRecordTestCase
     # This involves: get_dependents(last_parallel) -> [final], fetch_dependencies(final) -> [all parallel],
     # fetch_states(final + all parallel), is_ready?(final)
     measurement = Benchmark.measure do
-      @orchestrator.step_finished(last_parallel_step_uuid)
+      @orchestrator.handle_post_processing(last_parallel_step_uuid)
     end
-    puts format_benchmark("Fan-In Readiness Check (last step_finished -> record final)", measurement)
+    puts format_benchmark("Fan-In Readiness Check (last handle_post_processing -> record final)", measurement)
 
     # Assert that ONLY the final step was recorded by the test adapter
     assert_equal 1, @test_worker_adapter.enqueued_jobs.size, "Only final step should be enqueued"

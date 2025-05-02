@@ -70,7 +70,12 @@ module Yantra
         return [] if descendants_to_cancel_ids.empty?
 
         log_info "Bulk cancelling #{descendants_to_cancel_ids.size} cancellable descendant steps: #{descendants_to_cancel_ids.inspect}"
-        cancelled_count = repository.bulk_cancel_steps(descendants_to_cancel_ids)
+        cancel_attrs = {
+          state: StateMachine::CANCELLED.to_s,
+          finished_at: Time.current,
+          updated_at: Time.current
+        }
+        cancelled_count = repository.bulk_update_steps(descendants_to_cancel_ids, cancel_attrs)
         log_info "Repository reported #{cancelled_count} steps cancelled."
 
         return descendants_to_cancel_ids
