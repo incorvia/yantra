@@ -6,13 +6,11 @@ require 'set'
 module Yantra
   module Core
     # Defines valid states and transitions for workflows and steps.
-    # NOTE: ENQUEUED state has been removed in favor of SCHEDULING + enqueued_at timestamp.
     module StateMachine
       # --- Canonical States ---
       PENDING         = :pending
       SCHEDULING      = :scheduling # Step is being processed for handoff to job system.
                                    # enqueued_at timestamp indicates successful handoff.
-      # ENQUEUED state removed
       RUNNING         = :running
       POST_PROCESSING = :post_processing
       SUCCEEDED       = :succeeded
@@ -28,17 +26,15 @@ module Yantra
       RELEASABLE_FROM_STATES = Set[PENDING].freeze # Only PENDING steps are initially releasable
 
       # States a prerequisite must be in to be considered 'met'
-      PREREQUISITE_MET_STATES = Set[SUCCEEDED].freeze
+      PREREQUISITE_MET_STATES = Set[POST_PROCESSING, SUCCEEDED].freeze
 
       # States a step can be in to be eligible for cancellation (before running)
-      # ENQUEUED removed. SCHEDULING without enqueued_at is cancellable.
       CANCELLABLE_STATES_LOGIC = ->(state_symbol, enqueued_at_value) {
         state = state_symbol&.to_sym
         (state == PENDING) || (state == SCHEDULING && enqueued_at_value.nil?)
       }
 
       # States from which a step can transition to RUNNING
-      # ENQUEUED removed. Worker picks up from SCHEDULING state now.
       STARTABLE_STATES = Set[PENDING, SCHEDULING, RUNNING].freeze
 
       # Terminal states (cannot transition *from* these naturally in standard flow)
@@ -57,7 +53,6 @@ module Yantra
         # FAILED (if critical enqueue error), or CANCELLED.
         # The state isn't explicitly set back to PENDING on recoverable enqueue error.
         SCHEDULING      => Set[RUNNING, CANCELLED, FAILED].freeze,
-        # ENQUEUED state removed
         RUNNING         => Set[POST_PROCESSING, FAILED, CANCELLED].freeze,
         POST_PROCESSING => Set[SUCCEEDED, FAILED].freeze,
         FAILED          => Set[PENDING, CANCELLED].freeze, # Retry resets to PENDING
@@ -97,7 +92,6 @@ module Yantra
         state = state_symbol&.to_sym
         is_pending = (state == PENDING)
         is_stuck_scheduling = (state == SCHEDULING && enqueued_at_value.nil?)
-        # ENQUEUED state removed from check
         is_pending || is_stuck_scheduling
       end
 

@@ -10,7 +10,11 @@ require 'minitest/focus'
 require 'active_support/testing/time_helpers'
 require File.expand_path('dummy/config/environment', __dir__)
 
-
+begin
+  require 'debug'       # or 'pry-byebug'
+rescue LoadError
+  warn "Debugging gem not installed"
+end
 
 # --- ActiveRecord Test Setup ---
 

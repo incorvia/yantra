@@ -50,11 +50,10 @@ module Yantra
       def start_workflow(workflow_id)
         log_info "Starting workflow #{workflow_id}"
         # --- MODIFIED: Use Transition Service ---
-        updated = transition_service.transition_workflow(
+        updated = repository.update_workflow_attributes(
           workflow_id,
-          StateMachine::RUNNING,
-          expected_old_state: StateMachine::PENDING,
-          extra_attrs: { started_at: Time.current }
+          { state: StateMachine::RUNNING.to_s, started_at: Time.current },
+          expected_old_state: StateMachine::PENDING
         )
         # --- END MODIFIED ---
 
@@ -88,8 +87,6 @@ module Yantra
         # If already running, it's an idempotent success
         return true if current_state_sym == StateMachine::RUNNING
 
-        # --- MODIFIED: Use Transition Service ---
-        # Attempt the transition to RUNNING state, expecting PENDING or SCHEDULING or ENQUEUED
         updated = transition_service.transition_step(
           step_id,
           StateMachine::RUNNING,
@@ -109,7 +106,7 @@ module Yantra
       end
 
       # Handles the successful completion of a step's core logic.
-      def handle_post_processing(step_id, output = nil)
+      def handle_post_processing(step_id)
         log_info "Handling post-processing for succeeded step #{step_id}"
         step = repository.find_step(step_id)
         unless step
@@ -134,7 +131,7 @@ module Yantra
         )
 
         # If dependent_processor succeeded without raising:
-        finalize_step_succeeded(step_id, output) # Pass output for potential recording
+        finalize_step_succeeded(step_id) # Pass output for potential recording
         check_workflow_completion(workflow_id)
 
       rescue Yantra::Errors::EnqueueFailed => e
@@ -179,7 +176,7 @@ module Yantra
       # --- REMOVED attempt_transition_to_running (logic moved to step_starting/transition_service) ---
 
       # Finalizes a step after successful post-processing.
-      def finalize_step_succeeded(step_id, output)
+      def finalize_step_succeeded(step_id)
         log_info "Finalizing step #{step_id} as SUCCEEDED."
         # --- MODIFIED: Use Transition Service ---
         success = transition_service.transition_step(
@@ -187,13 +184,10 @@ module Yantra
           StateMachine::SUCCEEDED,
           expected_old_state: StateMachine::POST_PROCESSING,
           extra_attrs: { finished_at: Time.current }
-          # Output is recorded separately now
         )
         # --- END MODIFIED ---
 
         if success
-          # Record output after successful state transition
-          repository.update_step_output(step_id, output)
           publish_step_succeeded_event(step_id)
         else
           # Log handled by transition_service
@@ -321,11 +315,10 @@ module Yantra
         final_state = repository.workflow_has_failures?(workflow_id) ? StateMachine::FAILED : StateMachine::SUCCEEDED
 
         # --- MODIFIED: Use Transition Service ---
-        success = transition_service.transition_workflow(
+        success = repository.update_workflow_attributes(
           workflow_id,
-          final_state,
-          expected_old_state: StateMachine::RUNNING,
-          extra_attrs: { finished_at: Time.current }
+          { state: final_state.to_s, finished_at: Time.current },
+          expected_old_state: StateMachine::RUNNING
         )
         # --- END MODIFIED ---
 

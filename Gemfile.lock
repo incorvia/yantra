@@ -90,6 +90,9 @@ GEM
       database_cleaner-core (~> 2.0.0)
     database_cleaner-core (2.0.1)
     date (3.4.1)
+    debug (1.10.0)
+      irb (~> 1.10)
+      reline (>= 0.3.8)
     drb (2.2.1)
     erubi (1.13.1)
     globalid (1.2.1)
@@ -140,7 +143,7 @@ GEM
     pry (0.15.2)
       coderay (~> 1.1)
       method_source (~> 1.0)
-    psych (5.2.3)
+    psych (5.2.4)
       date
       stringio
     racc (1.8.1)
@@ -198,7 +201,7 @@ GEM
       redis-client (>= 0.23.2)
     sqlite3 (2.6.0-arm64-darwin)
     sqlite3 (2.6.0-x86_64-linux-gnu)
-    stringio (3.1.6)
+    stringio (3.1.7)
     thor (1.3.2)
     timeout (0.4.3)
     tzinfo (2.0.6)
@@ -217,6 +220,7 @@ PLATFORMS
 DEPENDENCIES
   activerecord (~> 7.1)
   database_cleaner-active_record
+  debug
   minitest (~> 5.0)
   minitest-focus
   mocha

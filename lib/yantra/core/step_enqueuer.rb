@@ -16,7 +16,7 @@ module Yantra
     # Uses a revised three-phase approach with a SCHEDULING state:
     # 1. Bulk upsert state to SCHEDULING and set delayed_until.
     # 2. Individually enqueue/schedule via adapter, tracking successes and failures.
-    # 3. Bulk update state to ENQUEUED and set enqueued_at timestamp for successfully processed steps.
+    # 3. Bulk update state to set enqueued_at timestamp for successfully processed steps.
     # 4. If any enqueue failed in Phase 2, raise EnqueueFailed.
     class StepEnqueuer
       attr_reader :repository, :worker_adapter, :notifier, :logger
@@ -114,17 +114,17 @@ module Yantra
           end
         end
 
-        # --- Phase 3: Bulk Update State to ENQUEUED & Set Timestamps for SUCCESSFUL steps ---
+        # --- Phase 3: Bulk Update State to set enqueued_t & Set Timestamps for SUCCESSFUL steps ---
         # This runs even if there were failures in Phase 2, to update the successful ones.
         if successfully_enqueued_ids.any?
-          log_debug "Phase 3: Bulk updating state to ENQUEUED and setting timestamps for steps: #{successfully_enqueued_ids.inspect}"
+          log_debug "Phase 3: Bulk updating state to set enqueued_at and setting timestamps for steps: #{successfully_enqueued_ids.inspect}"
           begin
             final_update_attributes = {
               enqueued_at: now,
               updated_at: now
             }
             updated_count_phase3 = repository.bulk_update_steps(successfully_enqueued_ids, final_update_attributes)
-            log_info "Phase 3: Bulk update to ENQUEUED state processed #{updated_count_phase3} steps."
+            log_info "Phase 3: Bulk update to set enqueud_at processed #{updated_count_phase3} steps."
           rescue Yantra::Errors::PersistenceError => e
             log_error "Phase 3: Failed to bulk update state/timestamps after successful enqueue: #{e.message}"
             # If this fails, successfully enqueued steps remain SCHEDULING with NULL enqueued_at.
