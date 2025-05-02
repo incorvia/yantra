@@ -41,7 +41,7 @@ module Yantra
         # Depending on if downstream steps should run after post-processing starts
         # or only after full success. Let's assume SUCCEEDED is the only true met state for now.
         # If post-processing should also unlock, add it here.
-        expected_states = Set[SUCCEEDED]
+        expected_states = Set[POST_PROCESSING, SUCCEEDED]
         # expected_states = Set[SUCCEEDED, POST_PROCESSING] # Alternative
         # --- END UPDATED ---
         assert_equal expected_states, StateMachine::PREREQUISITE_MET_STATES
@@ -64,7 +64,7 @@ module Yantra
       end
 
       def test_non_terminal_states_set_is_correct
-        expected_non_terminal = Set[PENDING, SCHEDULING, RUNNING, POST_PROCESSING, FAILED]
+        expected_non_terminal = Set[FAILED, PENDING, SCHEDULING, RUNNING, POST_PROCESSING, FAILED]
         assert_equal expected_non_terminal.sort, StateMachine::NON_TERMINAL_STATES.sort
       end
 

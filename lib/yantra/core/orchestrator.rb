@@ -303,9 +303,9 @@ module Yantra
         return unless workflow_id
 
         # Use the StateMachine constant for non-terminal states
-        non_terminal_states = StateMachine::NON_TERMINAL_STATES
-        if repository.has_steps_in_states?(workflow_id: workflow_id, states: non_terminal_states)
-          log_debug "Workflow #{workflow_id} not complete yet (steps found in states: #{non_terminal_states.inspect})."
+        wip_states = StateMachine::WORK_IN_PROGRESS_STATES
+        if repository.has_steps_in_states?(workflow_id: workflow_id, states: wip_states)
+          log_debug "Workflow #{workflow_id} not complete yet (steps found in states: #{wip_states.inspect})."
           return
         end
 

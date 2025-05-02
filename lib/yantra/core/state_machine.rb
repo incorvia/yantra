@@ -43,8 +43,12 @@ module Yantra
       ].freeze # FAILED is not strictly terminal due to retry
 
       # States indicating work is still potentially in progress or waiting
-      NON_TERMINAL_STATES = ALL_STATES - Set[SUCCEEDED, FAILED, CANCELLED]
+      NON_TERMINAL_STATES = ALL_STATES - TERMINAL_STATES
       # => Set[:pending, :scheduling, :running, :post_processing]
+      
+      WORK_IN_PROGRESS_STATES = Set[
+        PENDING, SCHEDULING, RUNNING, POST_PROCESSING
+      ].freeze
 
       # Allowed transitions between states during normal operation
       VALID_TRANSITIONS = {
