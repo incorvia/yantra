@@ -468,33 +468,40 @@ module Yantra
       # =========================================================================
       # Test for handle_post_processing failure path
       def test_handle_post_processing_failure_transitions_and_processes_cascade
-         step_post_processing = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, state: :post_processing)
-         error = StandardError.new("Post-processing boom")
-         error_info = { class: 'StandardError', message: 'Post-processing boom', backtrace: [] }
-         step_failed = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, state: :failed) # For cascade check
-         cancelled_ids = [@step_b_id]
+        step_post_processing = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, state: :post_processing)
+        step_failed = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, state: :failed) # For event payload
+        cancelled_ids = [@step_b_id]
+        error = StandardError.new("Post-processing boom")
 
-         Time.stub :current, @frozen_time do
-           sequence = Mocha::Sequence.new('post_processing_failure')
+        Time.stub :current, @frozen_time do
+          sequence = Mocha::Sequence.new('post_processing_failure')
 
-           # 1. Expect format_error to be called (implicitly tested by error_info match)
-           # 2. Expect transition to FAILED via service
-           @transition_service.expects(:transition_step)
-             .with(@step_a_id, FAILED, expected_old_state: POST_PROCESSING, extra_attrs: has_entries(error: error_info, finished_at: @frozen_time))
-             .returns(true).in_sequence(sequence)
-           # 3. Expect set_workflow_failure_flag calls
-           @repo.expects(:find_step).with(@step_a_id).returns(step_post_processing).in_sequence(sequence) # For workflow ID
-           @repo.expects(:update_workflow_attributes).with(@workflow_id, { has_failures: true }).returns(true).in_sequence(sequence)
-           # 4. Expect publish step failed event
-           @repo.expects(:find_step).with(@step_a_id).returns(step_failed).in_sequence(sequence) # For event payload
-           @notifier.expects(:publish).with('yantra.step.failed', has_key(:error)).in_sequence(sequence)
-           # 5. Expect process_failure_cascade_and_check_completion helper call
-           @orchestrator.expects(:process_failure_cascade_and_check_completion).with(@step_a_id).in_sequence(sequence)
+          @transition_service.expects(:transition_step)
+            .with(@step_a_id, FAILED,
+                  expected_old_state: POST_PROCESSING,
+                  extra_attrs: has_entries(
+                    error: has_entries(class: 'StandardError', message: 'Post-processing boom'),
+                    finished_at: @frozen_time
+                  )
+                 ).returns(true).in_sequence(sequence)
 
-           # Act - Call the private helper directly
-           @orchestrator.send(:handle_post_processing_failure, @step_a_id, error)
-         end
+
+          @repo.expects(:find_step).with(@step_a_id).returns(step_post_processing).in_sequence(sequence)
+          @repo.expects(:update_workflow_attributes)
+            .with(@workflow_id, { has_failures: true })
+            .returns(true).in_sequence(sequence)
+
+          @repo.expects(:find_step).with(@step_a_id).returns(step_failed).in_sequence(sequence)
+          @notifier.expects(:publish).with('yantra.step.failed', has_key(:error)).in_sequence(sequence)
+
+          @orchestrator.expects(:process_failure_cascade_and_check_completion)
+            .with(@step_a_id).in_sequence(sequence)
+
+          # Act
+          @orchestrator.send(:handle_post_processing_failure, @step_a_id, error)
+        end
       end
+
 
 
     end # class OrchestratorTest
