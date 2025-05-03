@@ -124,38 +124,29 @@ module Yantra
         handle_post_processing_failure(step_id, e)
       end
 
-      # Marks a step as failed permanently.
       def step_failed(step_id, error_info, expected_old_state: StateMachine::RUNNING)
         log_error "Step #{step_id} failed permanently: #{error_info[:class]} - #{error_info[:message]}"
         finished_at = Time.current
 
-        # --- MODIFIED: Use Transition Service ---
-        updated = transition_service.transition_step(
-          step_id,
-          StateMachine::FAILED,
-          expected_old_state: expected_old_state, # Use passed expectation
-          extra_attrs: { error: error_info, finished_at: finished_at }
-        )
-        # --- END MODIFIED ---
-
-        # Log handled by transition_service if update failed due to state mismatch
-        # log_failure_state_update(step_id) unless updated # Removed
-
-        # Always set flag and publish event based on intent, even if state update failed
-        set_workflow_failure_flag(step_id)
+        transition_step_to_failed(step_id, error_info, expected_old_state, finished_at)
+        mark_workflow_as_failed(step_id)
         publish_step_failed_event(step_id, error_info, finished_at)
+        process_failure_dependents_and_check_completion(step_id)
 
-        # Trigger Dependent Cancellation & Completion Check
-        process_failure_cascade_and_check_completion(step_id)
-
-      rescue StandardError => e # Catch errors during this method's own processing
+      rescue StandardError => e
         log_error("Error during step_failed processing for step #{step_id}: #{e.class} - #{e.message}\n#{e.backtrace.take(5).join("\n")}")
       end
 
-
       private
 
-      # --- REMOVED attempt_transition_to_running (logic moved to step_starting/transition_service) ---
+      def transition_step_to_failed(step_id, error_info, expected_old_state, finished_at)
+        transition_service.transition_step(
+          step_id,
+          StateMachine::FAILED,
+          expected_old_state: expected_old_state,
+          extra_attrs: { error: error_info, finished_at: finished_at }
+        )
+      end
 
       # Finalizes a step after successful post-processing.
       def finalize_step_succeeded(step_id)
@@ -196,35 +187,37 @@ module Yantra
          # log_failure_state_update(step_id) unless updated # Removed
 
          # Always set flag and publish event based on intent
-         set_workflow_failure_flag(step_id)
+         mark_workflow_as_failed(step_id)
          publish_step_failed_event(step_id, error_info, finished_at)
 
          # Trigger Dependent Cancellation & Completion Check
-         process_failure_cascade_and_check_completion(step_id)
+         process_failure_dependents_and_check_completion(step_id)
 
       rescue StandardError => e # Catch errors during failure handling itself
         log_error("Error during handle_post_processing_failure for step #{step_id}: #{e.class} - #{e.message}\n#{e.backtrace.take(5).join("\n")}")
       end
 
       # Helper for failure cascade + completion check
-      def process_failure_cascade_and_check_completion(step_id)
+      def process_failure_dependents_and_check_completion(step_id)
         step = repository.find_step(step_id)
-        if step
-          workflow_id = step.workflow_id
-          log_debug "Delegating failure cascade processing for step #{step_id} to DependentProcessor."
-          cancelled_step_ids = @dependent_processor.process_failure_cascade(
-            finished_step_id: step_id,
-            workflow_id: workflow_id
-          )
-          (cancelled_step_ids || []).each { |id| publish_step_cancelled_event(id) }
-          check_workflow_completion(workflow_id)
-        else
-           log_error "Step #{step_id} not found after failure, cannot process dependents or check completion."
+        unless step
+          log_error "Step #{step_id} not found after failure, cannot process dependents or check completion."
+          return
         end
-      rescue StandardError => e
-        log_error("Error during process_failure_cascade_and_check_completion for step #{step_id}: #{e.class} - #{e.message}\n#{e.backtrace.take(5).join("\n")}")
-      end
 
+        log_debug "Processing dependent cancellations for step #{step.id}"
+
+        cancelled_ids = dependent_processor.process_failure_cascade(
+          finished_step_id: step.id,
+          workflow_id: step.workflow_id
+        )
+
+        cancelled_ids&.each { |id| publish_step_cancelled_event(id) }
+
+        check_workflow_completion(step.workflow_id)
+      rescue => e
+        log_error("Error during failure-dependent handling for step #{step_id}: #{e.class} - #{e.message}\n#{e.backtrace.take(5).join("\n")}")
+      end
 
       # Formats an exception for storage
       def format_error(error)
@@ -247,9 +240,10 @@ module Yantra
       # --- REMOVED log_failure_state_update (Handled by transition service) ---
 
       # Sets the has_failures flag on the workflow containing the step.
-      def set_workflow_failure_flag(step_id)
+      def mark_workflow_as_failed(step_id)
         workflow_id = repository.find_step(step_id)&.workflow_id
         return unless workflow_id
+
         success = repository.update_workflow_attributes(workflow_id, { has_failures: true })
         log_warn "Failed to set has_failures for workflow #{workflow_id}." unless success
       rescue => e
