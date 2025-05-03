@@ -3,182 +3,146 @@
 
 require_relative '../errors'
 require_relative 'state_machine'
-require_relative '../persistence/repository_interface'
-require_relative '../worker/enqueuing_interface'
-require_relative '../events/notifier_interface'
+require 'active_support/core_ext/numeric/time'
 require 'logger'
-require 'active_support/core_ext/numeric/time' # For .seconds
 
 module Yantra
   module Core
-    # Service responsible for validating and enqueuing steps
-    # that are ready to be processed by background workers.
-    # Uses a revised three-phase approach with a AWAITING_EXECUTION state:
-    # 1. Bulk upsert state to AWAITING_EXECUTION and set earliest_execution_time.
-    # 2. Individually enqueue/schedule via adapter, tracking successes and failures.
-    # 3. Bulk update state to set enqueued_at timestamp for successfully processed steps.
-    # 4. If any enqueue failed in Phase 2, raise EnqueueFailed.
     class StepEnqueuer
       attr_reader :repository, :worker_adapter, :notifier, :logger
 
       def initialize(repository:, worker_adapter:, notifier:, logger: Yantra.logger)
-        @repository     = repository
-        @worker_adapter = worker_adapter
-        @notifier       = notifier
+        @repository     = repository or raise ArgumentError, "StepEnqueuer requires a repository"
+        @worker_adapter = worker_adapter or raise ArgumentError, "StepEnqueuer requires a worker_adapter"
+        @notifier       = notifier or raise ArgumentError, "StepEnqueuer requires a notifier"
         @logger         = logger || Logger.new(IO::NULL)
 
-        unless @repository && @worker_adapter && @notifier
-          raise ArgumentError, "StepEnqueuer requires repository, worker_adapter, and notifier."
-        end
         unless defined?(StateMachine::AWAITING_EXECUTION)
-           raise Yantra::Errors::ConfigurationError, "StateMachine::AWAITING_EXECUTION constant is not defined."
+          raise Yantra::Errors::ConfigurationError, "StateMachine::AWAITING_EXECUTION is not defined"
         end
       end
 
-      # Attempts to enqueue/schedule a list of step IDs using the revised three-phase approach.
-      # Raises Yantra::Errors::EnqueueFailed if any individual enqueue/schedule fails,
-      # *after* attempting to update the state for the successful ones.
-      #
-      # @param workflow_id [String] The workflow context.
-      # @param step_ids_to_attempt [Array<String>] IDs of steps deemed ready.
-      # @return [Array<String>] IDs of steps successfully handed off to the worker adapter.
-      # @raise [Yantra::Errors::EnqueueFailed] if any step fails handoff to worker adapter.
       def call(workflow_id:, step_ids_to_attempt:)
-        return [] if step_ids_to_attempt.nil? || step_ids_to_attempt.empty?
-        log_info "Attempting 3-phase enqueue/schedule for steps: #{step_ids_to_attempt.inspect} in workflow #{workflow_id}"
+        return [] if step_ids_to_attempt.blank?
+        log_info "Enqueueing steps: #{step_ids_to_attempt.inspect} in workflow #{workflow_id}"
 
-        steps_to_process = find_steps_to_process(step_ids_to_attempt)
-        return [] if steps_to_process.empty?
-
-        candidate_steps = steps_to_process.select do |step|
-          StateMachine.is_enqueue_candidate_state?(step.state, step.enqueued_at)
-        end
-
-        candidate_ids = candidate_steps.map(&:id)
-        return [] if candidate_ids.empty?
+        steps = fetch_candidate_steps(step_ids_to_attempt)
+        return [] if steps.empty?
 
         now = Time.current
-        successfully_enqueued_ids = []
-        failed_enqueue_ids = [] # Track failures
-        initial_upsert_data = []
+        successfully_enqueued, failed_enqueued = enqueue_steps(workflow_id, steps, now)
 
-        # --- Prepare Phase 1 Data ---
-        candidate_steps.each do |step|
-            delay = step.delay_seconds
-            calculated_earliest_execution_time = (delay && delay > 0) ? (now + delay.seconds) : nil
-            initial_upsert_data << {
-              id: step.id,
-              state: StateMachine::AWAITING_EXECUTION.to_s,
-              earliest_execution_time: calculated_earliest_execution_time,
-              updated_at: now,
-              workflow_id: step.workflow_id, klass: step.klass.to_s,
-              max_attempts: step.max_attempts, retries: step.retries,
-              created_at: step.created_at
-            }
-        end
+        update_successful_enqueues(successfully_enqueued, now) if successfully_enqueued.any?
+        raise_enqueue_error(failed_enqueued) if failed_enqueued.any?
 
-        # --- Phase 1: Bulk Upsert State to AWAITING_EXECUTION & earliest_execution_time ---
-        begin
-          log_debug "Phase 1: Bulk upserting state to AWAITING_EXECUTION for candidate steps: #{candidate_ids.inspect}"
-          updated_count_phase1 = repository.bulk_upsert_steps(initial_upsert_data)
-          log_info "Phase 1: Initial bulk upsert processed #{updated_count_phase1} steps."
-        rescue Yantra::Errors::PersistenceError => e
-          log_error "Phase 1: Failed to bulk upsert steps: #{e.message}. Aborting enqueue attempt."
-          raise e # Re-raise critical persistence error
-        end
-
-        # --- Phase 2: Individual Enqueue/Schedule via Adapter ---
-        log_debug "Phase 2: Attempting individual enqueue/schedule for #{candidate_ids.size} steps."
-        candidate_steps.each do |step|
-          step_id = step.id
-          delay = step.delay_seconds
-          queue = step.queue
-          success = false
-
-          begin
-            if delay && delay > 0
-              success = worker_adapter.enqueue_in(delay, step_id, workflow_id, step.klass, queue)
-            else
-              success = worker_adapter.enqueue(step_id, workflow_id, step.klass, queue)
-            end
-
-            if success
-              log_debug "Phase 2: Successfully handed off step #{step_id} to worker adapter."
-              successfully_enqueued_ids << step_id
-            else
-              log_warn "Phase 2: Failed to enqueue/schedule step #{step_id} via worker adapter."
-              failed_enqueue_ids << step_id # Track failure
-            end
-          rescue StandardError => e
-            failed_enqueue_ids << step_id # Track failure
-          end
-        end
-
-        # --- Phase 3: Bulk Update State to set enqueued_t & Set Timestamps for SUCCESSFUL steps ---
-        # This runs even if there were failures in Phase 2, to update the successful ones.
-        if successfully_enqueued_ids.any?
-          log_debug "Phase 3: Bulk updating state to set enqueued_at and setting timestamps for steps: #{successfully_enqueued_ids.inspect}"
-          begin
-            final_update_attributes = {
-              enqueued_at: now,
-              updated_at: now
-            }
-            updated_count_phase3 = repository.bulk_update_steps(successfully_enqueued_ids, final_update_attributes)
-            log_info "Phase 3: Bulk update to set enqueud_at processed #{updated_count_phase3} steps."
-          rescue Yantra::Errors::PersistenceError => e
-            log_error "Phase 3: Failed to bulk update state/timestamps after successful enqueue: #{e.message}"
-            # If this fails, successfully enqueued steps remain AWAITING_EXECUTION with NULL enqueued_at.
-            # Re-raise to signal the inconsistency.
-            raise e
-          end
-        end
-
-        # --- MODIFIED: Check for failures AFTER Phase 3 ---
-        # If any step failed the handoff in Phase 2, raise error now.
-        if failed_enqueue_ids.any?
-          error_message = "Failed to enqueue/schedule #{failed_enqueue_ids.count} step(s): #{failed_enqueue_ids.inspect}. Corresponding steps remain in AWAITING_EXECUTION state with no enqueued_at timestamp."
-          log_error error_message
-          raise Yantra::Errors::EnqueueFailed.new(error_message, failed_ids: failed_enqueue_ids)
-        end
-        # --- END MODIFIED ---
-
-        # --- Publish Event only if ALL steps succeeded ---
-        if successfully_enqueued_ids.any? && failed_enqueue_ids.empty?
-          publish_steps_enqueued_event(workflow_id, successfully_enqueued_ids, now)
-        end
-
-        successfully_enqueued_ids # Return IDs that were actually handed off
+        publish_success_event(workflow_id, successfully_enqueued, now) if failed_enqueued.empty?
+        successfully_enqueued.map(&:id)
       end
 
       private
 
-      # Fetches step records safely.
-      def find_steps_to_process(step_ids)
-        repository.find_steps(step_ids) || []
+      def fetch_candidate_steps(step_ids)
+        repository.find_steps(step_ids).select do |step|
+          StateMachine.is_enqueue_candidate_state?(step.state, step.enqueued_at)
+        end
       rescue Yantra::Errors::PersistenceError => e
-        log_error "Failed to bulk fetch steps #{step_ids.inspect} for enqueuing: #{e.message}"
-        [] # Return empty array on error
+        log_error "Failed to fetch steps: #{e.message}"
+        []
       end
 
-      # Publishes the bulk enqueued event.
-      def publish_steps_enqueued_event(workflow_id, step_ids, enqueued_time)
-        return unless notifier&.respond_to?(:publish) && step_ids.any?
+      def enqueue_steps(workflow_id, steps, now)
+        prepare_enqueue_metadata(steps, now)
+
+        begin
+          count = repository.bulk_upsert_steps(@initial_upserts)
+          log_info "Phase 1: Upserted #{count} steps to AWAITING_EXECUTION"
+        rescue Yantra::Errors::PersistenceError => e
+          log_error "Failed upserting to AWAITING_EXECUTION: #{e.message}"
+          raise
+        end
+
+        success = []
+        failed  = []
+
+        steps.each do |step|
+          begin
+            result = enqueue_step(step, workflow_id)
+            result ? success << step : failed << step
+          rescue => e
+            log_warn "Failed enqueueing step #{step.id}: #{e.message}"
+            failed << step
+          end
+        end
+
+        [success, failed]
+      end
+
+      def prepare_enqueue_metadata(steps, now)
+        @initial_upserts = steps.map do |step|
+          delay = step.delay_seconds
+          earliest = delay && delay > 0 ? now + delay.seconds : nil
+
+          {
+            id: step.id,
+            state: StateMachine::AWAITING_EXECUTION.to_s,
+            earliest_execution_time: earliest,
+            updated_at: now,
+            workflow_id: step.workflow_id,
+            klass: step.klass.to_s,
+            max_attempts: step.max_attempts,
+            retries: step.retries,
+            created_at: step.created_at
+          }
+        end
+      end
+
+      def enqueue_step(step, workflow_id)
+        delay = step.delay_seconds
+        queue = step.queue
+
+        if delay && delay > 0
+          worker_adapter.enqueue_in(delay, step.id, workflow_id, step.klass, queue)
+        else
+          worker_adapter.enqueue(step.id, workflow_id, step.klass, queue)
+        end
+      end
+
+      def update_successful_enqueues(steps, time)
+        attrs = { enqueued_at: time, updated_at: time }
+        ids = steps.map(&:id)
+
+        repository.bulk_update_steps(ids, attrs)
+        log_info "Phase 3: Set enqueued_at for #{ids.size} steps"
+      rescue Yantra::Errors::PersistenceError => e
+        log_error "Failed updating enqueued_at: #{e.message}"
+        raise
+      end
+
+      def raise_enqueue_error(failed_steps)
+        ids = failed_steps.map(&:id)
+        msg = "Failed to enqueue #{ids.size} steps: #{ids.inspect}"
+        log_error msg
+        raise Yantra::Errors::EnqueueFailed.new(msg, failed_ids: ids)
+      end
+
+      def publish_success_event(workflow_id, steps, time)
+        return unless notifier.respond_to?(:publish) && steps.any?
+
         payload = {
           workflow_id: workflow_id,
-          enqueued_ids: step_ids,
-          enqueued_at: enqueued_time
+          enqueued_ids: steps.map(&:id),
+          enqueued_at: time
         }
+
         notifier.publish('yantra.step.bulk_enqueued', payload)
       rescue => e
-        log_error "Failed to publish step.bulk_enqueued event: #{e.message}"
+        log_error "Failed publishing event: #{e.message}"
       end
 
-      # Logging Helpers
-      def log_info(msg);  @logger&.info  { "[StepEnqueuer] #{msg}" } end
-      def log_warn(msg);  @logger&.warn  { "[StepEnqueuer] #{msg}" } end
-      def log_error(msg); @logger&.error { "[StepEnqueuer] #{msg}" } end
-      def log_debug(msg); @logger&.debug { "[StepEnqueuer] #{msg}" } end
+      def log_info(msg);  logger&.info  { "[StepEnqueuer] #{msg}" } end
+      def log_warn(msg);  logger&.warn  { "[StepEnqueuer] #{msg}" } end
+      def log_error(msg); logger&.error { "[StepEnqueuer] #{msg}" } end
+    end
+  end
+end
 
-    end # class StepEnqueuer
-  end # module Core
-end # module Yantra
