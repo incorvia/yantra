@@ -1,6 +1,6 @@
 # lib/yantra/core/orchestrator.rb
 # frozen_string_literal: true
-
+#
 require_relative 'state_machine'
 require_relative '../errors'
 require_relative '../persistence/repository_interface'
@@ -108,37 +108,19 @@ module Yantra
       # Handles the successful completion of a step's core logic.
       def handle_post_processing(step_id)
         log_info "Handling post-processing for succeeded step #{step_id}"
-        step = repository.find_step(step_id)
-        unless step
-          log_error "Step #{step_id} not found during handle_post_processing."
-          raise Yantra::Errors::StepNotFound, "Step #{step_id} not found for post-processing"
-        end
 
-        # --- MODIFIED: Use StateMachine constant ---
-        unless step.state.to_sym == StateMachine::POST_PROCESSING
-            log_warn "handle_post_processing called for step #{step_id} but state is '#{step.state}' (expected POST_PROCESSING). Skipping."
-            return
-        end
-        # --- END MODIFIED ---
+        step = load_step_for_post_processing!(step_id)
 
-        workflow_id = step.workflow_id
+        process_step_dependents(step)
 
-        # Delegate dependent processing (enqueueing successors)
-        log_debug "Delegating successor processing for step #{step_id} to DependentProcessor."
-        @dependent_processor.process_successors(
-          finished_step_id: step_id,
-          workflow_id: workflow_id
-        )
-
-        # If dependent_processor succeeded without raising:
-        finalize_step_succeeded(step_id) # Pass output for potential recording
-        check_workflow_completion(workflow_id)
+        finalize_step_succeeded(step.id)
+        check_workflow_completion(step.workflow_id)
 
       rescue Yantra::Errors::EnqueueFailed => e
-        log_warn "Dependent processing for step #{step_id} failed with retryable enqueue error: #{e.message}. Step remains POST_PROCESSING. Job will retry."
+        log_warn "Dependent processing for step #{step_id} failed with enqueue error: #{e.message}. Step remains POST_PROCESSING. Will retry."
         raise e
       rescue StandardError => e
-        log_error("Unexpected error during handle_post_processing for step #{step_id}: #{e.class} - #{e.message}\n#{e.backtrace.take(5).join("\n")}")
+        log_error("Unexpected error during post-processing for step #{step_id}: #{e.class} - #{e.message}\n#{e.backtrace.take(5).join("\n")}")
         handle_post_processing_failure(step_id, e)
       end
 
@@ -334,6 +316,29 @@ module Yantra
         end
       rescue => e
         log_error "Error during check_workflow_completion for #{workflow_id}: #{e.class} - #{e.message}"
+      end
+
+      def load_step_for_post_processing!(step_id)
+        step = repository.find_step(step_id)
+        unless step
+          log_error "Step #{step_id} not found during handle_post_processing."
+          raise Yantra::Errors::StepNotFound, "Step #{step_id} not found for post-processing"
+        end
+
+        unless step.state.to_sym == StateMachine::POST_PROCESSING
+          log_warn "Skipping post-processing for step #{step_id}: state is '#{step.state}', expected POST_PROCESSING."
+          raise Yantra::Errors::InvalidStepState, "Cannot post-process step in state #{step.state}"
+        end
+
+        step
+      end
+
+      def process_step_dependents(step)
+        log_debug "Processing dependents for step #{step.id}"
+        dependent_processor.process_successors(
+          finished_step_id: step.id,
+          workflow_id: step.workflow_id
+        )
       end
 
       # --- Event Publishing Helpers (Restored Full Format) ---
