@@ -76,8 +76,8 @@ module Yantra
           end
 
           def test_create_steps_bulk_nil_input
-             assert @adapter.create_steps_bulk(nil)
-             # Count assertion removed as setup might create records
+            assert @adapter.create_steps_bulk(nil)
+            # Count assertion removed as setup might create records
           end
 
           def test_create_steps_bulk_raises_persistence_error_on_duplicate_id
@@ -98,10 +98,10 @@ module Yantra
             step_instances = [ OpenStruct.new(id: SecureRandom.uuid, workflow_id: @workflow.id, klass: TestJobClassA, arguments: {}, queue_name: 'q1') ]
             # Stub insert_all! to raise error
             StepRecord.stub(:insert_all!, ->(*) { raise ::ActiveRecord::StatementInvalid, "DB Insert Error" }) do
-               error = assert_raises(Yantra::Errors::PersistenceError) do
-                 @adapter.create_steps_bulk(step_instances)
-               end
-               assert_match(/Bulk step insert failed: DB Insert Error/, error.message)
+              error = assert_raises(Yantra::Errors::PersistenceError) do
+                @adapter.create_steps_bulk(step_instances)
+              end
+              assert_match(/Bulk step insert failed: DB Insert Error/, error.message)
             end
           end
 
@@ -297,32 +297,70 @@ module Yantra
             assert_equal 0, @adapter.bulk_upsert_steps(nil), "Should return 0 for nil input"
           end
 
+          def test_update_step_attributes_uses_atomic_where_clause
+            step_id = SecureRandom.uuid
+            StepRecord.create!(id: step_id, workflow_record: @workflow, klass: "Test", state: "pending",
+                               arguments: {}, queue: 'default', retries: 0, max_attempts: 3)
+
+            StepRecord.expects(:where).with(id: step_id).returns(
+              mock_scope = mock('scope')
+            )
+            mock_scope.expects(:where).with(state: "pending").returns(
+              final_scope = mock('final_scope')
+            )
+            final_scope.expects(:update_all).with(has_entry(:state => "running")).returns(1)
+
+            result = @adapter.update_step_attributes(step_id, { state: :running }, expected_old_state: :pending)
+            assert result
+          end
+
+          def test_update_workflow_attributes_uses_atomic_where_clause
+            wf_id = @workflow.id
+            expected_old_state = :running
+
+            # Expect .where(id: ...) then .where(state: ...) then .update_all(...)
+            WorkflowRecord.expects(:where).with(id: wf_id).returns(
+              first_scope = mock('first_scope')
+            )
+            first_scope.expects(:where).with(state: expected_old_state.to_s).returns(
+              second_scope = mock('second_scope')
+            )
+            second_scope.expects(:update_all).with(has_entry(state: "succeeded")).returns(1)
+
+            result = @adapter.update_workflow_attributes(
+              wf_id,
+              { state: :succeeded },
+              expected_old_state: expected_old_state
+            )
+            assert result, "Expected atomic update to succeed"
+          end
+
           # --- Private Helper Methods ---
           private
 
           def create_workflow_record!(id: SecureRandom.uuid, klass: "TestWorkflow", state: "pending", finished_at: nil)
-             # Adjusted to match schema (no name, has arguments/globals)
-             WorkflowRecord.create!(
-               id: id, klass: klass, state: state.to_s, finished_at: finished_at,
-               arguments: {}.to_json, globals: {}.to_json, has_failures: (state.to_s == 'failed')
-             )
+            # Adjusted to match schema (no name, has arguments/globals)
+            WorkflowRecord.create!(
+              id: id, klass: klass, state: state.to_s, finished_at: finished_at,
+              arguments: {}.to_json, globals: {}.to_json, has_failures: (state.to_s == 'failed')
+            )
           end
 
           def create_step_record!(id: SecureRandom.uuid, workflow_record:, klass: "TestJob", state: "pending", finished_at: nil)
-             # Adjusted to match schema (no name, has queue etc.)
-             StepRecord.create!(
-               id: id, workflow_record: workflow_record, workflow_id: workflow_record.id,
-               klass: klass, state: state.to_s, finished_at: finished_at,
-               arguments: {}.to_json, queue: 'default', retries: 0, max_attempts: 3
-             )
+            # Adjusted to match schema (no name, has queue etc.)
+            StepRecord.create!(
+              id: id, workflow_record: workflow_record, workflow_id: workflow_record.id,
+              klass: klass, state: state.to_s, finished_at: finished_at,
+              arguments: {}.to_json, queue: 'default', retries: 0, max_attempts: 3
+            )
           end
 
           def create_dependency!(dependent_step, prerequisite_step)
-             # Adjusted to match schema (step_id, depends_on_step_id)
-             StepDependencyRecord.create!(
-               step_id: dependent_step.id,
-               depends_on_step_id: prerequisite_step.id
-             )
+            # Adjusted to match schema (step_id, depends_on_step_id)
+            StepDependencyRecord.create!(
+              step_id: dependent_step.id,
+              depends_on_step_id: prerequisite_step.id
+            )
           end
 
         end

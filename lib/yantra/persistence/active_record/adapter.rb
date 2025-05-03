@@ -50,21 +50,11 @@ module Yantra
 
         # @see Yantra::Persistence::RepositoryInterface#update_workflow_attributes
         def update_workflow_attributes(workflow_id, attributes_hash, expected_old_state: nil)
-          workflow = WorkflowRecord.find_by(id: workflow_id)
-          return false unless workflow
-          if expected_old_state
-            expected_state_str = expected_old_state.to_s
-            actual_state_str = workflow.state
-            if actual_state_str != expected_state_str
-              log_warn { "[AR::Adapter] State mismatch for workflow #{workflow_id}. Expected: #{expected_state_str}, Actual: #{actual_state_str}" }
-              return false
-            end
-          end
-          update_attrs = attributes_hash.dup
-          if update_attrs.key?(:state) && update_attrs[:state].is_a?(Symbol)
-             update_attrs[:state] = update_attrs[:state].to_s
-          end
-          workflow.update(update_attrs)
+          scope = WorkflowRecord.where(id: workflow_id)
+          scope = scope.where(state: expected_old_state.to_s) if expected_old_state
+          update_attrs = attributes_hash.transform_values { |v| v.is_a?(Symbol) ? v.to_s : v }
+          updated = scope.update_all(update_attrs)
+          updated == 1
         rescue ::ActiveRecord::ActiveRecordError => e
           log_error { "Error updating workflow attributes for #{workflow_id}: #{e.message}" }
           raise Yantra::Errors::PersistenceError, "Error updating workflow: #{e.message}"
@@ -158,21 +148,11 @@ module Yantra
 
         # @see Yantra::Persistence::RepositoryInterface#update_step_attributes
         def update_step_attributes(step_id, attributes_hash, expected_old_state: nil)
-          step_record = StepRecord.find_by(id: step_id)
-          return false unless step_record
-          if expected_old_state
-            expected_state_str = expected_old_state.to_s
-            actual_state_str = step_record.state
-            if actual_state_str != expected_state_str
-              log_warn { "[AR::Adapter] State mismatch for step #{step_id}. Expected: #{expected_state_str}, Actual: #{actual_state_str}" }
-              return false
-            end
-          end
-          update_attrs = attributes_hash.dup
-          if update_attrs.key?(:state) && update_attrs[:state].is_a?(Symbol)
-            update_attrs[:state] = update_attrs[:state].to_s
-          end
-          step_record.update(update_attrs)
+          scope = StepRecord.where(id: step_id)
+          scope = scope.where(state: expected_old_state.to_s) if expected_old_state
+          update_attrs = attributes_hash.transform_values { |v| v.is_a?(Symbol) ? v.to_s : v }
+          updated = scope.update_all(update_attrs)
+          updated == 1
         rescue ::ActiveRecord::ActiveRecordError => e
           log_error { "Error updating step attributes for #{step_id}: #{e.message}" }
           raise Yantra::Errors::PersistenceError, "Error updating step: #{e.message}"
