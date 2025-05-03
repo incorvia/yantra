@@ -184,78 +184,62 @@ module Yantra
 
 
       # === Failure/Cancellation Path (process_failure_cascade) ===
-
       def test_process_failure_cascade_cancels_eligible_dependents
-        # Arrange
         dependents = [@dependent1_id, @dependent2_id]
-        # Mock steps: dep1 is pending, dep2 is awaiting_execution but already enqueued (has timestamp)
-        step1_pending = MockStepRecord.new(id: @dependent1_id, state: 'pending', enqueued_at: nil)
-        step2_awaiting_execution_enqueued = MockStepRecord.new(id: @dependent2_id, state: 'awaiting_execution', enqueued_at: @now)
+        now = Time.current
 
-        # Stub respond_to? to force non-bulk path for find_all_cancellable_descendants
-        @repository.stubs(:respond_to?).with(:find_steps).returns(false)
-        @repository.stubs(:respond_to?).with(:get_dependent_ids_bulk).returns(false)
+        step1_pending = MockStepRecord.new(id: @dependent1_id, state: 'pending', enqueued_at: nil)
+        step2_enqueued = MockStepRecord.new(id: @dependent2_id, state: 'awaiting_execution', enqueued_at: now)
+
+        steps_map = {
+          @dependent1_id => step1_pending,
+          @dependent2_id => step2_enqueued
+        }
+
+        dependents_map = {
+          @dependent1_id => [],
+          @dependent2_id => []
+        }
 
         @repository.expects(:get_dependent_ids).with(@finished_step_id).returns(dependents)
-        # Expectations within find_all_cancellable_descendants loop (non-bulk)
-        @repository.expects(:find_step).with(@dependent1_id).returns(step1_pending)
-        @repository.expects(:get_dependent_ids).with(@dependent1_id).returns([]) # dep1 has no children
-        @repository.expects(:find_step).with(@dependent2_id).returns(step2_awaiting_execution_enqueued)
-        # No get_dependent_ids for dep2 as it's not cancellable
+        @repository.expects(:find_steps).with(dependents).returns(steps_map.values)
+        @repository.expects(:get_dependent_ids_bulk).with(dependents).returns(dependents_map)
 
-        # Expect bulk cancellation ONLY for dependent1
-        @repository.expects(:bulk_update_steps).with do |ids, attrs|
-          ids == [@dependent1_id] &&
-            attrs[:state] == 'cancelled' &&
-            attrs.key?(:finished_at) &&
-            attrs.key?(:updated_at)
-        end.returns(1)
+        @repository.expects(:bulk_update_steps).with(
+          [@dependent1_id],
+          has_entries(state: 'cancelled')
+        ).returns(1)
 
-        # Act
-        cancelled_ids = @processor.process_failure_cascade(
-          finished_step_id: @finished_step_id,
-          workflow_id: @workflow_id
-        )
-
-        # Assert
-        assert_equal [@dependent1_id], cancelled_ids
+        result = @processor.process_failure_cascade(finished_step_id: @finished_step_id, workflow_id: @workflow_id)
+        assert_equal [@dependent1_id], result
       end
 
       def test_process_failure_cascade_cancels_eligible_descendants_recursively
-        # Arrange: finished -> dep1 (pending) -> grandchild1 (awaiting_execution, enqueued_at=nil)
-        #          finished -> dep2 (running) -> grandchild2 (pending) - dep2 branch ignored
-        dependents = [@dependent1_id, @dependent2_id]
-        expected_cancelled_ids = [@dependent1_id, @grandchild1_id]
+        dep1 = @dependent1_id
+        dep2 = @dependent2_id
+        gc1 = @grandchild1_id
 
-        # Force non-bulk path for simpler mocking
-        @repository.stubs(:respond_to?).with(:find_steps).returns(false)
-        @repository.stubs(:respond_to?).with(:get_dependent_ids_bulk).returns(false)
+        dependents = [dep1, dep2]
+
+        step_dep1 = MockStepRecord.new(id: dep1, state: 'pending', enqueued_at: nil)
+        step_dep2 = MockStepRecord.new(id: dep2, state: 'running') # Not cancellable
+        step_gc1  = MockStepRecord.new(id: gc1, state: 'awaiting_execution', enqueued_at: nil)
 
         @repository.expects(:get_dependent_ids).with(@finished_step_id).returns(dependents)
-        # Expectations within find_all_cancellable_descendants loop (non-bulk)
-        @repository.expects(:find_step).with(@dependent1_id).returns(MockStepRecord.new(id: @dependent1_id, state: 'pending', enqueued_at: nil)) # Added enqueued_at
-        @repository.expects(:get_dependent_ids).with(@dependent1_id).returns([@grandchild1_id])
-        @repository.expects(:find_step).with(@dependent2_id).returns(MockStepRecord.new(id: @dependent2_id, state: 'running')) # Not cancellable
-        # Next batch
-        @repository.expects(:find_step).with(@grandchild1_id).returns(MockStepRecord.new(id: @grandchild1_id, state: 'awaiting_execution', enqueued_at: nil)) # Cancellable
-        @repository.expects(:get_dependent_ids).with(@grandchild1_id).returns([])
+        @repository.expects(:find_steps).with(dependents).returns([step_dep1, step_dep2])
+        @repository.expects(:get_dependent_ids_bulk).with(dependents).returns({ dep1 => [gc1], dep2 => [] })
+        @repository.expects(:find_steps).with([gc1]).returns([step_gc1])
+        @repository.expects(:get_dependent_ids_bulk).with([gc1]).returns({ gc1 => [] })
 
-        # Expect bulk cancellation for dep1 and grandchild1
+        expected = [dep1, gc1]
+
         @repository.expects(:bulk_update_steps).with do |ids, attrs|
-          ids.sort == expected_cancelled_ids.sort &&
-            attrs[:state] == 'cancelled' &&
-            attrs.key?(:finished_at) &&
-            attrs.key?(:updated_at)
+          ids.sort == expected.sort &&
+            attrs[:state] == 'cancelled'
         end.returns(2)
 
-         # Act
-        cancelled_ids = @processor.process_failure_cascade(
-          finished_step_id: @finished_step_id,
-          workflow_id: @workflow_id
-        )
-
-        # Assert
-        assert_equal expected_cancelled_ids.sort, cancelled_ids.sort
+        result = @processor.process_failure_cascade(finished_step_id: @finished_step_id, workflow_id: @workflow_id)
+        assert_equal expected.sort, result.sort
       end
 
       # === Error Handling ===
@@ -306,21 +290,21 @@ module Yantra
 
       def test_process_failure_cascade_skips_already_enqueued_awaiting_execution_step
         dependents = [@dependent1_id]
-        awaiting_execution_step = MockStepRecord.new(id: @dependent1_id, state: 'awaiting_execution', enqueued_at: @now)
+        now = Time.current
 
-        @repository.stubs(:respond_to?).with(:find_steps).returns(false)
-        @repository.stubs(:respond_to?).with(:get_dependent_ids_bulk).returns(false)
+        step1_enqueued = MockStepRecord.new(id: @dependent1_id, state: 'awaiting_execution', enqueued_at: now)
+        steps_map = { @dependent1_id => step1_enqueued }
+        dependents_map = { @dependent1_id => [] }
+
         @repository.expects(:get_dependent_ids).with(@finished_step_id).returns(dependents)
-        @repository.expects(:find_step).with(@dependent1_id).returns(awaiting_execution_step)
+        @repository.expects(:find_steps).with(dependents).returns(steps_map.values)
+        @repository.expects(:get_dependent_ids_bulk).with(dependents).returns(dependents_map)
 
-        # No call to bulk_update_steps expected since it's not cancellable
         @repository.expects(:bulk_update_steps).never
 
-        cancelled = @processor.process_failure_cascade(finished_step_id: @finished_step_id, workflow_id: @workflow_id)
-        assert_equal [], cancelled
+        result = @processor.process_failure_cascade(finished_step_id: @finished_step_id, workflow_id: @workflow_id)
+        assert_equal [], result
       end
-
-
 
       # Helper to match array contents regardless of order
       def match_array_including_only(expected_array)

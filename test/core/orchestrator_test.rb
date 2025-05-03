@@ -367,16 +367,16 @@ module Yantra
           # 3. Publish step failed event
           @repo.expects(:find_step).with(@step_a_id).returns(step_failed).in_sequence(sequence) # For event payload
           @notifier.expects(:publish).with('yantra.step.failed', has_key(:error)).in_sequence(sequence)
-          # 4. Call process_failure_cascade_and_check_completion helper
-          @orchestrator.expects(:process_failure_cascade_and_check_completion).with(@step_a_id).in_sequence(sequence)
+          # 4. Call process_failure_dependents_and_check_completion helper
+          @orchestrator.expects(:process_failure_dependents_and_check_completion).with(@step_a_id).in_sequence(sequence)
 
           # Act
           @orchestrator.step_failed(@step_a_id, error_info)
         end
       end
 
-      # --- Test for process_failure_cascade_and_check_completion helper ---
-      def test_process_failure_cascade_and_check_completion_calls_processor_and_check
+      # --- Test for process_failure_dependents_and_check_completion helper ---
+      def test_process_failure_dependents_and_check_completion_calls_processor_and_check
         step_failed = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, state: :failed)
         cancelled_ids = [@step_b_id]
         sequence = Mocha::Sequence.new('failure_helper_flow')
@@ -394,7 +394,7 @@ module Yantra
         @orchestrator.expects(:check_workflow_completion).with(@workflow_id).in_sequence(sequence)
 
         # Act - Call the private helper method directly for testing
-        @orchestrator.send(:process_failure_cascade_and_check_completion, @step_a_id)
+        @orchestrator.send(:process_failure_dependents_and_check_completion, @step_a_id)
       end
 
 
@@ -493,7 +493,7 @@ module Yantra
           @repo.expects(:find_step).with(@step_a_id).returns(step_failed).in_sequence(sequence)
           @notifier.expects(:publish).with('yantra.step.failed', has_key(:error)).in_sequence(sequence)
 
-          @orchestrator.expects(:process_failure_cascade_and_check_completion)
+          @orchestrator.expects(:process_failure_dependents_and_check_completion)
             .with(@step_a_id).in_sequence(sequence)
 
           # Act
