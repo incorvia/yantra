@@ -55,11 +55,16 @@ module Yantra
 
             # Add stubs needed by StepExecutor's initializer validation checks
             # These are called when StepJob#step_executor calls StepExecutor.new
+            @mock_repository.stubs(:respond_to?).with(:update_step_attributes).returns(true)
+
             @mock_repository.stubs(:respond_to?).with(:find_step).returns(true)
             @mock_repository.stubs(:respond_to?).with(:update_step_error).returns(true)
             # Add stubs for other checks if StepExecutor initializer has them
             # @mock_orchestrator.stubs(:respond_to?).with(:...)
             # @mock_notifier.stubs(:respond_to?).with(:...)
+            @mock_orchestrator.stubs(:respond_to?).with(:step_starting).returns(true)
+            @mock_orchestrator.stubs(:respond_to?).with(:handle_post_processing).returns(true)
+            @mock_orchestrator.stubs(:respond_to?).with(:step_failed).returns(true)
             # --- <<< END CHANGED >>> ---
 
             @step_id = SecureRandom.uuid
@@ -176,25 +181,33 @@ module Yantra
 
           # --- <<< CHANGED: Test now verifies StepExecutor is called >>> ---
           def test_perform_does_nothing_if_step_starting_returns_false
-             # Arrange
-             # Let the real StepJob#step_executor run. It will create a real
-             # StepExecutor instance, which will use the @mock_orchestrator
-             # because Yantra::Core::Orchestrator.new is stubbed in setup.
+            # Arrange
+            # Provide a mock step record as `StepExecutor` fetches it before calling `step_starting`
+            mock_step_record = OpenStruct.new(
+              id: @step_id,
+              workflow_id: @workflow_id,
+              klass: @step_klass_name,
+              state: :pending,
+              performed_at: nil,
+              arguments: {},
+              retries: 0,
+              max_attempts: 3
+            )
 
-             # Expect step_starting to be called on the mock orchestrator and return false
-             @mock_orchestrator.expects(:step_starting).with(@step_id).returns(false)
+            # Let real executor run, but control orchestrator and repository behavior
+            @mock_repository.stubs(:find_step).with(@step_id).returns(mock_step_record)
+            @mock_orchestrator.expects(:step_starting).with(@step_id).returns(false)
 
-             # Expect StepExecutor#execute NOT to call these because it returns early
-             @mock_repository.expects(:find_step).never # Should not try to find step after starting fails
-             @mock_orchestrator.expects(:step_succeeded).never
-             @mock_orchestrator.expects(:step_failed).never
-             # We don't need to mock the executor itself anymore
+            # The following should never happen since step_starting returned false
+            @mock_repository.expects(:update_step_attributes).never
+            @mock_orchestrator.expects(:step_failed).never
+            @mock_orchestrator.expects(:step_succeeded).never
 
-             # Act
-             @async_job_instance.perform(@step_id, @workflow_id, @step_klass_name)
-
-             # Assert: Verification happens in teardown via Mocha expects/never
+            # Act
+            @async_job_instance.perform(@step_id, @workflow_id, @step_klass_name)
           end
+
+
           # --- <<< END CHANGED >>> ---
 
 

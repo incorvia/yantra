@@ -66,7 +66,7 @@ module Yantra
         # - Fetching step data (find_steps)
         # - Looping and attempting enqueue via worker_adapter
         # - Collecting successful IDs
-        # - Bulk updating successful IDs to ENQUEUED
+        # - Bulk updating successful IDs to set enqueued_at
         # - Publishing the bulk event
         begin
           Yantra.logger&.info { "[WorkflowRetryService] Delegating enqueue attempt to StepEnqueuer for steps: #{failed_step_ids.inspect}" }

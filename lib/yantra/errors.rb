@@ -23,7 +23,20 @@ module Yantra
     class PersistenceError        < Yantra::Error; end
     class WorkerError             < Yantra::Error; end
     class StepDefinitionError     < Yantra::Error; end
+    class InvalidWorkflowState    < Yantra::Error; end
+    class WorkflowError           < Yantra::Error; end
     class UpdateConflictError     < PersistenceError; end
+    class WorkflowDefinitionError < StandardError; end
+    class OrchestrationError      < StandardError; end
+
+    class EnqueueFailed < StandardError
+      attr_reader :failed_ids
+
+      def initialize(message = nil, failed_ids: [])
+        super(message)
+        @failed_ids = failed_ids
+      end
+    end
   end
 end
 

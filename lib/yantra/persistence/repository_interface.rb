@@ -32,11 +32,9 @@ module Yantra
       def find_step(step_id); raise NotImplementedError; end
       def find_steps(step_ids); raise NotImplementedError; end # Find multiple specific steps by their IDs
       def list_steps(workflow_id:, status: nil); raise NotImplementedError; end # Renamed from get_workflow_steps
-      def list_ready_steps(workflow_id:); raise NotImplementedError; end # Renamed from find_ready_steps
       def get_step_states(step_ids); raise NotImplementedError; end # Renamed from fetch_step_states
       def get_step_outputs(step_ids); raise NotImplementedError; end # Renamed from fetch_step_outputs
-      def running_step_count(workflow_id); raise NotImplementedError; end
-      def enqueued_step_count(workflow_id); raise NotImplementedError; end
+      def has_steps_in_states?(workflow_id:, states:); raise NotImplementedError; end
 
       # --- Write ---
       def create_step(step_instance); raise NotImplementedError; end # Renamed from persist_step
@@ -44,7 +42,6 @@ module Yantra
       def update_step_attributes(step_id, attributes_hash, expected_old_state: nil); raise NotImplementedError; end
       def bulk_update_steps(step_ids, attributes_hash); raise NotImplementedError; end # Updated param name
       def bulk_upsert_steps(updates_array); raise NotImplementedError; end
-      def bulk_cancel_steps(step_ids); raise NotImplementedError; end #change name of this to match bulk_update_steps
       def increment_step_retries(step_id); raise NotImplementedError; end
       def update_step_output(step_id, output); raise NotImplementedError; end # Renamed from record_step_output
       def update_step_error(step_id, error_hash); raise NotImplementedError; end # Renamed from record_step_error, updated param name

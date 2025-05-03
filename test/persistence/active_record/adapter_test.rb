@@ -36,74 +36,6 @@ module Yantra
             @workflow = create_workflow_record!(state: "running")
           end
 
-          # --- Tests for bulk_cancel_steps (Existing) ---
-          # [ ... existing bulk_cancel_steps tests remain unchanged ... ]
-          def test_bulk_cancel_steps_cancels_only_cancellable_states
-            # Arrange: Create jobs in various states
-            step_pending = create_step_record!(workflow_record: @workflow, state: "pending")
-            step_enqueued = create_step_record!(workflow_record: @workflow, state: "enqueued")
-            step_running = create_step_record!(workflow_record: @workflow, state: "running")
-            step_succeeded = create_step_record!(workflow_record: @workflow, state: "succeeded", finished_at: Time.current)
-            step_failed = create_step_record!(workflow_record: @workflow, state: "failed", finished_at: Time.current)
-            step_cancelled_already = create_step_record!(workflow_record: @workflow, state: "cancelled", finished_at: Time.current)
-
-            step_ids_to_cancel = [
-              step_pending.id, step_enqueued.id, step_running.id,
-              step_succeeded.id, step_failed.id, step_cancelled_already.id
-            ]
-            time_before_cancel = Time.current
-
-            # Act: Call the method under test
-            updated_count = @adapter.bulk_cancel_steps(step_ids_to_cancel)
-
-            # Assert: Check return value (count of *updated* records)
-            # Only pending and enqueued should be cancelled by the adapter method
-            assert_equal 2, updated_count, "Should return count of updated (pending/enqueued) jobs"
-
-            # Assert: Verify states of jobs in the database
-            assert_equal "cancelled", step_pending.reload.state
-            assert_equal "cancelled", step_enqueued.reload.state
-            assert_equal "running", step_running.reload.state # Running is not cancelled by default
-            assert_in_delta time_before_cancel, step_pending.finished_at, 1.0 # Check finished_at was set
-            assert_in_delta time_before_cancel, step_enqueued.finished_at, 1.0
-
-            # Assert: Verify non-cancellable jobs were untouched
-            assert_equal "succeeded", step_succeeded.reload.state
-            assert_equal "failed", step_failed.reload.state
-            assert_equal "cancelled", step_cancelled_already.reload.state
-          end
-
-          def test_bulk_cancel_steps_handles_empty_array
-            assert_equal 0, @adapter.bulk_cancel_steps([]), "Should return 0 for empty array"
-          end
-
-          def test_bulk_cancel_steps_handles_nil_input
-            assert_equal 0, @adapter.bulk_cancel_steps(nil), "Should return 0 for nil input"
-          end
-
-          def test_bulk_cancel_steps_handles_non_existent_ids
-            step_pending = create_step_record!(workflow_record: @workflow, state: "pending")
-            non_existent_id = SecureRandom.uuid
-            updated_count = @adapter.bulk_cancel_steps([step_pending.id, non_existent_id])
-            assert_equal 1, updated_count
-            assert_equal "cancelled", step_pending.reload.state
-          end
-
-          def test_bulk_cancel_steps_raises_persistence_error_on_db_error
-             step_pending = create_step_record!(workflow_record: @workflow, state: "pending")
-             step_ids = [step_pending.id]
-             # Stub update_all on the relation to raise error
-             mock_relation = Minitest::Mock.new
-             mock_relation.expect(:update_all, nil) { raise ::ActiveRecord::StatementInvalid, "DB Update Error" }
-             StepRecord.stub(:where, mock_relation) do
-               error = assert_raises(Yantra::Errors::PersistenceError) do
-                  @adapter.bulk_cancel_steps(step_ids)
-               end
-               assert_match(/Bulk job cancellation failed: DB Update Error/, error.message)
-             end
-             mock_relation.verify
-          end
-
           # --- Tests for create_steps_bulk ---
           # [ ... existing create_steps_bulk tests remain unchanged ... ]
           def test_create_steps_bulk_success
@@ -171,73 +103,6 @@ module Yantra
                end
                assert_match(/Bulk step insert failed: DB Insert Error/, error.message)
             end
-          end
-
-
-          # --- Tests for list_ready_steps ---
-          # [ ... other list_ready_steps tests remain unchanged ... ]
-          def test_list_ready_steps_no_deps
-            step_a = create_step_record!(workflow_record: @workflow, state: "pending")
-            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
-            assert_equal [step_a.id], ready_ids
-          end
-
-          def test_list_ready_steps_one_dep_succeeded
-            step_a = create_step_record!(workflow_record: @workflow, state: "succeeded")
-            step_b = create_step_record!(workflow_record: @workflow, state: "pending")
-            create_dependency!(step_b, step_a)
-            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
-            assert_equal [step_b.id], ready_ids
-          end
-
-          def test_list_ready_steps_one_dep_not_succeeded
-            step_a = create_step_record!(workflow_record: @workflow, state: "running") # Not succeeded
-            step_b = create_step_record!(workflow_record: @workflow, state: "pending")
-            create_dependency!(step_b, step_a)
-            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
-            assert_empty ready_ids
-          end
-
-          def test_list_ready_steps_multiple_deps_all_succeeded
-            step_a = create_step_record!(workflow_record: @workflow, state: "succeeded")
-            step_b = create_step_record!(workflow_record: @workflow, state: "succeeded")
-            step_c = create_step_record!(workflow_record: @workflow, state: "pending")
-            create_dependency!(step_c, step_a)
-            create_dependency!(step_c, step_b)
-            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
-            assert_equal [step_c.id], ready_ids
-          end
-
-          def test_list_ready_steps_multiple_deps_one_not_succeeded
-            step_a = create_step_record!(workflow_record: @workflow, state: "succeeded")
-            step_b = create_step_record!(workflow_record: @workflow, state: "pending") # Not succeeded
-            step_c = create_step_record!(workflow_record: @workflow, state: "pending")
-            create_dependency!(step_c, step_a)
-            create_dependency!(step_c, step_b)
-
-            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
-
-            # --- FIXED Assertion ---
-            # Step C is not ready because Step B is pending.
-            # Step B *is* ready because it's pending and has no prerequisites.
-            assert_equal [step_b.id], ready_ids, "Expected only step B to be ready"
-            # --- END FIX ---
-          end
-
-          def test_list_ready_steps_returns_only_pending_steps
-            step_a = create_step_record!(workflow_record: @workflow, state: "succeeded") # Prereq
-            step_b = create_step_record!(workflow_record: @workflow, state: "pending") # Ready and Pending
-            step_c = create_step_record!(workflow_record: @workflow, state: "enqueued") # Ready but Enqueued
-            create_dependency!(step_b, step_a)
-            create_dependency!(step_c, step_a)
-            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
-            assert_equal [step_b.id], ready_ids
-          end
-
-          def test_list_ready_steps_handles_no_pending_steps
-            create_step_record!(workflow_record: @workflow, state: "succeeded")
-            ready_ids = @adapter.list_ready_steps(workflow_id: @workflow.id)
-            assert_empty ready_ids
           end
 
           # --- Tests for update_..._attributes error/edge cases ---
@@ -374,7 +239,7 @@ module Yantra
                 retries: step1.retries,
                 created_at: step1.created_at, # Keep original created_at
                 # --- END ADDED ---
-                state: Yantra::Core::StateMachine::ENQUEUED.to_s,
+                state: Yantra::Core::StateMachine::SCHEDULING.to_s,
                 enqueued_at: time_for_update,
                 delayed_until: nil, # Explicitly nil for immediate
                 updated_at: time_for_update
@@ -388,7 +253,7 @@ module Yantra
                 retries: step2.retries,
                 created_at: step2.created_at, # Keep original created_at
                 # --- END ADDED ---
-                state: Yantra::Core::StateMachine::ENQUEUED.to_s,
+                state: Yantra::Core::StateMachine::SCHEDULING.to_s,
                 enqueued_at: time_for_update, # Also set enqueued_at
                 delayed_until: delay_time,    # Set future time
                 updated_at: time_for_update
@@ -408,13 +273,13 @@ module Yantra
             step3_reloaded = StepRecord.find(step3_id) # Reload step 3
 
             # Check Step 1 (immediate)
-            assert_equal 'enqueued', step1_updated.state
+            assert_equal 'scheduling', step1_updated.state
             assert_in_delta time_for_update, step1_updated.enqueued_at, 1.second
             assert_nil step1_updated.delayed_until
             assert_in_delta time_for_update, step1_updated.updated_at, 1.second
 
             # Check Step 2 (delayed)
-            assert_equal 'enqueued', step2_updated.state
+            assert_equal 'scheduling', step2_updated.state
             assert_in_delta time_for_update, step2_updated.enqueued_at, 1.second
             refute_nil step2_updated.delayed_until
             assert_in_delta delay_time, step2_updated.delayed_until, 1.second

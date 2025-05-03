@@ -122,9 +122,10 @@ module Yantra
 
       # Test input validation
       def test_create_workflow_raises_error_for_invalid_class
-        assert_raises(ArgumentError, /must be a Class inheriting from Yantra::Workflow/) do
-          Client.create_workflow(NotAWorkflow) # Pass a class that doesn't inherit
+        error = assert_raises(ArgumentError) do
+          Client.create_workflow(NotAWorkflow)
         end
+        assert_match(/must be a subclass of Yantra::Workflow/, error.message)
       end
 
       def test_cancel_workflow_publishes_event_on_success
@@ -189,7 +190,12 @@ module Yantra
               mock_repo.expect(:list_steps, mock_steps_to_cancel, workflow_id: workflow_id)
 
               # 6. Bulk cancel steps
-              mock_repo.expect(:bulk_cancel_steps, step_ids_to_cancel.size, [step_ids_to_cancel])
+              mock_repo.expect(:bulk_update_steps, step_ids_to_cancel.size) do |ids, attrs|
+                ids == step_ids_to_cancel &&
+                  attrs[:state] == Yantra::Core::StateMachine::CANCELLED.to_s &&
+                  attrs[:finished_at] == @frozen_time &&
+                  attrs[:updated_at] == @frozen_time
+              end
               # --- End Expectations ---
 
               # Act
