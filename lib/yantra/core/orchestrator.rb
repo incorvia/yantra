@@ -294,6 +294,9 @@ module Yantra
 
         # 4. Call StepEnqueuer
         step_enqueuer.call(workflow_id: workflow_id, step_ids_to_attempt: initial_step_ids)
+      rescue Yantra::Errors::EnqueueFailed => e
+        # Let this propagate – the caller needs to know enqueueing failed
+        raise e
       rescue StandardError => e
         log_error "Error enqueuing initial steps for #{workflow_id}: #{e.class} - #{e.message}"
       end

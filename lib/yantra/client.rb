@@ -64,6 +64,9 @@ module Yantra
     # Initiates the execution of a previously created workflow.
     def self.start_workflow(workflow_id)
       Core::Orchestrator.new.start_workflow(workflow_id)
+    rescue Yantra::Errors::EnqueueFailed => e
+      # Let this propagate – the caller needs to know enqueueing failed
+      raise e
     rescue StandardError => e
       log_error("Error starting workflow #{workflow_id}: #{e.message}")
       false # Or re-raise depending on desired behavior

@@ -53,6 +53,14 @@ class IntegrationStepFails < Yantra::Step
   def perform(msg: 'F'); puts "INTEGRATION_TEST: Job Fails running - WILL FAIL"; raise StandardError, 'Integration job failed!'; end
 end
 
+class IntegrationStepDelayedFails < Yantra::Step
+  def self.yantra_max_attempts; 1; end
+  def perform(msg: 'F')
+    puts "INTEGRATION_TEST: Delayed Job Fails running - WILL FAIL"
+    raise StandardError, 'Delayed step intentionally failed!'
+  end
+end
+
 class IntegrationJobRetry < Yantra::Step
   @@retry_test_attempts = Hash.new(0) # Keep class variable
   def self.reset_attempts!; @@retry_test_attempts = Hash.new(0); end
@@ -161,6 +169,13 @@ class DelayedStepWorkflow < Yantra::Workflow
     step_a_ref = run IntegrationStepA, name: :start_step, params: { msg: 'Start Delayed' }
     # Step E runs 5 minutes after Step A finishes
     run IntegrationStepE, name: :delayed_step, after: step_a_ref, delay: 5.minutes
+  end
+end
+
+class DelayedFailureWorkflow < Yantra::Workflow
+  def perform
+    step_a = run IntegrationStepA, name: :start_step, params: { msg: 'Start' }
+    run IntegrationStepDelayedFails, name: :fail_later, after: step_a, delay: 5.minutes
   end
 end
 
@@ -1014,6 +1029,102 @@ module Yantra
         assert_equal step_e_delayed.id, @test_notifier.published_events[1][:payload][:step_id]
         assert_equal 'yantra.workflow.succeeded', @test_notifier.published_events[2][:name]
       end
+
+       def test_enqueue_failure_recovered_by_retry_service
+          # Arrange: Patch StepEnqueuer to raise EnqueueFailed before workflow creation
+          Yantra::Core::StepEnqueuer.any_instance.stubs(:call).raises(Yantra::Errors::EnqueueFailed.new('Test enqueue fail'))
+
+          workflow_id = Client.create_workflow(LinearSuccessWorkflow)
+          step_a = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepA' }
+          refute_nil step_a
+
+          # Act: Start the workflow, expect enqueue failure
+          assert_raises Yantra::Errors::EnqueueFailed do
+            Client.start_workflow(workflow_id)
+          end
+
+          # Manually clear stub for retry
+          Yantra::Core::StepEnqueuer.any_instance.unstub(:call)
+
+          # Verify state is still pending with no enqueued_at
+          step_a.reload
+          assert_equal 'pending', step_a.state
+          assert_nil step_a.enqueued_at
+
+          # Manually mark step and workflow as failed to enable retry
+          repository.update_step_attributes(
+            step_a.id,
+            {
+              state: 'failed',
+              error: { class: 'EnqueueFailed', message: 'Test enqueue fail' },
+              retries: 1
+            },
+            expected_old_state: 'pending'
+          )
+
+          repository.update_workflow_attributes(
+            workflow_id,
+            { state: 'failed', has_failures: true },
+            expected_old_state: 'running'
+          )
+
+          # Retry failed workflow
+          reenqueued = Client.retry_failed_steps(workflow_id)
+          assert_equal [step_a.id], reenqueued
+
+          # Run job
+          perform_enqueued_jobs
+          step_a.reload
+          assert_equal 'succeeded', step_a.state
+        end
+
+       def test_delayed_step_failure_causes_workflow_failure
+         workflow_id = Client.create_workflow(DelayedFailureWorkflow)
+         step_a = repository.list_steps(workflow_id: workflow_id).find { |s| s.klass == 'IntegrationStepA' }
+         step_fail = repository.list_steps(workflow_id: workflow_id).find { |s| s.klass == 'IntegrationStepDelayedFails' }
+
+         Client.start_workflow(workflow_id)
+         perform_enqueued_jobs # Run A
+
+         assert_equal 'scheduling', step_fail.reload.state
+         assert step_fail.enqueued_at
+         assert_equal 1, enqueued_jobs.size
+
+         travel_to(step_fail.enqueued_at + 5.minutes + 1.second) do
+           perform_enqueued_jobs
+         end
+
+         step_fail.reload
+         assert_equal 'failed', step_fail.state
+         assert_equal 'failed', repository.find_workflow(workflow_id).state
+       end
+
+        def test_delayed_step_runs_after_workflow_cancelled
+          workflow_id = Client.create_workflow(DelayedStepWorkflow)
+          step_a = repository.list_steps(workflow_id: workflow_id).find { |s| s.klass == 'IntegrationStepA' }
+          step_e = repository.list_steps(workflow_id: workflow_id).find { |s| s.klass == 'IntegrationStepE' }
+
+          Client.start_workflow(workflow_id)
+          perform_enqueued_jobs # Run A
+
+          assert_equal 'scheduling', step_e.reload.state
+          assert step_e.enqueued_at
+
+          # Cancel workflow before delayed step runs
+          cancel_result = Client.cancel_workflow(workflow_id)
+          assert cancel_result
+          assert_equal 'cancelled', repository.find_workflow(workflow_id).reload.state
+
+          # Act: Let delayed step run anyway
+          travel_to(step_e.enqueued_at + 5.minutes + 1.second) do
+            perform_enqueued_jobs
+          end
+
+          step_e.reload
+          assert_equal 'succeeded', step_e.state, "Even though workflow was cancelled, delayed step should still run"
+        end
+
+
 
     end
 
