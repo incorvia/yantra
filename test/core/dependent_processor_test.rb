@@ -288,6 +288,40 @@ module Yantra
         end
       end
 
+      def test_process_successors_enqueues_stuck_scheduling_step
+        dependents = [@dependent1_id]
+        parents_map = { @dependent1_id => [@finished_step_id] }
+        all_involved_ids = [@dependent1_id, @finished_step_id]
+
+        stuck_step = MockStepRecord.new(id: @dependent1_id, state: 'scheduling', enqueued_at: nil)
+        succeeded_parent = MockStepRecord.new(id: @finished_step_id, state: 'succeeded')
+
+        @repository.expects(:get_dependent_ids).with(@finished_step_id).returns(dependents)
+        @repository.expects(:get_dependency_ids_bulk).with(dependents).returns(parents_map)
+        @repository.expects(:find_steps).with(all_involved_ids).returns([stuck_step, succeeded_parent])
+        @step_enqueuer.expects(:call).with(workflow_id: @workflow_id, step_ids_to_attempt: [@dependent1_id])
+
+        @processor.process_successors(finished_step_id: @finished_step_id, workflow_id: @workflow_id)
+      end
+
+      def test_process_failure_cascade_skips_already_enqueued_scheduling_step
+        dependents = [@dependent1_id]
+        scheduling_step = MockStepRecord.new(id: @dependent1_id, state: 'scheduling', enqueued_at: @now)
+
+        @repository.stubs(:respond_to?).with(:find_steps).returns(false)
+        @repository.stubs(:respond_to?).with(:get_dependent_ids_bulk).returns(false)
+        @repository.expects(:get_dependent_ids).with(@finished_step_id).returns(dependents)
+        @repository.expects(:find_step).with(@dependent1_id).returns(scheduling_step)
+
+        # No call to bulk_update_steps expected since it's not cancellable
+        @repository.expects(:bulk_update_steps).never
+
+        cancelled = @processor.process_failure_cascade(finished_step_id: @finished_step_id, workflow_id: @workflow_id)
+        assert_equal [], cancelled
+      end
+
+
+
       # Helper to match array contents regardless of order
       def match_array_including_only(expected_array)
         ->(actual_array) { actual_array.is_a?(Array) && actual_array.sort == expected_array.sort }
