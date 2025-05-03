@@ -1031,62 +1031,76 @@ module Yantra
       end
 
       def test_enqueue_failure_is_transient_and_recovered_on_retry
-          # Arrange: Patch worker_adapter.enqueue to simulate EnqueueFailed after step is set to scheduling
-          Yantra.worker_adapter.stubs(:enqueue).raises(Yantra::Errors::EnqueueFailed.new('Simulated enqueue failure'))
+        # Arrange: Patch worker_adapter.enqueue to simulate EnqueueFailed after step is set to scheduling
+        Yantra.worker_adapter.stubs(:enqueue).raises(Yantra::Errors::EnqueueFailed.new('Simulated enqueue failure'))
 
-          workflow_id = Client.create_workflow(LinearSuccessWorkflow)
-          step_a = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepA' }
-          refute_nil step_a
+        workflow_id = Client.create_workflow(LinearSuccessWorkflow)
+        step_a = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepA' }
+        step_b = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepB' }
+        refute_nil step_a
+        refute_nil step_b
 
-          # Act: Start the workflow, expect enqueue failure
-          assert_raises Yantra::Errors::EnqueueFailed do
-            Client.start_workflow(workflow_id)
-          end
+        # Manually mark step A as scheduling (simulate the orchestrator path)
+        repository.update_step_attributes(step_a.id, { state: 'scheduling' }, expected_old_state: 'pending')
 
-          # Cleanup: Unstub the enqueue failure for retry attempt
-          Yantra.worker_adapter.unstub(:enqueue)
+        # Manually run executor to simulate Step A execution and enqueue failure
+        executor = Yantra::Core::StepExecutor.new(
+          repository: Yantra.repository,
+          orchestrator: Yantra::Core::Orchestrator.new,
+          notifier: Yantra.notifier,
+          retry_handler_class: Yantra::Worker::RetryHandler,
+          logger: Yantra.logger
+        )
 
-          # Step should be stuck in scheduling with no enqueued_at
-          step_a.reload
-          assert_equal 'scheduling', step_a.state
-          assert_nil step_a.enqueued_at
-
-          # Simulate retry by re-running executor manually (not Client.start_workflow)
-          step_job = Yantra::Worker::ActiveJob::StepJob.new
-          step_job.perform(step_a.id, workflow_id, step_a.klass)
-
-          step_a.reload
-          assert_equal 'succeeded', step_a.state, "Step A should succeed after transient enqueue failure"
+        assert_raises Yantra::Errors::EnqueueFailed do
+          executor.execute(step_id: step_a.id, workflow_id: workflow_id, step_klass_name: step_a.klass, job_executions: 1)
         end
 
-        def test_delayed_step_runs_after_workflow_cancelled
-          workflow_id = Client.create_workflow(DelayedStepWorkflow)
-          step_a = repository.list_steps(workflow_id: workflow_id).find { |s| s.klass == 'IntegrationStepA' }
-          step_e = repository.list_steps(workflow_id: workflow_id).find { |s| s.klass == 'IntegrationStepE' }
+        step_a.reload
+        step_b.reload
+        assert_equal 'post_processing', step_a.state, "Step A should go to post_processing since enqueueing B failed"
+        assert step_a.performed_at, "Step A should have performed_at set even if enqueueing B failed"
+        assert_equal 'scheduling', step_b.state, "Step B should be in scheduling state after A"
+        assert_nil step_b.enqueued_at, "Step B should not have enqueued_at due to enqueue failure"
 
-          Client.start_workflow(workflow_id)
-          perform_enqueued_jobs # Run A
+        # Cleanup: Unstub enqueue and retry by re-executing Step A
+        Yantra.worker_adapter.unstub(:enqueue)
 
-          assert_equal 'scheduling', step_e.reload.state
-          assert step_e.enqueued_at
+        # Rerun post-processing phase via executor (performs handle_post_processing)
+        # Because performed_at is already set, it will go straight to post-processing
+        executor.execute(step_id: step_a.id, workflow_id: workflow_id, step_klass_name: step_a.klass, job_executions: 2)
 
-          # Cancel workflow before delayed step runs
-          cancel_result = Client.cancel_workflow(workflow_id)
-          assert cancel_result
-          assert_equal 'cancelled', repository.find_workflow(workflow_id).reload.state
+        step_b.reload
+        assert_equal 'scheduling', step_b.state
+        refute_nil step_b.enqueued_at, "Step B should now have enqueued_at after retry"
+      end
 
-          # Act: Let delayed step run anyway
-          travel_to(step_e.enqueued_at + 5.minutes + 1.second) do
-            perform_enqueued_jobs
-          end
 
-          step_e.reload
-          assert_equal 'succeeded', step_e.state, "Even though workflow was cancelled, delayed step should still run"
+
+      def test_delayed_step_runs_after_workflow_cancelled
+        workflow_id = Client.create_workflow(DelayedStepWorkflow)
+        step_a = repository.list_steps(workflow_id: workflow_id).find { |s| s.klass == 'IntegrationStepA' }
+        step_e = repository.list_steps(workflow_id: workflow_id).find { |s| s.klass == 'IntegrationStepE' }
+
+        Client.start_workflow(workflow_id)
+        perform_enqueued_jobs # Run A
+
+        assert_equal 'scheduling', step_e.reload.state
+        assert step_e.enqueued_at
+
+        # Cancel workflow before delayed step runs
+        cancel_result = Client.cancel_workflow(workflow_id)
+        assert cancel_result
+        assert_equal 'cancelled', repository.find_workflow(workflow_id).reload.state
+
+        # Act: Let delayed step run anyway
+        travel_to(step_e.enqueued_at + 5.minutes + 1.second) do
+          perform_enqueued_jobs
         end
 
-
-
+        step_e.reload
+        assert_equal 'succeeded', step_e.state, "Even though workflow was cancelled, delayed step should still run"
+      end
     end
-
   end # if defined?(YantraActiveRecordTestCase) ...
 end # module Yantra
