@@ -287,7 +287,7 @@ module Yantra
         end
 
         wf = repository.find_workflow(workflow_id)
-        return if workflow_already_terminal?(wf)
+        return if workflow_completed?(wf)
 
         final_state = determine_final_workflow_state(workflow_id)
         update_and_finalize_workflow(workflow_id, final_state)
@@ -323,7 +323,7 @@ module Yantra
         repository.has_steps_in_states?(workflow_id: workflow_id, states: wip_states)
       end
 
-      def workflow_already_terminal?(workflow)
+      def workflow_completed?(workflow)
         return true if workflow.nil?
         terminal_states = [StateMachine::SUCCEEDED, StateMachine::FAILED, StateMachine::CANCELLED]
         terminal_states.include?(workflow.state.to_sym)
