@@ -1,46 +1,37 @@
 # lib/yantra/core/workflow_retry_service.rb
-# Refactored to use StepEnqueuer
+# frozen_string_literal: true
 
 require_relative '../errors'
 require_relative 'state_machine'
-require_relative 'step_enqueuer' # <<< Add require for the new service
+require_relative 'step_enqueuer'
 
 module Yantra
   module Core
     class WorkflowRetryService
-      # No longer need direct access to worker_adapter or notifier here
       attr_reader :workflow_id, :repository, :step_enqueuer
 
-      # Updated initializer takes the enqueuing service
       def initialize(workflow_id:, repository:, worker_adapter:, notifier:)
         @workflow_id = workflow_id
         @repository  = repository
-        # Instantiate the enqueuing service, passing dependencies
         @step_enqueuer = StepEnqueuer.new(
           repository: repository,
           worker_adapter: worker_adapter,
           notifier: notifier
         )
 
-        # Validation checks (repository still needs bulk_update_steps)
         unless repository&.respond_to?(:list_steps) && repository&.respond_to?(:bulk_update_steps)
           raise ArgumentError, "WorkflowRetryService requires a repository implementing #list_steps and #bulk_update_steps"
         end
-        # No longer need to validate worker_adapter here directly
       end
 
-      # Finds failed steps, resets them to pending, and delegates enqueuing
-      # to StepEnqueuer.
-      # Returns the number of steps successfully re-enqueued by the service.
       def call
-        failed_steps = find_failed_steps # Still need step objects to get IDs
+        failed_steps = find_failed_steps
         return 0 if failed_steps.empty?
 
         failed_step_ids = failed_steps.map(&:id)
-        Yantra.logger&.info { "[WorkflowRetryService] Attempting retry for #{failed_steps.size} failed steps: #{failed_step_ids}" }
+        log_info "Attempting retry for #{failed_step_ids.size} failed steps: #{failed_step_ids.inspect}"
 
-        # 1. Bulk Reset State to PENDING and clear fields
-        reset_to_pending_attrs = {
+        reset_attrs = {
           state:       StateMachine::PENDING,
           error:       nil,
           output:      nil,
@@ -50,51 +41,41 @@ module Yantra
         }
 
         begin
-          update_success = repository.bulk_update_steps(failed_step_ids, reset_to_pending_attrs)
-          unless update_success
-            Yantra.logger&.warn { "[WorkflowRetryService] Bulk update to pending might have failed or reported issues for steps: #{failed_step_ids.inspect}" }
+          updated = repository.bulk_update_steps(failed_step_ids, reset_attrs)
+          unless updated
+            log_warn "Bulk update to PENDING reported issues for steps: #{failed_step_ids.inspect}"
             return 0
           end
-          Yantra.logger&.info { "[WorkflowRetryService] Bulk reset state to PENDING for steps: #{failed_step_ids.inspect}" }
+          log_info "Reset state to PENDING for steps: #{failed_step_ids.inspect}"
         rescue Yantra::Errors::PersistenceError => e
-          Yantra.logger&.error { "[WorkflowRetryService] Failed to bulk reset state to PENDING for steps #{failed_step_ids}: #{e.message}" }
+          log_error "Failed to reset steps to PENDING: #{e.message}"
           return 0
         end
 
-        # --- 2. Delegate Enqueuing to the Service ---
-        # The StepEnqueuer will handle:
-        # - Fetching step data (find_steps)
-        # - Looping and attempting enqueue via worker_adapter
-        # - Collecting successful IDs
-        # - Bulk updating successful IDs to set enqueued_at
-        # - Publishing the bulk event
         begin
-          Yantra.logger&.info { "[WorkflowRetryService] Delegating enqueue attempt to StepEnqueuer for steps: #{failed_step_ids.inspect}" }
-          # Pass the IDs of the steps that are now pending and ready for retry
-          reenqueued_count = @step_enqueuer.call(
-            workflow_id: workflow_id,
-            step_ids_to_attempt: failed_step_ids
-          )
-          Yantra.logger&.info { "[WorkflowRetryService] StepEnqueuer reported #{reenqueued_count} steps successfully enqueued."}
-          return reenqueued_count # Return the count reported by the service
+          log_info "Enqueuing steps through StepEnqueuer..."
+          count = step_enqueuer.call(workflow_id: workflow_id, step_ids_to_attempt: failed_step_ids)
+          log_info "Successfully enqueued #{count} steps."
+          count
         rescue StandardError => e
-           # Catch errors from the enqueuing service itself
-           Yantra.logger&.error { "[WorkflowRetryService] Error during StepEnqueuer call: #{e.class} - #{e.message}" }
-           return 0 # Indicate failure if the service call failed
+          log_error "StepEnqueuer call failed: #{e.class} - #{e.message}"
+          0
         end
-        # --- End Delegation ---
-
-      end # end call
+      end
 
       private
 
-      # Finds all failed steps for this workflow (Implementation remains the same)
       def find_failed_steps
-        repository.list_steps(workflow_id:, status: :failed)
+        repository.list_steps(workflow_id: workflow_id, status: :failed)
       rescue => e
-        Yantra.logger&.error { "[WorkflowRetryService] Error fetching failed steps for #{workflow_id}: #{e.message}" }
+        log_error "Error fetching failed steps for #{workflow_id}: #{e.message}"
         []
       end
+
+      def log_info(msg);  Yantra.logger&.info  { "[WorkflowRetryService] #{msg}" }; end
+      def log_warn(msg);  Yantra.logger&.warn  { "[WorkflowRetryService] #{msg}" }; end
+      def log_error(msg); Yantra.logger&.error { "[WorkflowRetryService] #{msg}" }; end
     end
   end
 end
+
