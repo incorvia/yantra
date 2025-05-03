@@ -77,7 +77,7 @@ module Yantra
       end
 
       # Can a step in this state transition to RUNNING?
-      def self.can_start?(state_symbol)
+      def self.eligible_for_perform?(state_symbol)
         STARTABLE_STATES.include?(state_symbol&.to_sym)
       end
 

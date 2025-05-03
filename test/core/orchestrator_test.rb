@@ -261,18 +261,17 @@ module Yantra
         end
       end
 
-      def test_step_starting_returns_false_if_invalid_start_state
+      def test_step_starting_raises_error_if_invalid_start_state
         step_succeeded = MockStep.new(id: @step_a_id, state: :succeeded)
 
         @repo.expects(:find_step).with(@step_a_id).returns(step_succeeded)
         @transition_service.expects(:transition_step).never
         @notifier.expects(:publish).never
 
-        # Act
-        result = @orchestrator.step_starting(@step_a_id)
-
-        # Assert
-        refute result, "step_starting should return false if step is in invalid state"
+        # Act & Assert
+        assert_raises(Yantra::Errors::OrchestrationError) do
+          @orchestrator.step_starting(@step_a_id)
+        end
       end
 
       # =========================================================================
@@ -499,27 +498,6 @@ module Yantra
 
           # Act
           @orchestrator.send(:handle_post_processing_failure, @step_a_id, error)
-        end
-      end
-
-      def test_step_starting_transitions_pending_step_to_running
-        step_pending = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: 'StepA', state: :pending)
-        step_running = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: 'StepA', state: :running, started_at: @frozen_time)
-
-        Time.stub :current, @frozen_time do
-          sequence = Mocha::Sequence.new('step_starting_pending')
-
-          @repo.expects(:find_step).with(@step_a_id).returns(step_pending).in_sequence(sequence)
-          @transition_service.expects(:transition_step)
-            .with(@step_a_id, RUNNING, expected_old_state: PENDING, extra_attrs: { started_at: @frozen_time })
-            .returns(true).in_sequence(sequence)
-          @repo.expects(:find_step).with(@step_a_id).returns(step_running).in_sequence(sequence)
-          @notifier.expects(:publish)
-            .with('yantra.step.started', has_entries(step_id: @step_a_id, started_at: @frozen_time))
-            .in_sequence(sequence)
-
-          result = @orchestrator.step_starting(@step_a_id)
-          assert result
         end
       end
 

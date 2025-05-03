@@ -79,9 +79,9 @@ module Yantra
         current_state_sym = step.state.to_sym
 
         # Check if the step is in a state allowed to start
-        unless StateMachine.can_start?(current_state_sym)
-          log_warn "Step #{step_id} in invalid start state: #{current_state_sym}"
-          return false
+        unless StateMachine.eligible_for_perform?(current_state_sym)
+  raise Yantra::Errors::OrchestrationError,
+        "Step #{step_id} in invalid state for execution: #{step.state}."
         end
 
         # If already running, it's an idempotent success
