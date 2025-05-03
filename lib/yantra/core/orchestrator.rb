@@ -17,7 +17,7 @@ module Yantra
     # Uses DependentProcessor and StateTransitionService.
     class Orchestrator
       attr_reader :repository, :worker_adapter, :notifier, :step_enqueuer,
-                  :dependent_processor, :transition_service # Added transition_service
+        :dependent_processor, :transition_service # Added transition_service
 
       def initialize(repository: nil, worker_adapter: nil, notifier: nil)
         @repository     = repository     || Yantra.repository
@@ -70,39 +70,17 @@ module Yantra
       # Marks a step as starting its execution.
       def step_starting(step_id)
         log_info "Starting step #{step_id}"
-        step = repository.find_step(step_id)
-        unless step
-            log_warn "Step #{step_id} not found when attempting to start."
-            return false
-        end
 
-        current_state_sym = step.state.to_sym
+        step = find_step_for_start!(step_id)
+        return false unless startable_state?(step)
 
-        # Check if the step is in a state allowed to start
-        unless StateMachine.eligible_for_perform?(current_state_sym)
-  raise Yantra::Errors::OrchestrationError,
-        "Step #{step_id} in invalid state for execution: #{step.state}."
-        end
+        return true if already_running?(step)
 
-        # If already running, it's an idempotent success
-        return true if current_state_sym == StateMachine::RUNNING
+        transitioned = transition_step_to_running(step_id, step)
+        return true if transitioned
 
-        updated = transition_service.transition_step(
-          step_id,
-          StateMachine::RUNNING,
-          # Pass the actual current state as expectation for optimistic lock
-          expected_old_state: current_state_sym,
-          extra_attrs: { started_at: Time.current }
-        )
-
-        if updated
-          publish_step_started_event(step_id)
-          true
-        else
-          # Log handled by transition_service, check if it's now running anyway
-          (repository.find_step(step_id)&.state.to_s == StateMachine::RUNNING.to_s)
-        end
-        # --- END MODIFIED ---
+        # Check if step is now running (possible race from outside)
+        running_after_retry?(step_id)
       end
 
       # Handles the successful completion of a step's core logic.
@@ -170,28 +148,28 @@ module Yantra
 
       # Handles failure during post-processing.
       def handle_post_processing_failure(step_id, error)
-         log_error "Handling failure during post-processing for step #{step_id}."
-         error_info = format_error(error)
-         finished_at = Time.current
+        log_error "Handling failure during post-processing for step #{step_id}."
+        error_info = format_error(error)
+        finished_at = Time.current
 
-         # --- MODIFIED: Use Transition Service ---
-         updated = transition_service.transition_step(
-            step_id,
-            StateMachine::FAILED,
-            expected_old_state: StateMachine::POST_PROCESSING,
-            extra_attrs: { error: error_info, finished_at: finished_at }
-         )
-         # --- END MODIFIED ---
+        # --- MODIFIED: Use Transition Service ---
+        updated = transition_service.transition_step(
+          step_id,
+          StateMachine::FAILED,
+          expected_old_state: StateMachine::POST_PROCESSING,
+          extra_attrs: { error: error_info, finished_at: finished_at }
+        )
+        # --- END MODIFIED ---
 
-         # Log handled by transition_service if update failed due to state mismatch
-         # log_failure_state_update(step_id) unless updated # Removed
+        # Log handled by transition_service if update failed due to state mismatch
+        # log_failure_state_update(step_id) unless updated # Removed
 
-         # Always set flag and publish event based on intent
-         mark_workflow_as_failed(step_id)
-         publish_step_failed_event(step_id, error_info, finished_at)
+        # Always set flag and publish event based on intent
+        mark_workflow_as_failed(step_id)
+        publish_step_failed_event(step_id, error_info, finished_at)
 
-         # Trigger Dependent Cancellation & Completion Check
-         process_failure_dependents_and_check_completion(step_id)
+        # Trigger Dependent Cancellation & Completion Check
+        process_failure_dependents_and_check_completion(step_id)
 
       rescue StandardError => e # Catch errors during failure handling itself
         log_error("Error during handle_post_processing_failure for step #{step_id}: #{e.class} - #{e.message}\n#{e.backtrace.take(5).join("\n")}")
@@ -221,7 +199,7 @@ module Yantra
 
       # Formats an exception for storage
       def format_error(error)
-         { class: error.class.name, message: error.message, backtrace: error.backtrace&.first(10) }
+        { class: error.class.name, message: error.message, backtrace: error.backtrace&.first(10) }
       end
 
       # Validates essential collaborators.
@@ -347,6 +325,48 @@ module Yantra
           log_warn "Failed to mark workflow #{workflow_id} as #{final_state}."
         end
       end
+
+      def find_step_for_start!(step_id)
+        step = repository.find_step(step_id)
+        unless step
+          log_warn "Step #{step_id} not found when attempting to start."
+          return nil
+        end
+        step
+      end
+
+      def startable_state?(step)
+        state_sym = step.state.to_sym
+        if StateMachine.eligible_for_perform?(state_sym)
+          true
+        else
+          raise Yantra::Errors::OrchestrationError,
+            "Step #{step.id} in invalid state for execution: #{step.state}."
+        end
+      end
+
+      def already_running?(step)
+        step.state.to_sym == StateMachine::RUNNING
+      end
+
+      def transition_step_to_running(step_id, step)
+        transition_service.transition_step(
+          step_id,
+          StateMachine::RUNNING,
+          expected_old_state: step.state.to_sym,
+          extra_attrs: { started_at: Time.current }
+        ).tap do |success|
+          publish_step_started_event(step_id) if success
+        end
+      end
+
+
+      def running_after_retry?(step_id)
+        repository.find_step(step_id)&.state.to_s == StateMachine::RUNNING.to_s
+      end
+
+
+
 
       # --- Event Publishing Helpers (Restored Full Format) ---
       def publish_event(name, payload)
