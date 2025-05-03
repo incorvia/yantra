@@ -35,14 +35,20 @@ Yantra employs a layered architecture to separate concerns (core logic, persiste
 | (Defines Wf/Jobs) |     | (Public API)        |     | (Orchestration, State) |
 +-------------------+     +---------------------+     +--------------------+
                                                       |
-                                                      | Uses Interfaces
+                                                      | Uses Interfaces & Services
                                                       V
-+----------------------------+     +----------------------------+
-| Yantra::Persistence::Repo  |     | Yantra::Worker::Adapter    |
-| (Interface)                |     | (Interface)                |
-+----------------------------+     +----------------------------+
-  | Implemented By                 | Implemented By
-  V                              V
++---------------------------------+  +---------------------------------+
+| Yantra::Core::DependentProcessor|  | Yantra::Core::StepEnqueuer      |
+| (Handles Success/Failure Logic) |  | (Handles Job System Handoff)    |
++---------------------------------+  +---------------------------------+
+              |                                      |
+              V Uses                                 V Uses
++---------------------------------+  +---------------------------------+
+| Yantra::Core::StateTransitionSvc|  | Yantra::Persistence::Repo       |
+| (Ensures Valid State Changes)   |  | (Interface)                     |
++---------------------------------+  +---------------------------------+
+                                     | Implemented By
+                                     V
 +----------------------------------+ +----------------------------+
 | ActiveRecord Adapter | Redis Adpt*| | ActiveJob Adapter | Sidekiq Adpt*| ...
 +----------------------------------+ +----------------------------+
@@ -52,6 +58,12 @@ Yantra employs a layered architecture to separate concerns (core logic, persiste
 | Postgres | | Redis |           | ActiveJob | | Sidekiq | ...
 +----------+ +-------+           +-----------+ +---------+
 ```
+
+**Recent Architectural Refinements:**
+
+* **Service Objects:** Core logic for handling step completion outcomes (`DependentProcessor`) and ensuring valid state transitions (`StateTransitionService`) has been extracted into dedicated service objects. This improves separation of concerns and testability within the core engine.
+* **State Machine:** The state lifecycle has been refined. The `ENQUEUED` state has been removed. Steps now transition from `PENDING` -> `SCHEDULING` (during the attempt to hand off to the job backend) -> `RUNNING` (when the worker picks it up). The `enqueued_at` timestamp on the step record indicates successful handoff to the job backend. `POST_PROCESSING` is used internally after successful `perform` before dependents are processed.
+* **Repository Interface:** The persistence interface (`RepositoryInterface`) has been refactored for better consistency (see notes below).
 
 ## Installation
 
@@ -138,18 +150,7 @@ If you are using the `:active_record` persistence adapter, you need to generate 
     $ rails g yantra:install
     ```
     This will copy the necessary migration files (`create_yantra_workflows`, `create_yantra_steps`, `create_yantra_step_dependencies`) into your application's `db/migrate/` directory.
-2.  **Generate Delay Migration (if using :delay feature):**
-    You will also need to add the migration to support the delay feature. Copy the migration file (e.g., `add_delay_to_yantra_steps.rb`) from the Yantra gem source or documentation into your `db/migrate/` folder. Ensure its timestamp is later than the initial install migrations.
-    ```ruby
-    # Example: db/migrate/YYYYMMDDHHMMSS_add_delay_to_yantra_steps.rb
-    class AddDelayToYantraSteps < ActiveRecord::Migration[7.0] # Use your Rails version
-      def change
-        add_column :yantra_steps, :delay_seconds, :integer, null: true
-        add_column :yantra_steps, :delayed_until, :datetime, precision: nil, null: true
-      end
-    end
-    ```
-3.  **Run Migrations:**
+2.  **Run Migrations:**
     ```bash
     $ rails db:migrate
     ```
@@ -162,8 +163,7 @@ Workflows orchestrate steps. Define a workflow by inheriting from `Yantra::Workf
 
 ```ruby
 # app/workflows/order_processing_workflow.rb
-# You may need this if using ActiveSupport durations like 5.minutes
-# require 'active_support/core_ext/numeric/time'
+require 'active_support/core_ext/numeric/time' # For 5.minutes etc.
 
 class OrderProcessingWorkflow < Yantra::Workflow
   def perform(order_id:, user_id:)
@@ -176,7 +176,6 @@ class OrderProcessingWorkflow < Yantra::Workflow
     update_step = run UpdateInventoryStep, name: :inventory, params: { order_id: order_id }, after: charge_step
 
     # This step runs 5 minutes after charge_step succeeds
-    # Using ActiveSupport::Duration requires activesupport gem to be loaded.
     email_step = run SendConfirmationEmailStep, name: :email, params: { order_id: order_id, user_id: user_id }, after: charge_step, delay: 5.minutes
 
     # This step runs after both inventory and email steps succeed (email might be delayed)
@@ -275,28 +274,30 @@ puts "Workflow has failures: #{workflow&.has_failures}"
 
 # Find a specific step
 step = Yantra::Client.find_step(step_id)
-puts "Step state: #{step&.state}"
+puts "Step state: #{step&.state}" # e.g., pending, scheduling, running, succeeded, failed, cancelled
 # Access output/error (may be string or hash depending on persistence/serialization)
 puts "Step output: #{step&.output.inspect}"
-puts "Step error: #{step&.error.inspect}" # Use .inspect for better hash/string visibility
+puts "Step error: #{step&.error.inspect}"
 # Access delay info
-puts "Step Delay Specified (seconds): #{step&.delay_seconds}" # Original delay requested
-puts "Step Delayed Until (Timestamp): #{step&.delayed_until}" # Actual time it was scheduled for
+puts "Step Delay Specified (seconds): #{step&.delay_seconds}"
+puts "Step Delayed Until (Timestamp): #{step&.delayed_until}"
+puts "Step Enqueued At (Timestamp): #{step&.enqueued_at}" # Timestamp when successfully handed off
 
 # Get all steps for a workflow
 steps = Yantra::Client.list_steps(workflow_id: workflow_id)
 
 # Get steps with a specific status
 failed_steps = Yantra::Client.list_steps(workflow_id: workflow_id, status: :failed)
-enqueued_steps = Yantra::Client.list_steps(workflow_id: workflow_id, status: :enqueued)
-# Note: 'enqueued' includes steps waiting for delay AND steps waiting for worker.
-# Use the 'delayed_until' attribute to differentiate if needed.
+# Find steps waiting for worker/timer (successfully handed off)
+scheduled_steps = Yantra::Client.list_steps(workflow_id: workflow_id, status: :scheduling).select { |s| s.enqueued_at.present? }
+# Find steps stuck during scheduling (handoff failed)
+stuck_steps = Yantra::Client.list_steps(workflow_id: workflow_id, status: :scheduling).select { |s| s.enqueued_at.nil? }
 
 # Cancel a running or pending workflow
 Yantra::Client.cancel_workflow(workflow_id)
 
 # Retry all failed steps in a failed workflow
-# (Resets workflow state to running, re-enqueues failed steps)
+# (Resets workflow state to running, re-enqueues FAILED steps and steps stuck in SCHEDULING)
 Yantra::Client.retry_failed_steps(workflow_id)
 ```
 
@@ -310,13 +311,13 @@ Yantra publishes events at key lifecycle points using the configured `notificati
 * `yantra.workflow.succeeded`
 * `yantra.workflow.failed`
 * `yantra.workflow.cancelled`
-* `yantra.step.bulk_enqueued` (Published when steps are handed off to the job backend, includes immediately enqueued and delayed steps)
+* `yantra.step.bulk_enqueued` (Published when steps are successfully handed off to the job backend, includes immediately processed and delayed steps)
 * `yantra.step.started`
 * `yantra.step.succeeded`
-* `yantra.step.failed` (Published on permanent failure after retries)
+* `yantra.step.failed` (Published on permanent failure after retries or critical error)
 * `yantra.step.cancelled`
 
-**Payloads:** Event payloads are hashes containing relevant IDs, class names, state, timestamps, and potentially output or error information. The `yantra.step.bulk_enqueued` payload includes an `enqueued_ids` array containing IDs for both immediate and delayed steps processed in that batch.
+**Payloads:** Event payloads are hashes containing relevant IDs, class names, state, timestamps, and potentially output or error information. The `yantra.step.bulk_enqueued` payload includes an `enqueued_ids` array containing IDs for steps successfully processed in that batch.
 
 **Subscribing (Example using ActiveSupport::Notifications):**
 

@@ -1072,10 +1072,9 @@ module Yantra
 
         step_b.reload
         assert_equal 'scheduling', step_b.state
+        assert step_a.performed_at, "Step E should have performed_at set"
         refute_nil step_b.enqueued_at, "Step B should now have enqueued_at after retry"
       end
-
-
 
       def test_delayed_step_runs_after_workflow_cancelled
         workflow_id = Client.create_workflow(DelayedStepWorkflow)
@@ -1099,6 +1098,7 @@ module Yantra
         end
 
         step_e.reload
+        assert step_e.performed_at, "Step E should have performed_at set"
         assert_equal 'succeeded', step_e.state, "Even though workflow was cancelled, delayed step should still run"
       end
     end
