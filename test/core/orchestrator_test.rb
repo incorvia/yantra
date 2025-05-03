@@ -502,6 +502,38 @@ module Yantra
         end
       end
 
+      def test_step_starting_transitions_pending_step_to_running
+        step_pending = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: 'StepA', state: :pending)
+        step_running = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: 'StepA', state: :running, started_at: @frozen_time)
+
+        Time.stub :current, @frozen_time do
+          sequence = Mocha::Sequence.new('step_starting_pending')
+
+          @repo.expects(:find_step).with(@step_a_id).returns(step_pending).in_sequence(sequence)
+          @transition_service.expects(:transition_step)
+            .with(@step_a_id, RUNNING, expected_old_state: PENDING, extra_attrs: { started_at: @frozen_time })
+            .returns(true).in_sequence(sequence)
+          @repo.expects(:find_step).with(@step_a_id).returns(step_running).in_sequence(sequence)
+          @notifier.expects(:publish)
+            .with('yantra.step.started', has_entries(step_id: @step_a_id, started_at: @frozen_time))
+            .in_sequence(sequence)
+
+          result = @orchestrator.step_starting(@step_a_id)
+          assert result
+        end
+      end
+
+      def test_check_workflow_completion_does_not_finalize_if_scheduling_steps_remain
+        @repo.expects(:has_steps_in_states?)
+          .with(workflow_id: @workflow_id, states: StateMachine::WORK_IN_PROGRESS_STATES)
+          .returns(true) # Simulate remaining steps in SCHEDULING
+
+        @repo.expects(:find_workflow).never
+        @repo.expects(:update_workflow_attributes).never
+        @notifier.expects(:publish).never
+
+        @orchestrator.send(:check_workflow_completion, @workflow_id)
+      end
 
 
     end # class OrchestratorTest

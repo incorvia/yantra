@@ -270,7 +270,6 @@ module Yantra
         ->(actual_array) { actual_array.is_a?(Array) && actual_array.sort == expected_array.sort }
       end
 
-      focus
       def test_call_enqueues_scheduling_step_with_nil_enqueued_at
         step_ids = [@step1_id]
         step1 = MockStepRecord.new(
@@ -296,7 +295,6 @@ module Yantra
         assert_equal [@step1_id], result
       end
 
-      focus
       def test_call_skips_scheduling_step_with_enqueued_at_set
         step_ids = [@step1_id]
         step1 = MockStepRecord.new(
