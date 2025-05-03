@@ -426,6 +426,18 @@ module Yantra
       end
       # --- End Event Publishing Helpers ---
 
+      def validate_dependencies
+        unless @repository
+          raise Yantra::Errors::ConfigurationError, "Orchestrator requires a valid persistence adapter."
+        end
+        unless @worker_adapter
+          raise Yantra::Errors::ConfigurationError, "Orchestrator requires a valid worker adapter."
+        end
+        unless @notifier&.respond_to?(:publish)
+          log_warn "Notifier is missing or invalid. Events may not be published."
+        end
+      end
+
       # --- Logging Helpers ---
       def log_info(msg);  @logger&.info  { "[Orchestrator] #{msg}" } end
       def log_warn(msg);  @logger&.warn  { "[Orchestrator] #{msg}" } end
