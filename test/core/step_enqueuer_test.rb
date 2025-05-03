@@ -270,6 +270,59 @@ module Yantra
         ->(actual_array) { actual_array.is_a?(Array) && actual_array.sort == expected_array.sort }
       end
 
+      focus
+      def test_call_enqueues_scheduling_step_with_nil_enqueued_at
+        step_ids = [@step1_id]
+        step1 = MockStepRecord.new(
+          id: @step1_id,
+          state: 'scheduling',
+          enqueued_at: nil,
+          klass: 'Step1',
+          workflow_id: @workflow_id,
+          delay_seconds: nil,
+          queue: 'q1',
+          max_attempts: 1,
+          retries: 0,
+          created_at: @now
+        )
+
+        @repository.expects(:find_steps).with(step_ids).returns([step1])
+        @repository.expects(:bulk_upsert_steps).with(any_parameters).returns(1)
+        @worker_adapter.expects(:enqueue).with(step1.id, @workflow_id, step1.klass, step1.queue).returns(true)
+        @repository.expects(:bulk_update_steps).with([@step1_id], has_key(:enqueued_at)).returns(1)
+        @notifier.expects(:publish).with('yantra.step.bulk_enqueued', has_entry(enqueued_ids: [@step1_id]))
+
+        result = @enqueuer.call(workflow_id: @workflow_id, step_ids_to_attempt: step_ids)
+        assert_equal [@step1_id], result
+      end
+
+      focus
+      def test_call_skips_scheduling_step_with_enqueued_at_set
+        step_ids = [@step1_id]
+        step1 = MockStepRecord.new(
+          id: @step1_id,
+          state: 'scheduling',
+          enqueued_at: Time.current,
+          klass: 'Step1',
+          workflow_id: @workflow_id,
+          delay_seconds: nil,
+          queue: 'q1',
+          max_attempts: 1,
+          retries: 0,
+          created_at: @now
+        )
+
+        @repository.expects(:find_steps).with(step_ids).returns([step1])
+        @repository.expects(:bulk_upsert_steps).never
+        @worker_adapter.expects(:enqueue).never
+        @worker_adapter.expects(:enqueue_in).never
+        @repository.expects(:bulk_update_steps).never
+        @notifier.expects(:publish).never
+
+        result = @enqueuer.call(workflow_id: @workflow_id, step_ids_to_attempt: step_ids)
+        assert_equal [], result
+      end
+
     end # class StepEnqueuerTest
   end # module Core
 end # module Yantra

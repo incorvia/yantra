@@ -51,8 +51,9 @@ module Yantra
         return [] if steps_to_process.empty?
 
         candidate_steps = steps_to_process.select do |step|
-          StateMachine::RELEASABLE_FROM_STATES.include?(step.state.to_sym)
+          StateMachine.is_enqueue_candidate_state?(step.state, step.enqueued_at)
         end
+
         candidate_ids = candidate_steps.map(&:id)
         return [] if candidate_ids.empty?
 
