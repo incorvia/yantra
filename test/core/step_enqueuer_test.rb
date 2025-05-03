@@ -108,7 +108,7 @@ module Yantra
         @repository.expects(:find_steps).with(step_ids).returns([step1])
         # Phase 1: Update state to awaiting_execution
         @repository.expects(:bulk_upsert_steps).with do |updates|
-          updates.size == 1 && updates[0][:id] == @step1_id && updates[0][:state] == StateMachine::AWAITING_EXECUTION.to_s && updates[0][:delayed_until].nil?
+          updates.size == 1 && updates[0][:id] == @step1_id && updates[0][:state] == StateMachine::AWAITING_EXECUTION.to_s && updates[0][:scheduled_execution_time].nil?
         end.returns(1)
         # Phase 2: Enqueue
         @worker_adapter.expects(:enqueue).with(step1.id, @workflow_id, step1.klass, step1.queue).returns(true)
@@ -128,13 +128,13 @@ module Yantra
         step1 = MockStepRecord.new(id: @step1_id, state: 'pending', klass: 'Step1', workflow_id: @workflow_id, delay_seconds: delay, queue: 'q1', max_attempts: 1, retries: 0, created_at: @now)
 
         @repository.expects(:find_steps).with(step_ids).returns([step1])
-        # Phase 1: Update state to awaiting_execution & delayed_until
+        # Phase 1: Update state to awaiting_execution & scheduled_execution_time
         @repository.expects(:bulk_upsert_steps).with do |updates|
           updates.size == 1 &&
             updates[0][:id] == @step1_id &&
             updates[0][:state] == StateMachine::AWAITING_EXECUTION.to_s &&
-            updates[0][:delayed_until].is_a?(Time) &&
-            updates[0][:delayed_until] > Time.current
+            updates[0][:scheduled_execution_time].is_a?(Time) &&
+            updates[0][:scheduled_execution_time] > Time.current
         end.returns(1)
         # Phase 2: Enqueue In
         @worker_adapter.expects(:enqueue_in).with(delay, step1.id, @workflow_id, step1.klass, step1.queue).returns(true)
@@ -157,12 +157,12 @@ module Yantra
         expected_enqueued_ids = [@step1_id, @step2_id, @step3_id]
 
         @repository.expects(:find_steps).with(step_ids).returns([step1, step2, step3])
-        # Phase 1: Update state to awaiting_execution & delayed_until
+        # Phase 1: Update state to awaiting_execution & scheduled_execution_time
         @repository.expects(:bulk_upsert_steps).with do |updates|
           updates.size == 3 &&
-            updates.find { |h| h[:id] == @step1_id && h[:delayed_until].nil? && h[:state] == StateMachine::AWAITING_EXECUTION.to_s } &&
-            updates.find { |h| h[:id] == @step2_id && h[:delayed_until].is_a?(Time) && h[:state] == StateMachine::AWAITING_EXECUTION.to_s } &&
-            updates.find { |h| h[:id] == @step3_id && h[:delayed_until].nil? && h[:state] == StateMachine::AWAITING_EXECUTION.to_s }
+            updates.find { |h| h[:id] == @step1_id && h[:scheduled_execution_time].nil? && h[:state] == StateMachine::AWAITING_EXECUTION.to_s } &&
+            updates.find { |h| h[:id] == @step2_id && h[:scheduled_execution_time].is_a?(Time) && h[:state] == StateMachine::AWAITING_EXECUTION.to_s } &&
+            updates.find { |h| h[:id] == @step3_id && h[:scheduled_execution_time].nil? && h[:state] == StateMachine::AWAITING_EXECUTION.to_s }
         end.returns(3)
         # Phase 2: Enqueue/Enqueue In
         @worker_adapter.expects(:enqueue).with(step1.id, @workflow_id, step1.klass, step1.queue).returns(true)

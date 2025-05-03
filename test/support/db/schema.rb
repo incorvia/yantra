@@ -37,7 +37,7 @@ ActiveRecord::Schema[7.2].define(version: 2025_05_01_165744) do
     t.datetime "started_at", precision: nil
     t.datetime "finished_at", precision: nil
     t.integer "delay_seconds"
-    t.datetime "delayed_until", precision: nil
+    t.datetime "scheduled_execution_time", precision: nil
     t.datetime "performed_at", precision: nil
     t.index ["klass", "state"], name: "index_yantra_steps_on_klass_and_state"
     t.index ["state", "updated_at"], name: "index_yantra_steps_on_state_and_updated_at"

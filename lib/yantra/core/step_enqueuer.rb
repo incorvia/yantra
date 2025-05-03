@@ -14,7 +14,7 @@ module Yantra
     # Service responsible for validating and enqueuing steps
     # that are ready to be processed by background workers.
     # Uses a revised three-phase approach with a AWAITING_EXECUTION state:
-    # 1. Bulk upsert state to AWAITING_EXECUTION and set delayed_until.
+    # 1. Bulk upsert state to AWAITING_EXECUTION and set scheduled_execution_time.
     # 2. Individually enqueue/schedule via adapter, tracking successes and failures.
     # 3. Bulk update state to set enqueued_at timestamp for successfully processed steps.
     # 4. If any enqueue failed in Phase 2, raise EnqueueFailed.
@@ -65,11 +65,11 @@ module Yantra
         # --- Prepare Phase 1 Data ---
         candidate_steps.each do |step|
             delay = step.delay_seconds
-            calculated_delayed_until = (delay && delay > 0) ? (now + delay.seconds) : nil
+            calculated_scheduled_execution_time = (delay && delay > 0) ? (now + delay.seconds) : nil
             initial_upsert_data << {
               id: step.id,
               state: StateMachine::AWAITING_EXECUTION.to_s,
-              delayed_until: calculated_delayed_until,
+              scheduled_execution_time: calculated_scheduled_execution_time,
               updated_at: now,
               workflow_id: step.workflow_id, klass: step.klass.to_s,
               max_attempts: step.max_attempts, retries: step.retries,
@@ -77,7 +77,7 @@ module Yantra
             }
         end
 
-        # --- Phase 1: Bulk Upsert State to AWAITING_EXECUTION & delayed_until ---
+        # --- Phase 1: Bulk Upsert State to AWAITING_EXECUTION & scheduled_execution_time ---
         begin
           log_debug "Phase 1: Bulk upserting state to AWAITING_EXECUTION for candidate steps: #{candidate_ids.inspect}"
           updated_count_phase1 = repository.bulk_upsert_steps(initial_upsert_data)
