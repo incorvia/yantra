@@ -84,6 +84,14 @@ module Yantra
       dsl_name&.to_s || klass&.name || "UnknownStep"
     end
 
+    def max_attempts
+      if klass.respond_to?(:yantra_max_attempts)
+        klass.yantra_max_attempts
+      else
+        3 # Default fallback
+      end
+    end
+
     def to_hash
       {
         id: id,

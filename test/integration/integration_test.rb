@@ -973,13 +973,13 @@ module Yantra
         assert_equal 'succeeded', step_a.state
         assert_equal 1, enqueued_jobs.size, "Queue should be empty immediately after A runs (E is delayed)"
 
-        # Assert 2.1: Check Step E's state and scheduled_execution_time timestamp
+        # Assert 2.1: Check Step E's state and earliest_execution_time timestamp
         assert_equal 'awaiting_execution', step_e_delayed.state # Marked enqueued by StepEnqueuer
         refute_nil step_e_delayed.enqueued_at
-        refute_nil step_e_delayed.scheduled_execution_time
-        # Check that scheduled_execution_time is approx 5 minutes after enqueued_at
+        refute_nil step_e_delayed.earliest_execution_time
+        # Check that earliest_execution_time is approx 5 minutes after enqueued_at
         expected_run_time = step_e_delayed.enqueued_at + 5.minutes
-        assert_in_delta expected_run_time, step_e_delayed.scheduled_execution_time, 1.second
+        assert_in_delta expected_run_time, step_e_delayed.earliest_execution_time, 1.second
 
         # Assert 2.2: Check Events after A runs
         # Should be A.started, A.succeeded, E.bulk_enqueued (even though delayed)

@@ -15,10 +15,10 @@ class AddDelayToYantraSteps < ActiveRecord::Migration[<%= ActiveRecord::Migratio
     # the step should be delayed. This is set when the step is handed off
     # to the worker adapter with a delay. NULL indicates the step was
     # enqueued immediately or hasn't been processed for delayed enqueue yet.
-    add_column :yantra_steps, :scheduled_execution_time, :datetime, precision: nil, null: true
+    add_column :yantra_steps, :earliest_execution_time, :datetime, precision: nil, null: true
 
-    # Optional: Add an index on scheduled_execution_time if you need to efficiently query
+    # Optional: Add an index on earliest_execution_time if you need to efficiently query
     # for steps scheduled to run within a specific time window.
-    # add_index :yantra_steps, :scheduled_execution_time
+    # add_index :yantra_steps, :earliest_execution_time
   end
 end

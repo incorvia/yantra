@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.2].define(version: 2025_05_01_165744) do
+ActiveRecord::Schema[7.2].define(version: 2025_05_03_124146) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "plpgsql"
 
@@ -36,9 +36,9 @@ ActiveRecord::Schema[7.2].define(version: 2025_05_01_165744) do
     t.datetime "enqueued_at", precision: nil
     t.datetime "started_at", precision: nil
     t.datetime "finished_at", precision: nil
-    t.integer "delay_seconds"
-    t.datetime "scheduled_execution_time", precision: nil
     t.datetime "performed_at", precision: nil
+    t.integer "delay_seconds"
+    t.datetime "earliest_execution_time", precision: nil
     t.index ["klass", "state"], name: "index_yantra_steps_on_klass_and_state"
     t.index ["state", "updated_at"], name: "index_yantra_steps_on_state_and_updated_at"
     t.index ["workflow_id", "state"], name: "index_yantra_steps_on_workflow_id_and_state"

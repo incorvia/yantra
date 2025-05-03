@@ -140,6 +140,7 @@ module Yantra
               state: Yantra::Core::StateMachine::PENDING.to_s,
               queue: step.queue_name,
               delay_seconds: step.delay_seconds&.to_i,
+              max_attempts: step.max_attempts || 3,
               retries: 0,
               created_at: current_time,
               updated_at: current_time
