@@ -194,7 +194,7 @@ module Yantra
     end
 
     # Resets a FAILED workflow to RUNNING and attempts to re-enqueue FAILED steps
-    # and steps stuck in SCHEDULING.
+    # and steps stuck in AWAITING_EXECUTION.
     def self.retry_failed_steps(workflow_id)
       repo = Yantra.repository
       worker = Yantra.worker_adapter

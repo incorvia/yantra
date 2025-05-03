@@ -62,7 +62,7 @@ Yantra employs a layered architecture to separate concerns (core logic, persiste
 **Recent Architectural Refinements:**
 
 * **Service Objects:** Core logic for handling step completion outcomes (`DependentProcessor`) and ensuring valid state transitions (`StateTransitionService`) has been extracted into dedicated service objects. This improves separation of concerns and testability within the core engine.
-* **State Machine:** The state lifecycle has been refined. The `ENQUEUED` state has been removed. Steps now transition from `PENDING` -> `SCHEDULING` (during the attempt to hand off to the job backend) -> `RUNNING` (when the worker picks it up). The `enqueued_at` timestamp on the step record indicates successful handoff to the job backend. `POST_PROCESSING` is used internally after successful `perform` before dependents are processed.
+* **State Machine:** The state lifecycle has been refined. The `ENQUEUED` state has been removed. Steps now transition from `PENDING` -> `AWAITING_EXECUTION` (during the attempt to hand off to the job backend) -> `RUNNING` (when the worker picks it up). The `enqueued_at` timestamp on the step record indicates successful handoff to the job backend. `POST_PROCESSING` is used internally after successful `perform` before dependents are processed.
 * **Repository Interface:** The persistence interface (`RepositoryInterface`) has been refactored for better consistency (see notes below).
 
 ## Installation
@@ -274,7 +274,7 @@ puts "Workflow has failures: #{workflow&.has_failures}"
 
 # Find a specific step
 step = Yantra::Client.find_step(step_id)
-puts "Step state: #{step&.state}" # e.g., pending, scheduling, running, succeeded, failed, cancelled
+puts "Step state: #{step&.state}" # e.g., pending, awaiting_execution, running, succeeded, failed, cancelled
 # Access output/error (may be string or hash depending on persistence/serialization)
 puts "Step output: #{step&.output.inspect}"
 puts "Step error: #{step&.error.inspect}"
@@ -289,15 +289,15 @@ steps = Yantra::Client.list_steps(workflow_id: workflow_id)
 # Get steps with a specific status
 failed_steps = Yantra::Client.list_steps(workflow_id: workflow_id, status: :failed)
 # Find steps waiting for worker/timer (successfully handed off)
-scheduled_steps = Yantra::Client.list_steps(workflow_id: workflow_id, status: :scheduling).select { |s| s.enqueued_at.present? }
-# Find steps stuck during scheduling (handoff failed)
-stuck_steps = Yantra::Client.list_steps(workflow_id: workflow_id, status: :scheduling).select { |s| s.enqueued_at.nil? }
+scheduled_steps = Yantra::Client.list_steps(workflow_id: workflow_id, status: :awaiting_execution).select { |s| s.enqueued_at.present? }
+# Find steps stuck during awaiting_execution (handoff failed)
+stuck_steps = Yantra::Client.list_steps(workflow_id: workflow_id, status: :awaiting_execution).select { |s| s.enqueued_at.nil? }
 
 # Cancel a running or pending workflow
 Yantra::Client.cancel_workflow(workflow_id)
 
 # Retry all failed steps in a failed workflow
-# (Resets workflow state to running, re-enqueues FAILED steps and steps stuck in SCHEDULING)
+# (Resets workflow state to running, re-enqueues FAILED steps and steps stuck in AWAITING_EXECUTION)
 Yantra::Client.retry_failed_steps(workflow_id)
 ```
 
@@ -345,7 +345,7 @@ Yantra provides configurable automatic retries for steps that fail during execut
 **Division of Responsibility:**
 
 * **Yantra (`RetryHandler`)**: Determines *if* a step should be retried based on its configured number of attempts (`default_step_options[:retries]` or step-specific `yantra_max_attempts`) and the current execution count. It manages Yantra's internal state related to retries.
-* **Job Runner Backend (Sidekiq, ActiveJob Adapter, etc.)**: Handles the *mechanism* of retrying a job instance, including scheduling the next attempt using its built-in delay/backoff algorithms. Yantra leverages this backend capability.
+* **Job Runner Backend (Sidekiq, ActiveJob Adapter, etc.)**: Handles the *mechanism* of retrying a job instance, including awaiting_execution the next attempt using its built-in delay/backoff algorithms. Yantra leverages this backend capability.
 
 **Signaling Mechanism:**
 

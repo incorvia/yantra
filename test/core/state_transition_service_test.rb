@@ -66,7 +66,7 @@ module Yantra
       # ==================================
 
       def test_transition_step_success_no_expected_state
-        current_step = MockStepTS.new(id: @step_id, state: :scheduling)
+        current_step = MockStepTS.new(id: @step_id, state: :awaiting_execution)
         new_state = :running
         extra_attrs = { started_at: @now }
         expected_update_attrs = { state: new_state.to_s }.merge(extra_attrs)
@@ -74,9 +74,9 @@ module Yantra
         # Sequence for clarity
         sequence = Mocha::Sequence.new('transition_success')
         @repo.expects(:find_step).with(@step_id).returns(current_step).in_sequence(sequence)
-        # StateMachine.valid_transition?(:scheduling, :running) is true
+        # StateMachine.valid_transition?(:awaiting_execution, :running) is true
         @repo.expects(:update_step_attributes)
-            .with(@step_id, expected_update_attrs, expected_old_state: :scheduling) # Uses current state
+            .with(@step_id, expected_update_attrs, expected_old_state: :awaiting_execution) # Uses current state
             .returns(true).in_sequence(sequence)
 
         result = @service.transition_step(@step_id, new_state, extra_attrs: extra_attrs)
@@ -117,13 +117,13 @@ module Yantra
       end
 
       def test_transition_step_fails_on_expected_state_mismatch
-        current_step = MockStepTS.new(id: @step_id, state: :scheduling) # Actual state
+        current_step = MockStepTS.new(id: @step_id, state: :awaiting_execution) # Actual state
         new_state = :running
         expected_old = :pending # Mismatched expectation
 
         sequence = Mocha::Sequence.new('transition_fail_mismatch')
         @repo.expects(:find_step).with(@step_id).returns(current_step).in_sequence(sequence)
-        # StateMachine.valid_transition?(:scheduling, :running) is true
+        # StateMachine.valid_transition?(:awaiting_execution, :running) is true
         # Expect update call with the incorrect expected state
         @repo.expects(:update_step_attributes)
             .with(@step_id, has_key(:state), expected_old_state: expected_old)
@@ -151,7 +151,7 @@ module Yantra
       end
 
       def test_transition_step_fails_on_persistence_error
-        current_step = MockStepTS.new(id: @step_id, state: :scheduling)
+        current_step = MockStepTS.new(id: @step_id, state: :awaiting_execution)
         new_state = :running
         error = Yantra::Errors::PersistenceError.new("DB write error")
 
@@ -166,7 +166,7 @@ module Yantra
       end
 
       def test_transition_step_reraises_unexpected_error
-        current_step = MockStepTS.new(id: @step_id, state: :scheduling)
+        current_step = MockStepTS.new(id: @step_id, state: :awaiting_execution)
         new_state = :running
         error = StandardError.new("Unexpected boom")
 

@@ -13,8 +13,8 @@ module Yantra
   module Core
     # Service responsible for validating and enqueuing steps
     # that are ready to be processed by background workers.
-    # Uses a revised three-phase approach with a SCHEDULING state:
-    # 1. Bulk upsert state to SCHEDULING and set delayed_until.
+    # Uses a revised three-phase approach with a AWAITING_EXECUTION state:
+    # 1. Bulk upsert state to AWAITING_EXECUTION and set delayed_until.
     # 2. Individually enqueue/schedule via adapter, tracking successes and failures.
     # 3. Bulk update state to set enqueued_at timestamp for successfully processed steps.
     # 4. If any enqueue failed in Phase 2, raise EnqueueFailed.
@@ -30,8 +30,8 @@ module Yantra
         unless @repository && @worker_adapter && @notifier
           raise ArgumentError, "StepEnqueuer requires repository, worker_adapter, and notifier."
         end
-        unless defined?(StateMachine::SCHEDULING)
-           raise Yantra::Errors::ConfigurationError, "StateMachine::SCHEDULING constant is not defined."
+        unless defined?(StateMachine::AWAITING_EXECUTION)
+           raise Yantra::Errors::ConfigurationError, "StateMachine::AWAITING_EXECUTION constant is not defined."
         end
       end
 
@@ -68,7 +68,7 @@ module Yantra
             calculated_delayed_until = (delay && delay > 0) ? (now + delay.seconds) : nil
             initial_upsert_data << {
               id: step.id,
-              state: StateMachine::SCHEDULING.to_s,
+              state: StateMachine::AWAITING_EXECUTION.to_s,
               delayed_until: calculated_delayed_until,
               updated_at: now,
               workflow_id: step.workflow_id, klass: step.klass.to_s,
@@ -77,9 +77,9 @@ module Yantra
             }
         end
 
-        # --- Phase 1: Bulk Upsert State to SCHEDULING & delayed_until ---
+        # --- Phase 1: Bulk Upsert State to AWAITING_EXECUTION & delayed_until ---
         begin
-          log_debug "Phase 1: Bulk upserting state to SCHEDULING for candidate steps: #{candidate_ids.inspect}"
+          log_debug "Phase 1: Bulk upserting state to AWAITING_EXECUTION for candidate steps: #{candidate_ids.inspect}"
           updated_count_phase1 = repository.bulk_upsert_steps(initial_upsert_data)
           log_info "Phase 1: Initial bulk upsert processed #{updated_count_phase1} steps."
         rescue Yantra::Errors::PersistenceError => e
@@ -127,7 +127,7 @@ module Yantra
             log_info "Phase 3: Bulk update to set enqueud_at processed #{updated_count_phase3} steps."
           rescue Yantra::Errors::PersistenceError => e
             log_error "Phase 3: Failed to bulk update state/timestamps after successful enqueue: #{e.message}"
-            # If this fails, successfully enqueued steps remain SCHEDULING with NULL enqueued_at.
+            # If this fails, successfully enqueued steps remain AWAITING_EXECUTION with NULL enqueued_at.
             # Re-raise to signal the inconsistency.
             raise e
           end
@@ -136,7 +136,7 @@ module Yantra
         # --- MODIFIED: Check for failures AFTER Phase 3 ---
         # If any step failed the handoff in Phase 2, raise error now.
         if failed_enqueue_ids.any?
-          error_message = "Failed to enqueue/schedule #{failed_enqueue_ids.count} step(s): #{failed_enqueue_ids.inspect}. Corresponding steps remain in SCHEDULING state with no enqueued_at timestamp."
+          error_message = "Failed to enqueue/schedule #{failed_enqueue_ids.count} step(s): #{failed_enqueue_ids.inspect}. Corresponding steps remain in AWAITING_EXECUTION state with no enqueued_at timestamp."
           log_error error_message
           raise Yantra::Errors::EnqueueFailed.new(error_message, failed_ids: failed_enqueue_ids)
         end

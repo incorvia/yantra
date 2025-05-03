@@ -38,7 +38,7 @@ module Yantra
           end
 
           job_args = [step_id, workflow_id, step_klass_name]
-          # Use perform_in for scheduling
+          # Use perform_in for awaiting_execution
           # Set queue if provided
           options = queue_name.present? ? { 'queue' => queue_name.to_s } : {}
           StepJob.set(options).perform_in(delay_seconds, *job_args)

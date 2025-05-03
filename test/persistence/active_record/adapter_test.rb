@@ -239,7 +239,7 @@ module Yantra
                 retries: step1.retries,
                 created_at: step1.created_at, # Keep original created_at
                 # --- END ADDED ---
-                state: Yantra::Core::StateMachine::SCHEDULING.to_s,
+                state: Yantra::Core::StateMachine::AWAITING_EXECUTION.to_s,
                 enqueued_at: time_for_update,
                 delayed_until: nil, # Explicitly nil for immediate
                 updated_at: time_for_update
@@ -253,7 +253,7 @@ module Yantra
                 retries: step2.retries,
                 created_at: step2.created_at, # Keep original created_at
                 # --- END ADDED ---
-                state: Yantra::Core::StateMachine::SCHEDULING.to_s,
+                state: Yantra::Core::StateMachine::AWAITING_EXECUTION.to_s,
                 enqueued_at: time_for_update, # Also set enqueued_at
                 delayed_until: delay_time,    # Set future time
                 updated_at: time_for_update
@@ -273,13 +273,13 @@ module Yantra
             step3_reloaded = StepRecord.find(step3_id) # Reload step 3
 
             # Check Step 1 (immediate)
-            assert_equal 'scheduling', step1_updated.state
+            assert_equal 'awaiting_execution', step1_updated.state
             assert_in_delta time_for_update, step1_updated.enqueued_at, 1.second
             assert_nil step1_updated.delayed_until
             assert_in_delta time_for_update, step1_updated.updated_at, 1.second
 
             # Check Step 2 (delayed)
-            assert_equal 'scheduling', step2_updated.state
+            assert_equal 'awaiting_execution', step2_updated.state
             assert_in_delta time_for_update, step2_updated.enqueued_at, 1.second
             refute_nil step2_updated.delayed_until
             assert_in_delta delay_time, step2_updated.delayed_until, 1.second

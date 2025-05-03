@@ -71,7 +71,7 @@ module Yantra
 
       def test_call_resets_and_enqueues_failed_and_stuck_steps
         failed_step = MockStepRecordWRST.new(id: @step1_id, state: 'failed')
-        stuck_step = MockStepRecordWRST.new(id: @step2_id, state: 'scheduling', enqueued_at: nil)
+        stuck_step = MockStepRecordWRST.new(id: @step2_id, state: 'awaiting_execution', enqueued_at: nil)
         retryable_steps = [failed_step, stuck_step]
         retryable_ids = [@step1_id, @step2_id]
 
@@ -86,7 +86,7 @@ module Yantra
 
       def test_call_returns_only_successfully_enqueued_ids_count
         failed_step = MockStepRecordWRST.new(id: @step1_id, state: 'failed')
-        stuck_step = MockStepRecordWRST.new(id: @step2_id, state: 'scheduling', enqueued_at: nil)
+        stuck_step = MockStepRecordWRST.new(id: @step2_id, state: 'awaiting_execution', enqueued_at: nil)
         retryable_steps = [failed_step, stuck_step]
         retryable_ids = [@step1_id, @step2_id]
         successfully_enqueued_count = 1

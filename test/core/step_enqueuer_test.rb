@@ -82,9 +82,9 @@ module Yantra
 
         @repository.expects(:find_steps).with(step_ids).returns([step1_pending, step2_running])
         @worker_adapter.expects(:enqueue).with(step1_pending.id, @workflow_id, step1_pending.klass, step1_pending.queue).returns(true)
-        # Expect bulk upsert for Phase 1 (state -> scheduling)
+        # Expect bulk upsert for Phase 1 (state -> awaiting_execution)
         @repository.expects(:bulk_upsert_steps).with do |updates|
-          updates.size == 1 && updates[0][:id] == @step1_id && updates[0][:state] == StateMachine::SCHEDULING.to_s
+          updates.size == 1 && updates[0][:id] == @step1_id && updates[0][:state] == StateMachine::AWAITING_EXECUTION.to_s
         end.returns(1)
         # Expect bulk update for Phase 3 (state -> enqueued, timestamps)
         @repository.expects(:bulk_update_steps).with([@step1_id], has_key(:enqueued_at)).returns(1)
@@ -106,9 +106,9 @@ module Yantra
         step1 = MockStepRecord.new(id: @step1_id, state: 'pending', klass: 'Step1', workflow_id: @workflow_id, delay_seconds: nil, queue: 'q1', max_attempts: 1, retries: 0, created_at: @now)
 
         @repository.expects(:find_steps).with(step_ids).returns([step1])
-        # Phase 1: Update state to scheduling
+        # Phase 1: Update state to awaiting_execution
         @repository.expects(:bulk_upsert_steps).with do |updates|
-          updates.size == 1 && updates[0][:id] == @step1_id && updates[0][:state] == StateMachine::SCHEDULING.to_s && updates[0][:delayed_until].nil?
+          updates.size == 1 && updates[0][:id] == @step1_id && updates[0][:state] == StateMachine::AWAITING_EXECUTION.to_s && updates[0][:delayed_until].nil?
         end.returns(1)
         # Phase 2: Enqueue
         @worker_adapter.expects(:enqueue).with(step1.id, @workflow_id, step1.klass, step1.queue).returns(true)
@@ -128,11 +128,11 @@ module Yantra
         step1 = MockStepRecord.new(id: @step1_id, state: 'pending', klass: 'Step1', workflow_id: @workflow_id, delay_seconds: delay, queue: 'q1', max_attempts: 1, retries: 0, created_at: @now)
 
         @repository.expects(:find_steps).with(step_ids).returns([step1])
-        # Phase 1: Update state to scheduling & delayed_until
+        # Phase 1: Update state to awaiting_execution & delayed_until
         @repository.expects(:bulk_upsert_steps).with do |updates|
           updates.size == 1 &&
             updates[0][:id] == @step1_id &&
-            updates[0][:state] == StateMachine::SCHEDULING.to_s &&
+            updates[0][:state] == StateMachine::AWAITING_EXECUTION.to_s &&
             updates[0][:delayed_until].is_a?(Time) &&
             updates[0][:delayed_until] > Time.current
         end.returns(1)
@@ -157,12 +157,12 @@ module Yantra
         expected_enqueued_ids = [@step1_id, @step2_id, @step3_id]
 
         @repository.expects(:find_steps).with(step_ids).returns([step1, step2, step3])
-        # Phase 1: Update state to scheduling & delayed_until
+        # Phase 1: Update state to awaiting_execution & delayed_until
         @repository.expects(:bulk_upsert_steps).with do |updates|
           updates.size == 3 &&
-            updates.find { |h| h[:id] == @step1_id && h[:delayed_until].nil? && h[:state] == StateMachine::SCHEDULING.to_s } &&
-            updates.find { |h| h[:id] == @step2_id && h[:delayed_until].is_a?(Time) && h[:state] == StateMachine::SCHEDULING.to_s } &&
-            updates.find { |h| h[:id] == @step3_id && h[:delayed_until].nil? && h[:state] == StateMachine::SCHEDULING.to_s }
+            updates.find { |h| h[:id] == @step1_id && h[:delayed_until].nil? && h[:state] == StateMachine::AWAITING_EXECUTION.to_s } &&
+            updates.find { |h| h[:id] == @step2_id && h[:delayed_until].is_a?(Time) && h[:state] == StateMachine::AWAITING_EXECUTION.to_s } &&
+            updates.find { |h| h[:id] == @step3_id && h[:delayed_until].nil? && h[:state] == StateMachine::AWAITING_EXECUTION.to_s }
         end.returns(3)
         # Phase 2: Enqueue/Enqueue In
         @worker_adapter.expects(:enqueue).with(step1.id, @workflow_id, step1.klass, step1.queue).returns(true)
@@ -270,11 +270,11 @@ module Yantra
         ->(actual_array) { actual_array.is_a?(Array) && actual_array.sort == expected_array.sort }
       end
 
-      def test_call_enqueues_scheduling_step_with_nil_enqueued_at
+      def test_call_enqueues_awaiting_execution_step_with_nil_enqueued_at
         step_ids = [@step1_id]
         step1 = MockStepRecord.new(
           id: @step1_id,
-          state: 'scheduling',
+          state: 'awaiting_execution',
           enqueued_at: nil,
           klass: 'Step1',
           workflow_id: @workflow_id,
@@ -295,11 +295,11 @@ module Yantra
         assert_equal [@step1_id], result
       end
 
-      def test_call_skips_scheduling_step_with_enqueued_at_set
+      def test_call_skips_awaiting_execution_step_with_enqueued_at_set
         step_ids = [@step1_id]
         step1 = MockStepRecord.new(
           id: @step1_id,
-          state: 'scheduling',
+          state: 'awaiting_execution',
           enqueued_at: Time.current,
           klass: 'Step1',
           workflow_id: @workflow_id,

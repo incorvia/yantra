@@ -15,7 +15,7 @@ module Yantra
 
       def test_defines_correct_state_constants
         assert_equal :pending, PENDING
-        assert_equal :scheduling, SCHEDULING
+        assert_equal :awaiting_execution, AWAITING_EXECUTION
         # ENQUEUED removed
         assert_equal :running, RUNNING
         assert_equal :post_processing, POST_PROCESSING
@@ -26,7 +26,7 @@ module Yantra
 
       def test_all_states_set_is_correct
         expected_states = Set[
-          PENDING, SCHEDULING, RUNNING, POST_PROCESSING, SUCCEEDED, FAILED, CANCELLED
+          PENDING, AWAITING_EXECUTION, RUNNING, POST_PROCESSING, SUCCEEDED, FAILED, CANCELLED
         ]
         assert_equal expected_states.sort, StateMachine.states.sort # Compare sorted arrays
       end
@@ -51,9 +51,9 @@ module Yantra
 
       def test_startable_states_is_correct
         # RUNNING included for idempotency
-        # SCHEDULING included because worker picks up from this state
+        # AWAITING_EXECUTION included because worker picks up from this state
         # PENDING included because worker might pick up before state update? (Safer)
-        expected_states = Set[PENDING, SCHEDULING, RUNNING]
+        expected_states = Set[PENDING, AWAITING_EXECUTION, RUNNING]
         assert_equal expected_states, StateMachine::STARTABLE_STATES
       end
 
@@ -64,7 +64,7 @@ module Yantra
       end
 
       def test_non_terminal_states_set_is_correct
-        expected_non_terminal = Set[FAILED, PENDING, SCHEDULING, RUNNING, POST_PROCESSING, FAILED]
+        expected_non_terminal = Set[FAILED, PENDING, AWAITING_EXECUTION, RUNNING, POST_PROCESSING, FAILED]
         assert_equal expected_non_terminal.sort, StateMachine::NON_TERMINAL_STATES.sort
       end
 
@@ -72,7 +72,7 @@ module Yantra
         assert StateMachine.terminal?(:succeeded)
         assert StateMachine.terminal?(:cancelled)
         refute StateMachine.terminal?(:pending)
-        refute StateMachine.terminal?(:scheduling)
+        refute StateMachine.terminal?(:awaiting_execution)
         refute StateMachine.terminal?(:running)
         refute StateMachine.terminal?(:post_processing)
         refute StateMachine.terminal?(:failed) # Correctly not terminal
@@ -85,7 +85,7 @@ module Yantra
         assert StateMachine.triggers_downstream_processing?(:cancelled)
 
         refute StateMachine.triggers_downstream_processing?(:pending)
-        refute StateMachine.triggers_downstream_processing?(:scheduling)
+        refute StateMachine.triggers_downstream_processing?(:awaiting_execution)
         # refute StateMachine.triggers_downstream_processing?(:enqueued) # Removed state
         refute StateMachine.triggers_downstream_processing?(:running)
         refute StateMachine.triggers_downstream_processing?(:succeeded) # Downstream already processed via POST_PROCESSING
@@ -96,9 +96,9 @@ module Yantra
         now = Time.now
         assert StateMachine.is_cancellable_state?(:pending, nil), "Pending should be cancellable"
         assert StateMachine.is_cancellable_state?(:pending, now), "Pending should be cancellable even with timestamp"
-        assert StateMachine.is_cancellable_state?(:scheduling, nil), "Scheduling without timestamp should be cancellable"
+        assert StateMachine.is_cancellable_state?(:awaiting_execution, nil), "Scheduling without timestamp should be cancellable"
 
-        refute StateMachine.is_cancellable_state?(:scheduling, now), "Scheduling *with* timestamp should NOT be cancellable"
+        refute StateMachine.is_cancellable_state?(:awaiting_execution, now), "Scheduling *with* timestamp should NOT be cancellable"
         # refute StateMachine.is_cancellable_state?(:enqueued, now), "Enqueued removed"
         refute StateMachine.is_cancellable_state?(:running, nil), "Running should not be cancellable"
         refute StateMachine.is_cancellable_state?(:succeeded, nil), "Succeeded should not be cancellable"
@@ -110,21 +110,21 @@ module Yantra
         now = Time.now
         assert StateMachine.is_enqueue_candidate_state?(:pending, nil), "Pending should be candidate"
         assert StateMachine.is_enqueue_candidate_state?(:pending, now), "Pending should be candidate even with timestamp"
-        assert StateMachine.is_enqueue_candidate_state?(:scheduling, nil), "Scheduling without timestamp should be candidate"
+        assert StateMachine.is_enqueue_candidate_state?(:awaiting_execution, nil), "Scheduling without timestamp should be candidate"
 
-        refute StateMachine.is_enqueue_candidate_state?(:scheduling, now), "Scheduling *with* timestamp should NOT be candidate"
+        refute StateMachine.is_enqueue_candidate_state?(:awaiting_execution, now), "Scheduling *with* timestamp should NOT be candidate"
         # refute StateMachine.is_enqueue_candidate_state?(:enqueued, now), "Enqueued removed"
         refute StateMachine.is_enqueue_candidate_state?(:running, nil), "Running should not be candidate"
         # ... other non-candidate states ...
       end
 
       def test_valid_transitions_allowed
-        assert StateMachine.valid_transition?(:pending, :scheduling)
+        assert StateMachine.valid_transition?(:pending, :awaiting_execution)
         assert StateMachine.valid_transition?(:pending, :cancelled)
 
-        assert StateMachine.valid_transition?(:scheduling, :running) # Worker picks up
-        assert StateMachine.valid_transition?(:scheduling, :cancelled)
-        assert StateMachine.valid_transition?(:scheduling, :failed) # Enqueue critical failure
+        assert StateMachine.valid_transition?(:awaiting_execution, :running) # Worker picks up
+        assert StateMachine.valid_transition?(:awaiting_execution, :cancelled)
+        assert StateMachine.valid_transition?(:awaiting_execution, :failed) # Enqueue critical failure
 
         # assert StateMachine.valid_transition?(:enqueued, :running) # Removed state
         # assert StateMachine.valid_transition?(:enqueued, :cancelled) # Removed state
@@ -150,15 +150,15 @@ module Yantra
 
         # Invalid transitions based on new rules
         refute StateMachine.valid_transition?(:failed, :running) # Cannot go back to running directly
-        refute StateMachine.valid_transition?(:pending, :running) # Must go via scheduling
+        refute StateMachine.valid_transition?(:pending, :running) # Must go via awaiting_execution
         refute StateMachine.valid_transition?(:pending, :enqueued) # State removed
-        refute StateMachine.valid_transition?(:scheduling, :pending) # Cannot go back
-        refute StateMachine.valid_transition?(:running, :scheduling) # Cannot go back
+        refute StateMachine.valid_transition?(:awaiting_execution, :pending) # Cannot go back
+        refute StateMachine.valid_transition?(:running, :awaiting_execution) # Cannot go back
         refute StateMachine.valid_transition?(:post_processing, :running) # Cannot go back
 
         # Skipping states
         refute StateMachine.valid_transition?(:pending, :succeeded)
-        refute StateMachine.valid_transition?(:scheduling, :succeeded)
+        refute StateMachine.valid_transition?(:awaiting_execution, :succeeded)
 
         # Invalid target state for source state
         refute StateMachine.valid_transition?(:pending, :pending)
@@ -173,8 +173,8 @@ module Yantra
       end
 
       def test_validate_transition_bang_passes_for_valid
-        assert StateMachine.validate_transition!(:pending, :scheduling)
-        assert StateMachine.validate_transition!(:scheduling, :running)
+        assert StateMachine.validate_transition!(:pending, :awaiting_execution)
+        assert StateMachine.validate_transition!(:awaiting_execution, :running)
         assert StateMachine.validate_transition!(:running, :post_processing)
         assert StateMachine.validate_transition!(:post_processing, :succeeded)
         assert StateMachine.validate_transition!(:running, :failed)

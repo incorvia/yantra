@@ -189,17 +189,17 @@ module Yantra
       # Step Starting Tests
       # =========================================================================
       def test_step_starting_transitions_and_publishes_event_on_success
-        step_scheduling = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: 'StepA', state: :scheduling)
+        step_awaiting_execution = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: 'StepA', state: :awaiting_execution)
         step_running = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: 'StepA', state: :running, started_at: @frozen_time)
 
         Time.stub :current, @frozen_time do
           sequence = Mocha::Sequence.new('step_starting_success')
 
-          @repo.expects(:find_step).with(@step_a_id).returns(step_scheduling).in_sequence(sequence)
+          @repo.expects(:find_step).with(@step_a_id).returns(step_awaiting_execution).in_sequence(sequence)
 
           # Expect successful transition call via service
           @transition_service.expects(:transition_step)
-            .with(@step_a_id, RUNNING, expected_old_state: SCHEDULING, extra_attrs: { started_at: @frozen_time })
+            .with(@step_a_id, RUNNING, expected_old_state: AWAITING_EXECUTION, extra_attrs: { started_at: @frozen_time })
             .returns(true).in_sequence(sequence)
 
           # Expect find_step again for the event payload generation
@@ -219,19 +219,19 @@ module Yantra
       end
 
       def test_step_starting_does_not_publish_if_update_fails
-        step_scheduling = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: 'StepA', state: :scheduling)
+        step_awaiting_execution = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: 'StepA', state: :awaiting_execution)
 
         Time.stub :current, @frozen_time do
           # Expect initial find_step
-          @repo.expects(:find_step).with(@step_a_id).returns(step_scheduling)
+          @repo.expects(:find_step).with(@step_a_id).returns(step_awaiting_execution)
 
           # Expect the call to the transition service, mock it to return false
           @transition_service.expects(:transition_step)
-            .with(@step_a_id, RUNNING, expected_old_state: SCHEDULING, extra_attrs: has_key(:started_at))
+            .with(@step_a_id, RUNNING, expected_old_state: AWAITING_EXECUTION, extra_attrs: has_key(:started_at))
             .returns(false) # Simulate update failure
 
           # When transition_service returns false, step_starting re-checks state
-          @repo.expects(:find_step).with(@step_a_id).returns(step_scheduling) # Still scheduling
+          @repo.expects(:find_step).with(@step_a_id).returns(step_awaiting_execution) # Still awaiting_execution
 
           # Ensure publish is never called
           @notifier.expects(:publish).never
@@ -448,7 +448,7 @@ module Yantra
         # Expect check for steps in progress (returns true)
         @repo.expects(:has_steps_in_states?)
           .with(workflow_id: @workflow_id, states: StateMachine::WORK_IN_PROGRESS_STATES)
-          .returns(true) # Simulate steps still running/scheduling etc.
+          .returns(true) # Simulate steps still running/awaiting_execution etc.
 
         # Ensure no other methods are called
         @repo.expects(:find_workflow).never
@@ -501,10 +501,10 @@ module Yantra
         end
       end
 
-      def test_check_workflow_completion_does_not_finalize_if_scheduling_steps_remain
+      def test_check_workflow_completion_does_not_finalize_if_awaiting_execution_steps_remain
         @repo.expects(:has_steps_in_states?)
           .with(workflow_id: @workflow_id, states: StateMachine::WORK_IN_PROGRESS_STATES)
-          .returns(true) # Simulate remaining steps in SCHEDULING
+          .returns(true) # Simulate remaining steps in AWAITING_EXECUTION
 
         @repo.expects(:find_workflow).never
         @repo.expects(:update_workflow_attributes).never

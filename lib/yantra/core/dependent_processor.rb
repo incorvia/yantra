@@ -147,7 +147,7 @@ module Yantra
         iterations = 0
 
         # Use bulk operations where possible for efficiency
-        # Note: Need to fetch state AND enqueued_at if checking SCHEDULING state
+        # Note: Need to fetch state AND enqueued_at if checking AWAITING_EXECUTION state
         fetch_bulk = repository.respond_to?(:find_steps) # Check for bulk find method
         fetch_dependents_in_bulk = repository.respond_to?(:get_dependent_ids_bulk)
 

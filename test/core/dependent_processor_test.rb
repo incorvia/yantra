@@ -133,13 +133,13 @@ module Yantra
         # Assert: Handled by mock verification
       end
 
-      def test_process_successors_dependent_not_pending_or_stuck_scheduling
+      def test_process_successors_dependent_not_pending_or_stuck_awaiting_execution
         # Arrange
         dependents = [@dependent1_id]
         parents_map = { @dependent1_id => [@finished_step_id] }
         all_involved_ids = [@dependent1_id, @finished_step_id].uniq
         # Mock StepRecord objects
-        step1_running = MockStepRecord.new(id: @dependent1_id, state: 'running') # Not pending or stuck scheduling
+        step1_running = MockStepRecord.new(id: @dependent1_id, state: 'running') # Not pending or stuck awaiting_execution
         finished_step = MockStepRecord.new(id: @finished_step_id, state: 'succeeded')
 
         @repository.expects(:get_dependent_ids).with(@finished_step_id).returns(dependents)
@@ -157,13 +157,13 @@ module Yantra
         # Assert: Handled by mock verification
       end
 
-      def test_process_successors_handles_stuck_scheduling_step
+      def test_process_successors_handles_stuck_awaiting_execution_step
         # Arrange: Test the case where a dependent failed enqueue previously
         dependents = [@dependent1_id]
         parents_map = { @dependent1_id => [@finished_step_id] }
         all_involved_ids = [@dependent1_id, @finished_step_id].uniq
         # Mock StepRecord objects
-        step1_stuck = MockStepRecord.new(id: @dependent1_id, state: 'scheduling', enqueued_at: nil) # Stuck state
+        step1_stuck = MockStepRecord.new(id: @dependent1_id, state: 'awaiting_execution', enqueued_at: nil) # Stuck state
         finished_step = MockStepRecord.new(id: @finished_step_id, state: 'succeeded')
 
         @repository.expects(:get_dependent_ids).with(@finished_step_id).returns(dependents)
@@ -188,9 +188,9 @@ module Yantra
       def test_process_failure_cascade_cancels_eligible_dependents
         # Arrange
         dependents = [@dependent1_id, @dependent2_id]
-        # Mock steps: dep1 is pending, dep2 is scheduling but already enqueued (has timestamp)
+        # Mock steps: dep1 is pending, dep2 is awaiting_execution but already enqueued (has timestamp)
         step1_pending = MockStepRecord.new(id: @dependent1_id, state: 'pending', enqueued_at: nil)
-        step2_scheduling_enqueued = MockStepRecord.new(id: @dependent2_id, state: 'scheduling', enqueued_at: @now)
+        step2_awaiting_execution_enqueued = MockStepRecord.new(id: @dependent2_id, state: 'awaiting_execution', enqueued_at: @now)
 
         # Stub respond_to? to force non-bulk path for find_all_cancellable_descendants
         @repository.stubs(:respond_to?).with(:find_steps).returns(false)
@@ -200,7 +200,7 @@ module Yantra
         # Expectations within find_all_cancellable_descendants loop (non-bulk)
         @repository.expects(:find_step).with(@dependent1_id).returns(step1_pending)
         @repository.expects(:get_dependent_ids).with(@dependent1_id).returns([]) # dep1 has no children
-        @repository.expects(:find_step).with(@dependent2_id).returns(step2_scheduling_enqueued)
+        @repository.expects(:find_step).with(@dependent2_id).returns(step2_awaiting_execution_enqueued)
         # No get_dependent_ids for dep2 as it's not cancellable
 
         # Expect bulk cancellation ONLY for dependent1
@@ -222,7 +222,7 @@ module Yantra
       end
 
       def test_process_failure_cascade_cancels_eligible_descendants_recursively
-        # Arrange: finished -> dep1 (pending) -> grandchild1 (scheduling, enqueued_at=nil)
+        # Arrange: finished -> dep1 (pending) -> grandchild1 (awaiting_execution, enqueued_at=nil)
         #          finished -> dep2 (running) -> grandchild2 (pending) - dep2 branch ignored
         dependents = [@dependent1_id, @dependent2_id]
         expected_cancelled_ids = [@dependent1_id, @grandchild1_id]
@@ -237,7 +237,7 @@ module Yantra
         @repository.expects(:get_dependent_ids).with(@dependent1_id).returns([@grandchild1_id])
         @repository.expects(:find_step).with(@dependent2_id).returns(MockStepRecord.new(id: @dependent2_id, state: 'running')) # Not cancellable
         # Next batch
-        @repository.expects(:find_step).with(@grandchild1_id).returns(MockStepRecord.new(id: @grandchild1_id, state: 'scheduling', enqueued_at: nil)) # Cancellable
+        @repository.expects(:find_step).with(@grandchild1_id).returns(MockStepRecord.new(id: @grandchild1_id, state: 'awaiting_execution', enqueued_at: nil)) # Cancellable
         @repository.expects(:get_dependent_ids).with(@grandchild1_id).returns([])
 
         # Expect bulk cancellation for dep1 and grandchild1
@@ -288,12 +288,12 @@ module Yantra
         end
       end
 
-      def test_process_successors_enqueues_stuck_scheduling_step
+      def test_process_successors_enqueues_stuck_awaiting_execution_step
         dependents = [@dependent1_id]
         parents_map = { @dependent1_id => [@finished_step_id] }
         all_involved_ids = [@dependent1_id, @finished_step_id]
 
-        stuck_step = MockStepRecord.new(id: @dependent1_id, state: 'scheduling', enqueued_at: nil)
+        stuck_step = MockStepRecord.new(id: @dependent1_id, state: 'awaiting_execution', enqueued_at: nil)
         succeeded_parent = MockStepRecord.new(id: @finished_step_id, state: 'succeeded')
 
         @repository.expects(:get_dependent_ids).with(@finished_step_id).returns(dependents)
@@ -304,14 +304,14 @@ module Yantra
         @processor.process_successors(finished_step_id: @finished_step_id, workflow_id: @workflow_id)
       end
 
-      def test_process_failure_cascade_skips_already_enqueued_scheduling_step
+      def test_process_failure_cascade_skips_already_enqueued_awaiting_execution_step
         dependents = [@dependent1_id]
-        scheduling_step = MockStepRecord.new(id: @dependent1_id, state: 'scheduling', enqueued_at: @now)
+        awaiting_execution_step = MockStepRecord.new(id: @dependent1_id, state: 'awaiting_execution', enqueued_at: @now)
 
         @repository.stubs(:respond_to?).with(:find_steps).returns(false)
         @repository.stubs(:respond_to?).with(:get_dependent_ids_bulk).returns(false)
         @repository.expects(:get_dependent_ids).with(@finished_step_id).returns(dependents)
-        @repository.expects(:find_step).with(@dependent1_id).returns(scheduling_step)
+        @repository.expects(:find_step).with(@dependent1_id).returns(awaiting_execution_step)
 
         # No call to bulk_update_steps expected since it's not cancellable
         @repository.expects(:bulk_update_steps).never
