@@ -215,8 +215,6 @@ module Yantra
         end
       end
 
-      # --- REMOVED log_failure_state_update (Handled by transition service) ---
-
       # Sets the has_failures flag on the workflow containing the step.
       def mark_workflow_as_failed(step_id)
         workflow_id = repository.find_step(step_id)&.workflow_id
