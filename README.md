@@ -280,7 +280,7 @@ puts "Step output: #{step&.output.inspect}"
 puts "Step error: #{step&.error.inspect}"
 # Access delay info
 puts "Step Delay Specified (seconds): #{step&.delay_seconds}"
-puts "Step Delayed Until (Timestamp): #{step&.earliest_execution_time}"
+puts "Step Earliest Execution Time: #{step&.earliest_execution_time}"
 puts "Step Enqueued At (Timestamp): #{step&.enqueued_at}" # Timestamp when successfully handed off
 
 # Get all steps for a workflow
@@ -291,6 +291,8 @@ failed_steps = Yantra::Client.list_steps(workflow_id: workflow_id, status: :fail
 # Find steps waiting for worker/timer (successfully handed off)
 scheduled_steps = Yantra::Client.list_steps(workflow_id: workflow_id, status: :awaiting_execution).select { |s| s.enqueued_at.present? }
 # Find steps stuck during awaiting_execution (handoff failed)
+# These are steps in awaiting_execution that were not successfully handed off to the job system
+# (e.g. due to transient enqueue failure, like Redis outage)
 stuck_steps = Yantra::Client.list_steps(workflow_id: workflow_id, status: :awaiting_execution).select { |s| s.enqueued_at.nil? }
 
 # Cancel a running or pending workflow
