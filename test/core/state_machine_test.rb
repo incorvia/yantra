@@ -96,9 +96,9 @@ module Yantra
         now = Time.now
         assert StateMachine.is_cancellable_state?(:pending, nil), "Pending should be cancellable"
         assert StateMachine.is_cancellable_state?(:pending, now), "Pending should be cancellable even with timestamp"
-        assert StateMachine.is_cancellable_state?(:awaiting_execution, nil), "Scheduling without timestamp should be cancellable"
+        assert StateMachine.is_cancellable_state?(:awaiting_execution, nil), "Awaiting Execution without timestamp should be cancellable"
 
-        refute StateMachine.is_cancellable_state?(:awaiting_execution, now), "Scheduling *with* timestamp should NOT be cancellable"
+        refute StateMachine.is_cancellable_state?(:awaiting_execution, now), "Awaiting Execution *with* timestamp should NOT be cancellable"
         # refute StateMachine.is_cancellable_state?(:enqueued, now), "Enqueued removed"
         refute StateMachine.is_cancellable_state?(:running, nil), "Running should not be cancellable"
         refute StateMachine.is_cancellable_state?(:succeeded, nil), "Succeeded should not be cancellable"
@@ -110,9 +110,9 @@ module Yantra
         now = Time.now
         assert StateMachine.is_enqueue_candidate_state?(:pending, nil), "Pending should be candidate"
         assert StateMachine.is_enqueue_candidate_state?(:pending, now), "Pending should be candidate even with timestamp"
-        assert StateMachine.is_enqueue_candidate_state?(:awaiting_execution, nil), "Scheduling without timestamp should be candidate"
+        assert StateMachine.is_enqueue_candidate_state?(:awaiting_execution, nil), "Awaiting Execution without timestamp should be candidate"
 
-        refute StateMachine.is_enqueue_candidate_state?(:awaiting_execution, now), "Scheduling *with* timestamp should NOT be candidate"
+        refute StateMachine.is_enqueue_candidate_state?(:awaiting_execution, now), "Awaiting Execution *with* timestamp should NOT be candidate"
         # refute StateMachine.is_enqueue_candidate_state?(:enqueued, now), "Enqueued removed"
         refute StateMachine.is_enqueue_candidate_state?(:running, nil), "Running should not be candidate"
         # ... other non-candidate states ...
