@@ -281,33 +281,16 @@ module Yantra
       def check_workflow_completion(workflow_id)
         return unless workflow_id
 
-        # Use the StateMachine constant for non-terminal states
-        wip_states = StateMachine::WORK_IN_PROGRESS_STATES
-        if repository.has_steps_in_states?(workflow_id: workflow_id, states: wip_states)
-          log_debug "Workflow #{workflow_id} not complete yet (steps found in states: #{wip_states.inspect})."
+        if steps_in_progress?(workflow_id)
+          log_debug "Workflow #{workflow_id} not complete yet (steps still in progress)."
           return
         end
 
         wf = repository.find_workflow(workflow_id)
-        return if wf.nil? || [StateMachine::SUCCEEDED, StateMachine::FAILED, StateMachine::CANCELLED].include?(wf.state.to_sym)
+        return if workflow_already_terminal?(wf)
 
-        final_state = repository.workflow_has_failures?(workflow_id) ? StateMachine::FAILED : StateMachine::SUCCEEDED
-
-        # --- MODIFIED: Use Transition Service ---
-        success = repository.update_workflow_attributes(
-          workflow_id,
-          { state: final_state.to_s, finished_at: Time.current },
-          expected_old_state: StateMachine::RUNNING
-        )
-        # --- END MODIFIED ---
-
-        if success
-          log_info "Workflow #{workflow_id} marked as #{final_state}."
-          publish_workflow_finished_event(workflow_id, final_state)
-        else
-          # Log handled by transition_service
-          log_warn "Failed to mark workflow #{workflow_id} as #{final_state}."
-        end
+        final_state = determine_final_workflow_state(workflow_id)
+        update_and_finalize_workflow(workflow_id, final_state)
       rescue => e
         log_error "Error during check_workflow_completion for #{workflow_id}: #{e.class} - #{e.message}"
       end
@@ -333,6 +316,36 @@ module Yantra
           finished_step_id: step.id,
           workflow_id: step.workflow_id
         )
+      end
+
+      def steps_in_progress?(workflow_id)
+        wip_states = StateMachine::WORK_IN_PROGRESS_STATES
+        repository.has_steps_in_states?(workflow_id: workflow_id, states: wip_states)
+      end
+
+      def workflow_already_terminal?(workflow)
+        return true if workflow.nil?
+        terminal_states = [StateMachine::SUCCEEDED, StateMachine::FAILED, StateMachine::CANCELLED]
+        terminal_states.include?(workflow.state.to_sym)
+      end
+
+      def determine_final_workflow_state(workflow_id)
+        repository.workflow_has_failures?(workflow_id) ? StateMachine::FAILED : StateMachine::SUCCEEDED
+      end
+
+      def update_and_finalize_workflow(workflow_id, final_state)
+        updated = repository.update_workflow_attributes(
+          workflow_id,
+          { state: final_state.to_s, finished_at: Time.current },
+          expected_old_state: StateMachine::RUNNING
+        )
+
+        if updated
+          log_info "Workflow #{workflow_id} marked as #{final_state}."
+          publish_workflow_finished_event(workflow_id, final_state)
+        else
+          log_warn "Failed to mark workflow #{workflow_id} as #{final_state}."
+        end
       end
 
       # --- Event Publishing Helpers (Restored Full Format) ---
