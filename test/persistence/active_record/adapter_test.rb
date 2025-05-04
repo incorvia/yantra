@@ -241,7 +241,6 @@ module Yantra
                 # --- END ADDED ---
                 state: Yantra::Core::StateMachine::AWAITING_EXECUTION.to_s,
                 enqueued_at: time_for_update,
-                earliest_execution_time: nil, # Explicitly nil for immediate
                 updated_at: time_for_update
               },
               { # Update step 2: delayed enqueue
@@ -255,7 +254,6 @@ module Yantra
                 # --- END ADDED ---
                 state: Yantra::Core::StateMachine::AWAITING_EXECUTION.to_s,
                 enqueued_at: time_for_update, # Also set enqueued_at
-                earliest_execution_time: delay_time,    # Set future time
                 updated_at: time_for_update
               }
               # Step 3 is NOT included in the update array
@@ -275,20 +273,16 @@ module Yantra
             # Check Step 1 (immediate)
             assert_equal 'awaiting_execution', step1_updated.state
             assert_in_delta time_for_update, step1_updated.enqueued_at, 1.second
-            assert_nil step1_updated.earliest_execution_time
             assert_in_delta time_for_update, step1_updated.updated_at, 1.second
 
             # Check Step 2 (delayed)
             assert_equal 'awaiting_execution', step2_updated.state
             assert_in_delta time_for_update, step2_updated.enqueued_at, 1.second
-            refute_nil step2_updated.earliest_execution_time
-            assert_in_delta delay_time, step2_updated.earliest_execution_time, 1.second
             assert_in_delta time_for_update, step2_updated.updated_at, 1.second
 
             # Check Step 3 (unchanged)
             assert_equal 'pending', step3_reloaded.state
             assert_nil step3_reloaded.enqueued_at
-            assert_nil step3_reloaded.earliest_execution_time
             assert_in_delta now - 1.minute, step3_reloaded.updated_at, 1.second # updated_at should not change
           end
 

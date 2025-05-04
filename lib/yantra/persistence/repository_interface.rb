@@ -40,11 +40,29 @@ module Yantra
       def create_step(step_instance); raise NotImplementedError; end # Renamed from persist_step
       def create_steps_bulk(step_instances_array); raise NotImplementedError; end # Renamed from persist_steps_bulk
       def update_step_attributes(step_id, attributes_hash, expected_old_state: nil); raise NotImplementedError; end
+      # WARNING: This method does NOT guard against race conditions.
+# Do NOT use it for `state` transitions where correctness depends on current state.
+# For atomic state transitions, use `bulk_transition_steps` instead.
+
       def bulk_update_steps(step_ids, attributes_hash); raise NotImplementedError; end # Updated param name
       def bulk_upsert_steps(updates_array); raise NotImplementedError; end
       def increment_step_retries(step_id); raise NotImplementedError; end
       def update_step_output(step_id, output); raise NotImplementedError; end # Renamed from record_step_output
       def update_step_error(step_id, error_hash); raise NotImplementedError; end # Renamed from record_step_error, updated param name
+    
+      # Performs an atomic bulk update on step records, transitioning them to a new state.
+      # Only steps currently in `expected_old_state` will be updated.
+      #
+      # NOTE: This is intended for critical state transitions. Must be atomic.
+      # If any steps are not in the expected state, they will be skipped.
+      #
+      # @param step_ids [Array<String>] IDs of steps to transition
+      # @param attributes_hash [Hash] Attributes to apply (must include :state)
+      # @param expected_old_state [Symbol] Only steps currently in this state will be updated
+      # @return [Array<String>] IDs of steps that were successfully updated
+      def bulk_transition_steps(step_ids, attributes_hash, expected_old_state:)
+        raise NotImplementedError
+      end
 
       # === Dependency Methods ===
 

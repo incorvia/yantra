@@ -280,7 +280,6 @@ puts "Step output: #{step&.output.inspect}"
 puts "Step error: #{step&.error.inspect}"
 # Access delay info
 puts "Step Delay Specified (seconds): #{step&.delay_seconds}"
-puts "Step Earliest Execution Time: #{step&.earliest_execution_time}"
 puts "Step Enqueued At (Timestamp): #{step&.enqueued_at}" # Timestamp when successfully handed off
 
 # Get all steps for a workflow

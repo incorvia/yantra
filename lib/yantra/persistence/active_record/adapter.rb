@@ -414,6 +414,37 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Error listing workflows: #{e.message}"
         end
 
+        # Performs an atomic state transition for multiple steps, filtering by expected_old_state.
+        #
+        # Only steps matching both the IDs and the expected state will be updated.
+        # Returns the IDs that were successfully transitioned.
+        #
+        # WARNING: Only use this method for atomic state transitions.
+        # Not suitable for updating arbitrary fields or metadata.
+        def bulk_transition_steps(step_ids, attributes_hash, expected_old_state:)
+          return [] if step_ids.nil? || step_ids.empty?
+
+          batch_token = SecureRandom.uuid
+          now = Time.current
+
+          update_attrs = attributes_hash.dup
+          update_attrs[:state] = update_attrs[:state].to_s if update_attrs[:state].is_a?(Symbol)
+          update_attrs[:updated_at] ||= now
+          update_attrs[:transition_batch_token] = batch_token
+
+          updated_count = StepRecord
+            .where(id: step_ids, state: expected_old_state.to_s)
+            .update_all(update_attrs)
+
+          # Return list of successfully updated step IDs
+          StepRecord.where(transition_batch_token: batch_token).pluck(:id)
+        rescue => e
+          log_error { "[AR Adapter] Failed bulk_transition_steps: #{e.message}" }
+          raise Yantra::Errors::PersistenceError, "Bulk transition failed: #{e.message}"
+        end
+
+
+
         private
 
         # Simple logging helpers (use block form for potential performance)
