@@ -276,7 +276,7 @@ module Yantra
         # @see Yantra::Persistence::RepositoryInterface#get_dependency_ids
         def get_dependency_ids(step_id)
           # ... (Implementation as before) ...
-          StepDependencyRecord.where(step_id: step_id).pluck(:depends_on_step_id)
+          ids = StepDependencyRecord.where(step_id: step_id).pluck(:depends_on_step_id)
         rescue ::ActiveRecord::ActiveRecordError => e
           log_error { "Error getting dependencies for step #{step_id}: #{e.message}" }
           raise Yantra::Errors::PersistenceError, "Error getting dependencies: #{e.message}"
