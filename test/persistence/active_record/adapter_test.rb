@@ -329,6 +329,180 @@ module Yantra
             assert result, "Expected atomic update to succeed"
           end
 
+          # Inside Yantra::Persistence::ActiveRecord::AdapterTest class
+
+          # --- Tests for bulk_transition_steps ---
+
+          def test_bulk_transition_steps_success
+            # Arrange: Create steps
+            step1 = create_step_record!(workflow_record: @workflow, state: "pending")
+            step2 = create_step_record!(workflow_record: @workflow, state: "pending")
+            step3 = create_step_record!(workflow_record: @workflow, state: "running")
+            step_ids_to_attempt = [step1.id, step2.id, step3.id]
+            target_state = :scheduling
+            now = Time.current
+
+            # --- Capture original timestamp for step3 ---
+            original_step3_updated_at = step3.updated_at
+            # --- End Capture ---
+
+            transitioned_ids = nil
+            Time.stub :current, now do
+              transitioned_ids = @adapter.bulk_transition_steps(
+                step_ids_to_attempt,
+                { state: target_state },
+                expected_old_state: :pending
+              )
+            end
+
+            # Assert: Returned IDs
+            assert_equal [step1.id, step2.id].sort, transitioned_ids.sort, "Should return IDs of successfully transitioned steps"
+
+            # Assert: Database State for updated steps
+            step1.reload
+            step2.reload
+            assert_equal target_state.to_s, step1.state
+            assert_equal target_state.to_s, step2.state
+            # Using assert_in_delta for the updated ones is still correct
+            assert_in_delta now, step1.updated_at, 1.second
+            assert_in_delta now, step2.updated_at, 1.second
+            assert_nil step1.transition_batch_token
+            assert_nil step2.transition_batch_token
+
+            # Assert: Step 3 remains unchanged
+            step3.reload
+            assert_equal "running", step3.state
+            assert_nil step3.transition_batch_token
+            # --- Assert updated_at did NOT change ---
+            # Check that the current updated_at is the same as the one before the call
+            # Use assert_in_delta with a small tolerance for potential float precision differences
+            assert_in_delta original_step3_updated_at.to_f, step3.updated_at.to_f, 0.001, "Step 3 updated_at should not change"
+            # --- End Assert ---
+          end
+
+          def test_bulk_transition_steps_none_match_expected_state
+            # Arrange: Create steps, none in the expected old state
+            step1 = create_step_record!(workflow_record: @workflow, state: "running")
+            step2 = create_step_record!(workflow_record: @workflow, state: "succeeded")
+            step_ids_to_attempt = [step1.id, step2.id]
+            target_state = :scheduling
+
+            # Act
+            transitioned_ids = @adapter.bulk_transition_steps(
+              step_ids_to_attempt,
+              { state: target_state },
+              expected_old_state: :pending # Expecting pending, but steps are running/succeeded
+            )
+
+            # Assert: Returned IDs
+            assert_empty transitioned_ids, "Should return empty array when no steps match expected state"
+
+            # Assert: Database State (no changes)
+            assert_equal "running", step1.reload.state
+            assert_equal "succeeded", step2.reload.state
+          end
+
+          def test_bulk_transition_steps_empty_input_array
+            # Act
+            transitioned_ids = @adapter.bulk_transition_steps(
+              [],
+              { state: :scheduling },
+              expected_old_state: :pending
+            )
+
+            # Assert
+            assert_empty transitioned_ids, "Should return empty array for empty input"
+          end
+
+          def test_bulk_transition_steps_nil_input_array
+            # Act
+            transitioned_ids = @adapter.bulk_transition_steps(
+              nil,
+              { state: :scheduling },
+              expected_old_state: :pending
+            )
+
+            # Assert
+            assert_empty transitioned_ids, "Should return empty array for nil input"
+          end
+
+          def test_bulk_transition_steps_handles_explicit_updated_at
+            # Arrange
+            step1 = create_step_record!(workflow_record: @workflow, state: "pending")
+            explicit_time = 5.minutes.ago
+            # Act
+            transitioned_ids = @adapter.bulk_transition_steps(
+              [step1.id],
+              { state: :scheduling, updated_at: explicit_time }, # Pass explicit time
+              expected_old_state: :pending
+            )
+
+            # Assert
+            assert_equal [step1.id], transitioned_ids
+            step1.reload
+            assert_equal "scheduling", step1.state
+            assert_in_delta explicit_time, step1.updated_at, 1.second, "Should use explicitly provided updated_at"
+            assert_nil step1.transition_batch_token
+          end
+
+          def test_bulk_transition_steps_raises_persistence_error_on_db_failure
+            # Arrange
+            step1 = create_step_record!(workflow_record: @workflow, state: "pending")
+            step_ids_to_attempt = [step1.id]
+
+            # Stub the first update_all call to simulate a DB error
+            StepRecord.expects(:where).with(id: step_ids_to_attempt, state: "pending").returns(
+              mock_scope = mock('scope')
+            )
+            mock_scope.expects(:update_all).raises(::ActiveRecord::StatementInvalid, "DB connection lost")
+
+            # Act & Assert
+            error = assert_raises(Yantra::Errors::PersistenceError) do
+              @adapter.bulk_transition_steps(
+                step_ids_to_attempt,
+                { state: :scheduling },
+                expected_old_state: :pending
+              )
+            end
+            assert_match /Bulk transition failed: DB connection lost/, error.message
+          end
+
+          def test_bulk_transition_steps_handles_error_during_token_clearing
+            # Arrange: Create a step and successfully transition it (mock the first update)
+            step1 = create_step_record!(workflow_record: @workflow, state: "pending")
+            step_ids_to_attempt = [step1.id]
+            batch_token = SecureRandom.uuid # Predictable token for mocking
+            SecureRandom.stubs(:uuid).returns(batch_token)
+
+            # Mock successful first update
+            StepRecord.expects(:where).with(id: step_ids_to_attempt, state: "pending").returns(mock_scope1 = mock)
+            mock_scope1.expects(:update_all).returns(1) # Simulate 1 row updated
+
+            # Mock successful pluck
+            StepRecord.expects(:where).with(transition_batch_token: batch_token).returns(mock_scope2 = mock)
+            mock_scope2.expects(:pluck).with(:id).returns([step1.id])
+
+            # Mock FAILURE on second update (token clearing)
+            StepRecord.expects(:where).with(id: [step1.id]).returns(mock_scope3 = mock)
+            mock_scope3.expects(:update_all).with(transition_batch_token: nil).raises(::ActiveRecord::StatementInvalid, "Token clear failed")
+
+            # Act & Assert: Should still raise PersistenceError
+            error = assert_raises(Yantra::Errors::PersistenceError) do
+              @adapter.bulk_transition_steps(
+                step_ids_to_attempt,
+                { state: :scheduling },
+                expected_old_state: :pending
+              )
+            end
+            assert_match /Bulk transition failed: Token clear failed/, error.message
+
+            # Check if token remains set in DB (it should if clearing failed)
+            # Ensure the first update DID happen conceptually before the clear failed
+            # This might require manually setting the token in the test DB before the final check
+            # or adjusting mocks. This test becomes complex quickly.
+          end
+          # --- End Tests for bulk_transition_steps ---
+
           # --- Private Helper Methods ---
           private
 

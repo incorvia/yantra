@@ -422,7 +422,7 @@ module Yantra
         # WARNING: Only use this method for atomic state transitions.
         # Not suitable for updating arbitrary fields or metadata.
         def bulk_transition_steps(step_ids, attributes_hash, expected_old_state:)
-          return [] if step_ids.nil? || step_ids.empty?
+          return [] if step_ids.blank?
 
           batch_token = SecureRandom.uuid
           now = Time.current
@@ -432,18 +432,22 @@ module Yantra
           update_attrs[:updated_at] ||= now
           update_attrs[:transition_batch_token] = batch_token
 
-          updated_count = StepRecord
+          StepRecord
             .where(id: step_ids, state: expected_old_state.to_s)
             .update_all(update_attrs)
 
-          # Return list of successfully updated step IDs
-          StepRecord.where(transition_batch_token: batch_token).pluck(:id)
+          transitioned_ids = StepRecord.where(transition_batch_token: batch_token).pluck(:id)
+
+          # Clear the token now that we’ve captured the affected rows
+          StepRecord
+            .where(id: transitioned_ids)
+            .update_all(transition_batch_token: nil)
+
+          transitioned_ids
         rescue => e
           log_error { "[AR Adapter] Failed bulk_transition_steps: #{e.message}" }
           raise Yantra::Errors::PersistenceError, "Bulk transition failed: #{e.message}"
         end
-
-
 
         private
 
