@@ -110,8 +110,9 @@ module Yantra
           orchestrator.handle_post_processing(step_id)
         else
           current_state = repository.find_step(step_id)&.state || 'unknown'
-          log_error "Failed to transition step #{step_id} to POST_PROCESSING. Found '#{current_state}'."
-          raise Yantra::Errors::OrchestrationError, "Failed to transition step #{step_id} to POST_PROCESSING"
+          error_msg = "Failed to transition step #{step_id} from #{StateMachine::RUNNING} to POST_PROCESSING. Found current state: #{current_state}"
+          log_error error_msg
+          raise Yantra::Errors::OrchestrationError, error_msg
         end
       end
 
