@@ -42,7 +42,7 @@ module Yantra
 
         publish_success_event(workflow_id, successfully_enqueued_ids, now)
 
-        successfully_enqueued_ids
+        successfully_enqueued_ids.size
       end
 
       private
