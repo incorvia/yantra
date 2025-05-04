@@ -2,40 +2,44 @@
 # frozen_string_literal: true
 
 require 'set'
+require_relative '../errors' # Required for InvalidStateTransition
 
 module Yantra
   module Core
     # Defines valid states and transitions for workflows and steps.
     module StateMachine
       # --- Canonical States ---
-      PENDING         = :pending
-      AWAITING_EXECUTION      = :awaiting_execution # Step is being processed for handoff to job system.
-                                   # enqueued_at timestamp indicates successful handoff.
-      RUNNING         = :running
-      POST_PROCESSING = :post_processing
-      SUCCEEDED       = :succeeded
-      FAILED          = :failed
-      CANCELLED       = :cancelled
+      PENDING         = :pending           # Initial state, waiting for dependencies or start.
+      SCHEDULING      = :scheduling        # Prerequisites met, claimed for enqueueing attempt.
+      ENQUEUED        = :enqueued          # Successfully handed off to the background job system.
+      RUNNING         = :running           # Worker has picked up the job and started execution.
+      POST_PROCESSING = :post_processing   # Step's perform method succeeded, handling dependents.
+      SUCCEEDED       = :succeeded         # Step completed successfully, including post-processing.
+      FAILED          = :failed            # Step failed permanently (after retries) or critically.
+      CANCELLED       = :cancelled         # Step was cancelled before execution started or completed.
 
       # All valid states
       ALL_STATES = Set[
-        PENDING, AWAITING_EXECUTION, RUNNING, POST_PROCESSING, SUCCEEDED, FAILED, CANCELLED
+        PENDING, SCHEDULING, ENQUEUED, RUNNING, POST_PROCESSING, SUCCEEDED, FAILED, CANCELLED
       ].freeze
 
-      # States a step can be in to be considered for starting the enqueue process
-      RELEASABLE_FROM_STATES = Set[PENDING].freeze # Only PENDING steps are initially releasable
+      # States a step can be in to be considered for starting the transition to scheduling
+      RELEASABLE_FROM_STATES = Set[PENDING].freeze
 
       # States a prerequisite must be in to be considered 'met'
+      # POST_PROCESSING is included because dependents can start processing once the parent's core work is done.
       PREREQUISITE_MET_STATES = Set[POST_PROCESSING, SUCCEEDED].freeze
 
-      # States a step can be in to be eligible for cancellation (before running)
-      CANCELLABLE_STATES_LOGIC = ->(state_symbol, enqueued_at_value) {
-        state = state_symbol&.to_sym
-        (state == PENDING) || (state == AWAITING_EXECUTION && enqueued_at_value.nil?)
-      }
+      # States a step can be in to be eligible for cancellation
+      # Cancellation targets steps before they are successfully running.
+      # PENDING: Definitely cancellable.
+      # SCHEDULING: Cancellable (enqueue hasn't succeeded/been confirmed yet).
+      # ENQUEUED: Not typically cancellable via Yantra (already in the job queue).
+      CANCELLABLE_STATES = Set[PENDING, SCHEDULING].freeze
 
-      # States from which a step can transition to RUNNING
-      STARTABLE_STATES = Set[PENDING, AWAITING_EXECUTION, RUNNING].freeze
+      # States from which a step can transition to RUNNING (i.e., worker can pick it up)
+      # Includes RUNNING for idempotency.
+      STARTABLE_STATES = Set[SCHEDULING, ENQUEUED, RUNNING].freeze
 
       # Terminal states (cannot transition *from* these naturally in standard flow)
       TERMINAL_STATES = Set[
@@ -44,30 +48,29 @@ module Yantra
 
       # States indicating work is still potentially in progress or waiting
       NON_TERMINAL_STATES = ALL_STATES - TERMINAL_STATES
-      # => Set[:pending, :awaiting_execution, :running, :post_processing]
-      
+      # => Set[:pending, :scheduling, :enqueued, :running, :post_processing, :failed]
+
+      # States representing active work or waiting for active work (used for workflow completion check)
       WORK_IN_PROGRESS_STATES = Set[
-        PENDING, AWAITING_EXECUTION, RUNNING, POST_PROCESSING
+        PENDING, SCHEDULING, ENQUEUED, RUNNING, POST_PROCESSING
       ].freeze
 
       # Allowed transitions between states during normal operation
       VALID_TRANSITIONS = {
-        PENDING         => Set[AWAITING_EXECUTION, CANCELLED].freeze,
-        # AWAITING_EXECUTION can transition to RUNNING (if worker picks up),
-        # FAILED (if critical enqueue error), or CANCELLED.
-        # The state isn't explicitly set back to PENDING on recoverable enqueue error.
-        AWAITING_EXECUTION      => Set[RUNNING, CANCELLED, FAILED].freeze,
-        RUNNING         => Set[POST_PROCESSING, FAILED, CANCELLED].freeze,
-        POST_PROCESSING => Set[SUCCEEDED, FAILED].freeze,
-        FAILED          => Set[PENDING, CANCELLED].freeze, # Retry resets to PENDING
-        SUCCEEDED       => Set[].freeze,
-        CANCELLED       => Set[].freeze
+        PENDING         => Set[SCHEDULING, CANCELLED].freeze,
+        SCHEDULING      => Set[ENQUEUED, RUNNING, FAILED, CANCELLED].freeze, # -> Enqueued (success), Running (immediate pickup), Failed (enqueue error), Cancelled
+        ENQUEUED        => Set[RUNNING, FAILED].freeze,                       # -> Running (worker pickup), Failed (worker immediate failure)
+        RUNNING         => Set[POST_PROCESSING, FAILED, CANCELLED].freeze,     # -> PostProcessing (success), Failed (runtime error), Cancelled (external)
+        POST_PROCESSING => Set[SUCCEEDED, FAILED].freeze,                     # -> Succeeded (final), Failed (post-processing error)
+        FAILED          => Set[PENDING, CANCELLED].freeze,                     # -> Pending (retry), Cancelled (external)
+        SUCCEEDED       => Set[].freeze,                                       # Terminal
+        CANCELLED       => Set[].freeze                                        # Terminal
       }.freeze
 
       # --- Helper Methods ---
 
-      # Can this state be considered for starting the enqueue process?
-      def self.can_enqueue?(state_symbol)
+      # Can this state be considered for starting the transition to scheduling?
+      def self.can_begin_scheduling?(state_symbol)
         RELEASABLE_FROM_STATES.include?(state_symbol&.to_sym)
       end
 
@@ -88,28 +91,26 @@ module Yantra
 
       # Returns true if the state indicates downstream processing should occur
       def self.triggers_downstream_processing?(state_symbol)
+        # POST_PROCESSING for success path, FAILED/CANCELLED for failure path
         [POST_PROCESSING, FAILED, CANCELLED].include?(state_symbol&.to_sym)
       end
 
-      # Checks if a step is in a state where it can be safely cancelled
-      def self.is_cancellable_state?(state_symbol, enqueued_at_value)
-        state = state_symbol&.to_sym
-        is_pending = (state == PENDING)
-        is_stuck_awaiting_execution = (state == AWAITING_EXECUTION && enqueued_at_value.nil?)
-        is_pending || is_stuck_awaiting_execution
+      # Checks if a step is in a state where it can be safely cancelled by Yantra
+      # (Replaces the old lambda logic, simplifies based on new states)
+      def self.is_cancellable_state?(state_symbol)
+        CANCELLABLE_STATES.include?(state_symbol&.to_sym)
       end
 
       # Checks if a step is in a state where it's a candidate for an enqueue attempt
-      def self.is_enqueue_candidate_state?(state_symbol, enqueued_at_value)
+      # (Includes retries finding steps stuck in SCHEDULING)
+      def self.is_enqueue_candidate_state?(state_symbol)
         state = state_symbol&.to_sym
-        is_pending = (state == PENDING)
-        is_stuck_awaiting_execution = (state == AWAITING_EXECUTION && enqueued_at_value.nil?)
-        is_pending || is_stuck_awaiting_execution
+        state == PENDING || state == SCHEDULING
       end
 
       # Returns all defined states
       def self.states
-        ALL_STATES
+        ALL_STATES.to_a # Return as array for easier iteration if needed elsewhere
       end
 
       # Returns states considered strictly terminal for normal execution flow
@@ -135,6 +136,6 @@ module Yantra
         true
       end
 
-    end
-  end
-end
+    end # module StateMachine
+  end # module Core
+end # module Yantra
