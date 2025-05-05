@@ -101,15 +101,31 @@ module Yantra
       end
 
       def update_enqueued_state(step_ids, time)
+        # Attributes for the final state
         attrs = {
           state: StateMachine::ENQUEUED.to_s,
           enqueued_at: time,
-          updated_at: time
+          updated_at: time # Ensure updated_at reflects this transition
         }
-        count = repository.bulk_update_steps(step_ids, attrs)
-        log_info "Phase 3: Updated #{count} steps to ENQUEUED."
+
+        transitioned_ids = repository.bulk_transition_steps(
+          step_ids,
+          attrs,
+          expected_old_state: StateMachine::SCHEDULING
+        )
+
+        count = transitioned_ids.size
+        if count != step_ids.size
+          log_warn "Phase 3: Attempted to update #{step_ids.size} steps to ENQUEUED, but only #{count} were still in SCHEDULING state. Missed IDs: #{(step_ids - transitioned_ids).inspect}"
+        else
+          log_info "Phase 3: Updated #{count} steps to ENQUEUED."
+        end
+
+      # Rescue PersistenceError specifically from the transition attempt
       rescue Yantra::Errors::PersistenceError => e
-        log_error "Phase 3 Failed: #{e.message}"
+        log_error "Phase 3 Failed (PersistenceError during transition): #{e.message}"
+      rescue => e
+        log_error "Phase 3 Failed (Unexpected Error): #{e.class} - #{e.message}"
       end
 
       def raise_enqueue_error(failed_ids)

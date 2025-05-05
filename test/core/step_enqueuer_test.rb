@@ -42,7 +42,7 @@ module Yantra
         # Stub methods that might be called
         @repository.stubs(:bulk_transition_steps)
         @repository.stubs(:find_steps) # General stub
-        @repository.stubs(:bulk_update_steps)
+        # @repository.stubs(:bulk_update_steps) # No longer expected in main flow
         @worker_adapter.stubs(:enqueue)
         @worker_adapter.stubs(:enqueue_in)
         @notifier.stubs(:publish)
@@ -81,7 +81,7 @@ module Yantra
         assert_equal [], @enqueuer.call(workflow_id: @workflow_id, step_ids_to_attempt: nil)
       end
 
-      def test_call_returns_empty_if_transition_fails_or_returns_no_ids
+      def test_call_returns_empty_if_transition_to_scheduling_fails_or_returns_no_ids
         step_ids = [@step1_id]
         step1_pending = MockStepRecordSET.new(id: @step1_id, state: :pending) # Use symbol
 
@@ -92,16 +92,17 @@ module Yantra
                    .with([@step1_id], has_entry(state: SCHEDULING.to_s), expected_old_state: PENDING)
                    .returns([]) # Simulate no steps transitioned
 
+        # Ensure subsequent methods are not called
         # Note: Second find_steps *will* be called with empty array []
         @worker_adapter.expects(:enqueue).never
-        @repository.expects(:bulk_update_steps).never
+        # No longer expect bulk_update_steps here
         @notifier.expects(:publish).never
 
         result = @enqueuer.call(workflow_id: @workflow_id, step_ids_to_attempt: step_ids)
         assert_equal [], result # Expect empty array return value now
       end
 
-      def test_call_handles_transition_persistence_error
+      def test_call_handles_transition_to_scheduling_persistence_error
         step_ids = [@step1_id]
         step1_pending = MockStepRecordSET.new(id: @step1_id, state: :pending) # Use symbol
         error = Yantra::Errors::PersistenceError.new("DB write failed during transition")
@@ -113,7 +114,7 @@ module Yantra
         @logger.expects(:error)
 
         @worker_adapter.expects(:enqueue).never
-        @repository.expects(:bulk_update_steps).never
+        # No longer expect bulk_update_steps here
         @notifier.expects(:publish).never
 
         raised_error = assert_raises(Yantra::Errors::PersistenceError) do
@@ -129,20 +130,28 @@ module Yantra
         step1_scheduling = MockStepRecordSET.new(id: @step1_id, state: :scheduling, klass: 'Step1', workflow_id: @workflow_id, delay_seconds: nil, queue: 'q1') # Use symbol
 
         sequence = Mocha::Sequence.new('enqueue_success')
+
+        # Phase 1: Transition PENDING -> SCHEDULING
         @repository.expects(:find_steps).with(step_ids).returns([step1_pending]).in_sequence(sequence)
         @repository.expects(:bulk_transition_steps)
                    .with([@step1_id], has_entry(state: SCHEDULING.to_s), expected_old_state: PENDING)
-                   .returns([@step1_id]).in_sequence(sequence)
+                   .returns([@step1_id]).in_sequence(sequence) # Return transitioned ID
+
+        # Phase 2: Enqueue with worker
         @repository.expects(:find_steps)
                    .with([@step1_id])
-                   .returns([step1_scheduling]).in_sequence(sequence)
+                   .returns([step1_scheduling]).in_sequence(sequence) # Find the step (now scheduling)
         @worker_adapter.expects(:enqueue)
                        .with(step1_scheduling.id, @workflow_id, step1_scheduling.klass, step1_scheduling.queue)
-                       .returns(true).in_sequence(sequence)
+                       .returns(true).in_sequence(sequence) # Simulate successful enqueue
+
+        # Phase 3: Transition SCHEDULING -> ENQUEUED (using bulk_transition_steps)
         expected_attrs_phase3 = { state: ENQUEUED.to_s, enqueued_at: @now, updated_at: @now }
-        @repository.expects(:bulk_update_steps)
-                   .with([@step1_id], expected_attrs_phase3)
-                   .returns(1).in_sequence(sequence)
+        @repository.expects(:bulk_transition_steps) # <<< CHANGED: Use bulk_transition_steps
+                   .with([@step1_id], expected_attrs_phase3, expected_old_state: SCHEDULING) # <<< CHANGED: Added expected_old_state
+                   .returns([@step1_id]).in_sequence(sequence) # Return ID transitioned to ENQUEUED
+
+        # Phase 4: Publish event
         @notifier.expects(:publish)
                  .with('yantra.step.bulk_enqueued', has_entries(enqueued_ids: [@step1_id], enqueued_at: @now))
                  .in_sequence(sequence)
@@ -160,16 +169,24 @@ module Yantra
         step1_scheduling = MockStepRecordSET.new(id: @step1_id, state: :scheduling, klass: 'Step1', workflow_id: @workflow_id, delay_seconds: delay, queue: 'q1') # Use symbol
 
         sequence = Mocha::Sequence.new('enqueue_delayed_success')
+
+        # Phase 1: Transition PENDING -> SCHEDULING
         @repository.expects(:find_steps).with(step_ids).returns([step1_pending]).in_sequence(sequence)
-        @repository.expects(:bulk_transition_steps).with([@step1_id], any_parameters).returns([@step1_id]).in_sequence(sequence)
+        @repository.expects(:bulk_transition_steps).with([@step1_id], has_entry(state: SCHEDULING.to_s), expected_old_state: PENDING).returns([@step1_id]).in_sequence(sequence)
+
+        # Phase 2: Enqueue with worker (delayed)
         @repository.expects(:find_steps).with([@step1_id]).returns([step1_scheduling]).in_sequence(sequence)
         @worker_adapter.expects(:enqueue_in)
                        .with(delay, step1_scheduling.id, @workflow_id, step1_scheduling.klass, step1_scheduling.queue)
                        .returns(true).in_sequence(sequence)
+
+        # Phase 3: Transition SCHEDULING -> ENQUEUED
         expected_attrs_phase3 = { state: ENQUEUED.to_s, enqueued_at: @now, updated_at: @now }
-        @repository.expects(:bulk_update_steps)
-                   .with([@step1_id], expected_attrs_phase3)
-                   .returns(1).in_sequence(sequence)
+        @repository.expects(:bulk_transition_steps) # <<< CHANGED
+                   .with([@step1_id], expected_attrs_phase3, expected_old_state: SCHEDULING) # <<< CHANGED
+                   .returns([@step1_id]).in_sequence(sequence)
+
+        # Phase 4: Publish event
         @notifier.expects(:publish)
                  .with('yantra.step.bulk_enqueued', has_entries(enqueued_ids: [@step1_id], enqueued_at: @now))
                  .in_sequence(sequence)
@@ -194,18 +211,29 @@ module Yantra
         all_ids = all_scheduling_steps.map(&:id)
 
         sequence = Mocha::Sequence.new('enqueue_mixed_success')
-        @repository.expects(:find_steps).with(step_ids).returns(initial_steps).in_sequence(sequence)
-        @repository.expects(:bulk_transition_steps).with(all_ids, any_parameters).returns(all_ids).in_sequence(sequence)
-        @repository.expects(:find_steps).with(all_ids).returns(all_scheduling_steps).in_sequence(sequence)
 
+        # Phase 1: Transition PENDING -> SCHEDULING
+        @repository.expects(:find_steps).with(step_ids).returns(initial_steps).in_sequence(sequence)
+        @repository.expects(:bulk_transition_steps).with(all_ids, has_entry(state: SCHEDULING.to_s), expected_old_state: PENDING).returns(all_ids).in_sequence(sequence)
+
+        # Phase 2: Enqueue with worker
+        @repository.expects(:find_steps).with(all_ids).returns(all_scheduling_steps).in_sequence(sequence)
         @worker_adapter.expects(:enqueue).with(step1_s.id, @workflow_id, step1_s.klass, step1_s.queue).returns(true)
         @worker_adapter.expects(:enqueue).with(step3_s.id, @workflow_id, step3_s.klass, step3_s.queue).returns(true)
         @worker_adapter.expects(:enqueue_in).with(delay, step2_s.id, @workflow_id, step2_s.klass, step2_s.queue).returns(true)
 
+        # Phase 3: Transition SCHEDULING -> ENQUEUED
         expected_attrs_phase3 = { state: ENQUEUED.to_s, enqueued_at: @now, updated_at: @now }
-        @repository.expects(:bulk_update_steps)
-                   .with { |ids, attrs| ids.is_a?(Array) && ids.sort == all_ids.sort && attrs == expected_attrs_phase3 }
-                   .returns(3).in_sequence(sequence)
+        # Use a block matcher for flexibility with ID order
+        @repository.expects(:bulk_transition_steps) # <<< CHANGED
+                   .with(
+                     all_ids,
+                     expected_attrs_phase3,
+                     expected_old_state: SCHEDULING # <<< CHANGED
+                   )
+                   .returns(all_ids).in_sequence(sequence) # <<< FIX: Ensure returns array
+
+        # Phase 4: Publish event
         @notifier.expects(:publish)
                  .with { |name, payload| name == 'yantra.step.bulk_enqueued' && payload[:enqueued_ids].sort == all_ids.sort && payload[:enqueued_at] == @now }
                  .in_sequence(sequence)
@@ -225,22 +253,28 @@ module Yantra
         all_ids = [@step1_id, @step2_id]
 
         sequence = Mocha::Sequence.new('enqueue_fail_sequence')
-        @repository.expects(:find_steps).with(step_ids).returns([step1_p, step2_p]).in_sequence(sequence)
-        @repository.expects(:bulk_transition_steps).with(all_ids, any_parameters).returns(all_ids).in_sequence(sequence)
-        @repository.expects(:find_steps).with(all_ids).returns([step1_s, step2_s]).in_sequence(sequence)
 
-        # Simulate failure for step2
+        # Phase 1: Transition PENDING -> SCHEDULING
+        @repository.expects(:find_steps).with(step_ids).returns([step1_p, step2_p]).in_sequence(sequence)
+        @repository.expects(:bulk_transition_steps).with(all_ids, has_entry(state: SCHEDULING.to_s), expected_old_state: PENDING).returns(all_ids).in_sequence(sequence)
+
+        # Phase 2: Enqueue with worker (step 2 fails)
+        @repository.expects(:find_steps).with(all_ids).returns([step1_s, step2_s]).in_sequence(sequence)
         @worker_adapter.expects(:enqueue).with(step1_s.id, @workflow_id, step1_s.klass, step1_s.queue).returns(true).in_sequence(sequence)
         @worker_adapter.expects(:enqueue).with(step2_s.id, @workflow_id, step2_s.klass, step2_s.queue).returns(false).in_sequence(sequence) # Step 2 fails
 
+        # Phase 3: Transition SCHEDULING -> ENQUEUED (only for step 1)
         expected_attrs_phase3 = { state: ENQUEUED.to_s, enqueued_at: @now, updated_at: @now }
-        @repository.expects(:bulk_update_steps)
-                   .with([@step1_id], expected_attrs_phase3) # Only step 1 updated
-                   .returns(1).in_sequence(sequence)
+        @repository.expects(:bulk_transition_steps) # <<< CHANGED
+                   .with([@step1_id], expected_attrs_phase3, expected_old_state: SCHEDULING) # <<< CHANGED: Only step 1
+                   .returns([@step1_id]).in_sequence(sequence)
+
+        # Phase 4: Publish event (only for step 1)
         @notifier.expects(:publish)
-                 .with('yantra.step.bulk_enqueued', has_entries(enqueued_ids: [@step1_id], enqueued_at: @now)) # Only step 1 published
+                 .with('yantra.step.bulk_enqueued', has_entries(enqueued_ids: [@step1_id], enqueued_at: @now)) # <<< CHANGED: Only step 1
                  .in_sequence(sequence)
 
+        # Act & Assert: Expect EnqueueFailed error
         error = assert_raises(Yantra::Errors::EnqueueFailed) do
           Time.stub :current, @now do
             @enqueuer.call(workflow_id: @workflow_id, step_ids_to_attempt: step_ids)
@@ -257,14 +291,28 @@ module Yantra
         enqueue_error = StandardError.new("Redis connection lost")
 
         sequence = Mocha::Sequence.new('enqueue_raise_fail')
-        @repository.expects(:find_steps).with(step_ids).returns([step1_p]).in_sequence(sequence)
-        @repository.expects(:bulk_transition_steps).with([@step1_id], any_parameters).returns([@step1_id]).in_sequence(sequence)
-        @repository.expects(:find_steps).with([@step1_id]).returns([step1_s]).in_sequence(sequence)
-        @worker_adapter.expects(:enqueue).with(step1_s.id, @workflow_id, step1_s.klass, step1_s.queue).raises(enqueue_error).in_sequence(sequence)
 
-        @repository.expects(:bulk_update_steps).never
+        # Phase 1: Transition PENDING -> SCHEDULING (Should happen)
+        @repository.expects(:find_steps).with(step_ids).returns([step1_p]).in_sequence(sequence)
+        @repository.expects(:bulk_transition_steps)
+                   .with([@step1_id], has_entry(state: SCHEDULING.to_s), expected_old_state: PENDING)
+                   .returns([@step1_id]).in_sequence(sequence)
+
+        # Phase 2: Enqueue with worker (raises error)
+        @repository.expects(:find_steps).with([@step1_id]).returns([step1_s]).in_sequence(sequence)
+        @worker_adapter.expects(:enqueue)
+                       .with(step1_s.id, @workflow_id, step1_s.klass, step1_s.queue)
+                       .raises(enqueue_error).in_sequence(sequence)
+
+        # Phase 3: Transition SCHEDULING -> ENQUEUED (Should NOT happen)
+        @repository.expects(:bulk_transition_steps)
+                   .with(any_parameters, any_parameters, has_entry(expected_old_state: SCHEDULING)) # Match the specific call signature
+                   .never # <<< FIX: Expect Phase 3 transition to never happen
+
+        # Phase 4: Publish event (Should NOT happen)
         @notifier.expects(:publish).never
 
+        # Act & Assert: Expect EnqueueFailed error
         error = assert_raises(Yantra::Errors::EnqueueFailed) do
            Time.stub :current, @now do
             @enqueuer.call(workflow_id: @workflow_id, step_ids_to_attempt: step_ids)
@@ -273,33 +321,50 @@ module Yantra
         assert_includes error.failed_ids, @step1_id
       end
 
-      def test_call_handles_phase3_update_failure_gracefully
+      # <<< FIX: Updated test name and assertions >>>
+      def test_call_returns_enqueued_id_when_phase3_transition_fails
         step_ids = [@step1_id]
         step1_p = MockStepRecordSET.new(id: @step1_id, state: :pending, klass: 'Step1') # Use symbol
         step1_s = MockStepRecordSET.new(id: @step1_id, state: :scheduling, klass: 'Step1', workflow_id: @workflow_id, queue: 'q1') # Use symbol
-        update_error = Yantra::Errors::PersistenceError.new("DB write failed during final update")
+        transition_error = Yantra::Errors::PersistenceError.new("DB write failed during final transition")
 
         sequence = Mocha::Sequence.new('phase3_fail')
+
+        # Phase 1: Transition PENDING -> SCHEDULING
         @repository.expects(:find_steps).with(step_ids).returns([step1_p]).in_sequence(sequence)
-        @repository.expects(:bulk_transition_steps).with([@step1_id], any_parameters).returns([@step1_id]).in_sequence(sequence)
+        @repository.expects(:bulk_transition_steps).with([@step1_id], has_entry(state: SCHEDULING.to_s), expected_old_state: PENDING).returns([@step1_id]).in_sequence(sequence)
+
+        # Phase 2: Enqueue with worker (succeeds)
         @repository.expects(:find_steps).with([@step1_id]).returns([step1_s]).in_sequence(sequence)
         @worker_adapter.expects(:enqueue).with(step1_s.id, @workflow_id, step1_s.klass, step1_s.queue).returns(true).in_sequence(sequence)
+
+        # Phase 3: Transition SCHEDULING -> ENQUEUED (raises error)
         expected_attrs_phase3 = { state: ENQUEUED.to_s, enqueued_at: @now, updated_at: @now }
-        @repository.expects(:bulk_update_steps)
-                   .with([@step1_id], expected_attrs_phase3)
-                   .raises(update_error).in_sequence(sequence)
+        @repository.expects(:bulk_transition_steps) # <<< CHANGED
+                   .with([@step1_id], expected_attrs_phase3, expected_old_state: SCHEDULING) # <<< CHANGED
+                   .raises(transition_error).in_sequence(sequence)
+
+        # Phase 4: Publish event (SHOULD STILL BE CALLED)
         @notifier.expects(:publish)
                  .with('yantra.step.bulk_enqueued', has_entries(enqueued_ids: [@step1_id], enqueued_at: @now))
                  .in_sequence(sequence)
+
+        # Expect error log for the failed transition
         @logger.expects(:error)
 
+        # Act: Call the enqueuer
         processed_ids = nil
         Time.stub :current, @now do
+          # The call should NOT raise the PersistenceError from Phase 3, but log it.
+          # It should still return the ID that was successfully enqueued in Phase 2.
           processed_ids = @enqueuer.call(workflow_id: @workflow_id, step_ids_to_attempt: step_ids)
         end
 
-        assert_equal [@step1_id], processed_ids
+        # Assert: The ID successfully handed off to the worker should be returned
+        assert_equal [@step1_id], processed_ids, "Should return ID enqueued in Phase 2 despite Phase 3 DB error"
       end
+      # <<< END FIX >>>
+
     end # class StepEnqueuerTest
   end # module Core
 end # module Yantra
