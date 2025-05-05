@@ -42,6 +42,12 @@ module Yantra
         @logger.stubs(:warn)
         @logger.stubs(:error)
 
+        @repository.stubs(:respond_to?).with(:list_steps).returns(true)
+        @repository.stubs(:respond_to?).with(:bulk_update_steps).returns(true)
+        @repository.stubs(:respond_to?).with(:find_steps).returns(true)
+        @repository.stubs(:respond_to?).with(:get_dependent_ids).returns(true)
+        @repository.stubs(:respond_to?).with(:get_dependent_ids_bulk).returns(true)
+
         @processor = DependentProcessor.new(
           repository: @repository,
           step_enqueuer: @step_enqueuer,
@@ -144,7 +150,6 @@ module Yantra
         )
       end
 
-      # --- RENAMED and MODIFIED Test ---
       def test_process_successors_enqueues_step_stuck_in_scheduling_on_retry
         # Simulate a retry scenario where the dependent failed initial enqueue
         dependents = [@dependent1_id]
@@ -167,49 +172,37 @@ module Yantra
           workflow_id: @workflow_id
         )
       end
-      # --- END RENAMED and MODIFIED Test ---
 
       # === Failure/Cancellation Path (process_failure_cascade) ===
       def test_process_failure_cascade_cancels_eligible_dependents
-        dependents = [@dependent1_id, @dependent2_id]
+        # Arrange: Setup steps with different states
+        step1_pending = MockStepRecordDPT.new(id: @dependent1_id, state: :pending)
+        step2_scheduling = MockStepRecordDPT.new(id: @dependent2_id, state: :scheduling)
+        step3_enqueued = MockStepRecordDPT.new(id: @step3_id, state: :enqueued)
+        initial_dependents = [@dependent1_id, @dependent2_id, @step3_id]
+        expected_cancellable = [@dependent1_id, @dependent2_id] # Only pending and scheduling
 
-        # Eligible for cancellation: PENDING or SCHEDULING
-        step1_pending = MockStepRecordDPT.new(id: @dependent1_id, state: 'pending')
-        step2_scheduling = MockStepRecordDPT.new(id: @dependent2_id, state: 'scheduling')
-        # Not eligible: ENQUEUED or later
-        step3_enqueued = MockStepRecordDPT.new(id: @step3_id, state: 'enqueued') # Use the defined ID
+        # Mock the repository calls that GraphUtils will make
+        # 1. Initial get_dependent_ids call by the processor itself
+        @repository.expects(:get_dependent_ids).with(@finished_step_id).returns(initial_dependents)
 
-        all_dependents = [@dependent1_id, @dependent2_id, @step3_id] # Now uses defined ID
-        steps_map = {
-          @dependent1_id => step1_pending,
-          @dependent2_id => step2_scheduling,
-          @step3_id      => step3_enqueued # Use the defined ID
-        }
-        dependents_map = { # Grandchildren map (empty for this test)
-          @dependent1_id => [],
-          @dependent2_id => [],
-          @step3_id      => [] # Use the defined ID
-        }
+        # 2. GraphUtils call: find_steps for the initial batch (include_starting_nodes: true)
+        @repository.expects(:find_steps).with(initial_dependents).returns([step1_pending, step2_scheduling, step3_enqueued])
 
-        @repository.expects(:get_dependent_ids).with(@finished_step_id).returns(all_dependents)
-        # find_steps will be called recursively, first for direct dependents
-        @repository.expects(:find_steps).with(all_dependents).returns(steps_map.values)
-        # get_dependent_ids_bulk called for the batch found
-        @repository.expects(:get_dependent_ids_bulk).with(all_dependents).returns(dependents_map)
-        # Since no grandchildren, no further find_steps/get_dependent_ids_bulk expected
+        # 3. GraphUtils call: get_dependent_ids_bulk for the nodes added to queue
+        #    (In this case, only dep1 and dep2 match the cancellable state)
+        @repository.expects(:get_dependent_ids_bulk).with([@dependent1_id.to_s, @dependent2_id.to_s]).returns({}) # Assume no further children
 
-        # Expect bulk update ONLY for the cancellable steps
-        expected_cancellable = [@dependent1_id, @dependent2_id]
-        # --- MODIFIED: Simplified block matcher ---
-        @repository.expects(:bulk_update_steps).with do |ids, attrs|
-          ids_match = ids.is_a?(Array) && ids.sort == expected_cancellable.sort
-          state_match = attrs.is_a?(Hash) && attrs[:state] == StateMachine::CANCELLED.to_s
-          # Only check IDs and state for simplicity, assuming timestamps will be set
-          ids_match && state_match
-        end.returns(expected_cancellable.size)
-        # --- END MODIFICATION ---
+        # Expect bulk update ONLY for the steps identified as cancellable
+        @repository.expects(:bulk_update_steps).with(
+          expected_cancellable,
+          has_entries(state: 'cancelled')
+        ).returns(expected_cancellable.size)
 
+        # Act
         result = @processor.process_failure_cascade(finished_step_id: @finished_step_id, workflow_id: @workflow_id)
+
+        # Assert
         assert_equal expected_cancellable.sort, result.sort
       end
 
@@ -217,35 +210,46 @@ module Yantra
         dep1 = @dependent1_id
         dep2 = @dependent2_id # Will be running (not cancellable)
         gc1 = @grandchild1_id # Descendant of dep1, should be cancelled
-
-        dependents = [dep1, dep2]
-
-        step_dep1 = MockStepRecordDPT.new(id: dep1, state: 'pending')
-        step_dep2 = MockStepRecordDPT.new(id: dep2, state: 'running') # Not cancellable
-        step_gc1  = MockStepRecordDPT.new(id: gc1, state: 'scheduling') # Cancellable
-
-        # Mocking the recursive calls
-        # 1. Initial fetch
-        @repository.expects(:get_dependent_ids).with(@finished_step_id).returns(dependents)
-        # 2. Find steps for initial dependents
-        @repository.expects(:find_steps).with(dependents).returns([step_dep1, step_dep2])
-        # 3. Get dependents of initial batch
-        @repository.expects(:get_dependent_ids_bulk).with(dependents).returns({ dep1 => [gc1], dep2 => [] })
-        # 4. Find steps for the next level (only gc1)
-        @repository.expects(:find_steps).with([gc1]).returns([step_gc1])
-        # 5. Get dependents of gc1 (none)
-        @repository.expects(:get_dependent_ids_bulk).with([gc1]).returns({ gc1 => [] })
-
-        # Expect bulk update for dep1 and gc1
+        initial_dependents = [dep1, dep2]
         expected_cancellable = [dep1, gc1]
+
+        # Mock step records
+        step_dep1 = MockStepRecordDPT.new(id: dep1, state: :pending) # Cancellable
+        step_dep2 = MockStepRecordDPT.new(id: dep2, state: :running) # Not cancellable
+        step_gc1  = MockStepRecordDPT.new(id: gc1, state: :scheduling) # Cancellable
+
+        # Mock the repository calls GraphUtils will make during traversal
+        # 1. Initial get_dependent_ids by the processor
+        @repository.expects(:get_dependent_ids).with(@finished_step_id).returns(initial_dependents)
+
+        # 2. GraphUtils: find_steps for initial batch (dep1, dep2)
+        @repository.expects(:find_steps).with(initial_dependents).returns([step_dep1, step_dep2])
+
+        # 3. GraphUtils: get_dependent_ids_bulk for nodes added to queue (only dep1 matches)
+        @repository.expects(:get_dependent_ids_bulk).with([dep1.to_s]).returns({ dep1.to_s => [gc1] })
+
+        # 4. GraphUtils: find_steps for the next level (gc1) - Need to mock this
+        @repository.expects(:find_steps).with([gc1]).returns([step_gc1])
+
+        # 5. GraphUtils: get_dependent_ids_bulk for gc1 (it matches, so check its children)
+        @repository.expects(:get_dependent_ids_bulk).with([gc1.to_s]).returns({ gc1.to_s => [] }) # No more children
+
+        # Expect bulk update for the steps GraphUtils should identify (dep1, gc1)
         @repository.expects(:bulk_update_steps).with do |ids, attrs|
-          ids.is_a?(Array) && ids.sort == expected_cancellable.sort &&
-            attrs[:state] == 'cancelled'
+          ids_match = ids.is_a?(Array) && ids.sort == expected_cancellable.sort
+          state_match = attrs.is_a?(Hash) && attrs[:state] == StateMachine::CANCELLED.to_s
+          # Check timestamps exist for robustness
+          time_match = attrs[:finished_at].is_a?(Time) && attrs[:updated_at].is_a?(Time)
+          ids_match && state_match && time_match
         end.returns(expected_cancellable.size)
 
+        # Act
         result = @processor.process_failure_cascade(finished_step_id: @finished_step_id, workflow_id: @workflow_id)
+
+        # Assert
         assert_equal expected_cancellable.sort, result.sort
       end
+
 
       # === Error Handling ===
 
@@ -291,9 +295,7 @@ module Yantra
                       .with(workflow_id: @workflow_id, step_ids_to_attempt: [@dependent1_id])
                       .raises(enqueue_error)
 
-        # --- MODIFIED: Removed regexp_matches ---
         @logger.expects(:warn) # Expect warning log, but don't match specific message
-        # --- END MODIFICATION ---
 
         # Act & Assert: Ensure EnqueueFailed propagates
         raised_error = assert_raises(Yantra::Errors::EnqueueFailed) do
@@ -304,13 +306,6 @@ module Yantra
         end
         assert_equal enqueue_error, raised_error
       end
-
-
-      # Helper to match array contents regardless of order
-      def match_array_in_any_order(expected_array)
-        ->(actual_array) { actual_array.is_a?(Array) && actual_array.sort == expected_array.sort }
-      end
-
     end # class DependentProcessorTest
   end # module Core
 end # module Yantra

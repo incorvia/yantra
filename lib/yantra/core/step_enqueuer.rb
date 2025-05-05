@@ -38,10 +38,9 @@ module Yantra
         return [] if ids_to_process.empty?
 
         success_ids, failed_ids = attempt_enqueue_for_scheduled(workflow_id, ids_to_process)
-        raise_enqueue_error(failed_ids) unless failed_ids.empty?
-
         update_enqueued_state(success_ids, now) if success_ids.any?
         publish_success_event(workflow_id, success_ids, now)
+        raise_enqueue_error(failed_ids) unless failed_ids.empty?
 
         success_ids
       end

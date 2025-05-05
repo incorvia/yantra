@@ -8,10 +8,8 @@ require_relative '../errors'
 module Yantra
   module Worker
     class RetryHandler
-      # --- UPDATED: Added orchestrator reader ---
       attr_reader :repository, :step_record, :error, :executions, :user_step_klass, :orchestrator
 
-      # --- UPDATED: Added orchestrator keyword argument ---
       def initialize(repository:, step_record:, error:, executions:, user_step_klass:, orchestrator:)
         @repository = repository
         @step_record = step_record
@@ -55,7 +53,6 @@ module Yantra
         [default_max_attempts, 1].max
       end
 
-      # --- UPDATED: Calls orchestrator to handle permanent failure ---
       # Calls the orchestrator to mark the step as failed and trigger subsequent logic.
       def fail_permanently!
         # Prepare error details hash for the orchestrator
@@ -85,7 +82,6 @@ module Yantra
          # Currently, it logs the error and the step might remain in 'running'.
          raise e
       end
-      # --- END UPDATED METHOD ---
 
 
       # Increments retry count and records the error for a retry attempt.

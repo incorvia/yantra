@@ -76,7 +76,6 @@ module Yantra
           executions = 4   # Simulate reaching max attempts
           formatted_error = { class: "StandardError", message: "Something went wrong", backtrace: ["line 1", "line 2"] }
 
-          # --- UPDATED: Pass orchestrator mock ---
           handler = RetryHandler.new(
             repository: @mock_repo,
             step_record: @mock_step_record,
@@ -113,7 +112,6 @@ module Yantra
           # Arrange
           executions = 1   # First failure, retries remaining
 
-          # --- UPDATED: Pass orchestrator mock ---
           handler = RetryHandler.new(
             repository: @mock_repo,
             step_record: @mock_step_record,
@@ -143,7 +141,6 @@ module Yantra
       def test_get_max_attempts_uses_step_override
          Yantra.stub(:repository, @mock_repo) do
             @mock_step_record.retries = 1
-            # --- UPDATED: Pass orchestrator mock ---
             handler = RetryHandler.new(
                 repository: @mock_repo,
                 step_record: @mock_step_record,
@@ -164,7 +161,6 @@ module Yantra
                 default_max_step_attempts: nil
               )
             )
-            # --- UPDATED: Pass orchestrator mock ---
             handler = RetryHandler.new(
                 repository: @mock_repo, step_record: @mock_step_record,
                 error: @mock_error, executions: 1,
@@ -183,7 +179,6 @@ module Yantra
                 default_max_step_attempts: nil
               )
             )
-            # --- UPDATED: Pass orchestrator mock ---
             handler = RetryHandler.new(
                 repository: @mock_repo, step_record: @mock_step_record,
                 error: @mock_error, executions: 1,

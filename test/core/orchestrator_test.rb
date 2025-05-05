@@ -195,7 +195,6 @@ module Yantra
       # Step Starting Tests
       # =========================================================================
       def test_step_starting_transitions_and_publishes_event_on_success
-        # --- MODIFIED: Mock step as ENQUEUED (common state worker finds) ---
         step_enqueued = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: 'StepA', state: :enqueued)
         step_running = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: 'StepA', state: :running, started_at: @frozen_time)
 
@@ -227,7 +226,6 @@ module Yantra
       end
 
       def test_step_starting_does_not_publish_if_update_fails
-        # --- MODIFIED: Mock step as SCHEDULING (another possible start state) ---
         step_scheduling = MockStep.new(id: @step_a_id, workflow_id: @workflow_id, klass: 'StepA', state: :scheduling)
 
         Time.stub :current, @frozen_time do
@@ -494,7 +492,6 @@ module Yantra
         end
       end
 
-      # --- UPDATED: Test name for clarity ---
       def test_check_workflow_completion_does_not_finalize_if_scheduling_or_enqueued_steps_remain
         # Simulate steps remaining in SCHEDULING or ENQUEUED
         @repo.expects(:has_steps_in_states?)
@@ -507,9 +504,6 @@ module Yantra
 
         @orchestrator.send(:check_workflow_completion, @workflow_id)
       end
-      # --- END UPDATED ---
-
-
     end # class OrchestratorTest
   end # module Core
 end # module Yantra

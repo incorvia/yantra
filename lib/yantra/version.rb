@@ -1,5 +1,5 @@
 # frozen_string_literal: true
 
 module Yantra
-  VERSION = "1.0.0.rc12"
+  VERSION = "1.0.0.rc13"
 end
