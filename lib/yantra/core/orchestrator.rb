@@ -1,6 +1,5 @@
-# lib/yantra/core/orchestrator.rb
 # frozen_string_literal: true
-#
+
 require_relative 'state_machine'
 require_relative '../errors'
 require_relative '../persistence/repository_interface'
@@ -8,16 +7,13 @@ require_relative '../worker/enqueuing_interface'
 require_relative '../events/notifier_interface'
 require_relative 'step_enqueuer'
 require_relative 'dependent_processor'
-require_relative 'state_transition_service' # Require the new service
+require_relative 'state_transition_service'
 
 module Yantra
   module Core
-    # Orchestrates the lifecycle of workflows and steps, handling state transitions,
-    # dependency checks, and triggering background job execution.
-    # Uses DependentProcessor and StateTransitionService.
     class Orchestrator
       attr_reader :repository, :worker_adapter, :notifier, :step_enqueuer,
-        :dependent_processor, :transition_service # Added transition_service
+                  :dependent_processor, :transition_service
 
       def initialize(repository: nil, worker_adapter: nil, notifier: nil)
         @repository     = repository     || Yantra.repository
@@ -27,73 +23,58 @@ module Yantra
 
         validate_dependencies
 
-        # --- Instantiate Services ---
         @transition_service = StateTransitionService.new(
           repository: @repository,
           logger: @logger
         )
+
         @step_enqueuer = StepEnqueuer.new(
           repository: @repository,
           worker_adapter: @worker_adapter,
           notifier: @notifier,
           logger: @logger
         )
+
         @dependent_processor = DependentProcessor.new(
           repository: @repository,
           step_enqueuer: @step_enqueuer,
           logger: @logger
         )
-        # --- End Instantiate ---
       end
 
-      # Starts a pending workflow.
       def start_workflow(workflow_id)
         log_info "Starting workflow #{workflow_id}"
-        # --- MODIFIED: Use Transition Service ---
         updated = repository.update_workflow_attributes(
           workflow_id,
           { state: StateMachine::RUNNING.to_s, started_at: Time.current },
           expected_old_state: StateMachine::PENDING
         )
-        # --- END MODIFIED ---
 
-        unless updated
-          # Log is handled within transition_service on failure
-          return false
-        end
+        return false unless updated
 
         publish_workflow_started_event(workflow_id)
         enqueue_initial_steps(workflow_id)
         true
       end
 
-      # Marks a step as starting its execution.
       def step_starting(step_id)
         log_info "Starting step #{step_id}"
-
         step = find_step_for_start!(step_id)
         return false unless startable_state?(step)
-
         return true if already_running?(step)
 
         transitioned = transition_step_to_running(step_id, step)
         return true if transitioned
 
-        # Check if step is now running (possible race from outside)
         running_after_retry?(step_id)
       end
 
-      # Handles the successful completion of a step's core logic.
       def handle_post_processing(step_id)
         log_info "Handling post-processing for succeeded step #{step_id}"
-
         step = load_step_for_post_processing!(step_id)
-
         process_step_dependents(step)
-
         finalize_step_succeeded(step.id)
         check_workflow_completion(step.workflow_id)
-
       rescue Yantra::Errors::EnqueueFailed => e
         log_warn "Dependent processing for step #{step_id} failed with enqueue error: #{e.message}. Step remains POST_PROCESSING. Will retry."
         raise e
@@ -110,7 +91,6 @@ module Yantra
         mark_workflow_as_failed(step_id)
         publish_step_failed_event(step_id, error_info, finished_at)
         process_failure_dependents_and_check_completion(step_id)
-
       rescue StandardError => e
         log_error("Error during step_failed processing for step #{step_id}: #{e.class} - #{e.message}\n#{e.backtrace.take(5).join("\n")}")
       end
@@ -126,62 +106,40 @@ module Yantra
         )
       end
 
-      # Finalizes a step after successful post-processing.
       def finalize_step_succeeded(step_id)
         log_info "Finalizing step #{step_id} as SUCCEEDED."
-        # --- MODIFIED: Use Transition Service ---
         success = transition_service.transition_step(
           step_id,
           StateMachine::SUCCEEDED,
           expected_old_state: StateMachine::POST_PROCESSING,
           extra_attrs: { finished_at: Time.current }
         )
-        # --- END MODIFIED ---
 
-        if success
-          publish_step_succeeded_event(step_id)
-        else
-          # Log handled by transition_service
-          log_error "Failed to finalize step #{step_id} to SUCCEEDED."
-        end
+        success ? publish_step_succeeded_event(step_id) : log_error("Failed to finalize step #{step_id} to SUCCEEDED.")
       end
 
-      # Handles failure during post-processing.
       def handle_post_processing_failure(step_id, error)
         log_error "Handling failure during post-processing for step #{step_id}."
         error_info = format_error(error)
         finished_at = Time.current
 
-        # --- MODIFIED: Use Transition Service ---
-        updated = transition_service.transition_step(
+        transition_service.transition_step(
           step_id,
           StateMachine::FAILED,
           expected_old_state: StateMachine::POST_PROCESSING,
           extra_attrs: { error: error_info, finished_at: finished_at }
         )
-        # --- END MODIFIED ---
 
-        # Log handled by transition_service if update failed due to state mismatch
-        # log_failure_state_update(step_id) unless updated # Removed
-
-        # Always set flag and publish event based on intent
         mark_workflow_as_failed(step_id)
         publish_step_failed_event(step_id, error_info, finished_at)
-
-        # Trigger Dependent Cancellation & Completion Check
         process_failure_dependents_and_check_completion(step_id)
-
-      rescue StandardError => e # Catch errors during failure handling itself
+      rescue StandardError => e
         log_error("Error during handle_post_processing_failure for step #{step_id}: #{e.class} - #{e.message}\n#{e.backtrace.take(5).join("\n")}")
       end
 
-      # Helper for failure cascade + completion check
       def process_failure_dependents_and_check_completion(step_id)
         step = repository.find_step(step_id)
-        unless step
-          log_error "Step #{step_id} not found after failure, cannot process dependents or check completion."
-          return
-        end
+        return log_error "Step #{step_id} not found after failure, cannot process dependents or check completion." unless step
 
         log_debug "Processing dependent cancellations for step #{step.id}"
 
@@ -191,31 +149,21 @@ module Yantra
         )
 
         cancelled_ids&.each { |id| publish_step_cancelled_event(id) }
-
         check_workflow_completion(step.workflow_id)
       rescue => e
         log_error("Error during failure-dependent handling for step #{step_id}: #{e.class} - #{e.message}\n#{e.backtrace.take(5).join("\n")}")
       end
 
-      # Formats an exception for storage
       def format_error(error)
         { class: error.class.name, message: error.message, backtrace: error.backtrace&.first(10) }
       end
 
-      # Validates essential collaborators.
       def validate_dependencies
-        unless @repository
-          raise Yantra::Errors::ConfigurationError, "Orchestrator requires a valid persistence adapter."
-        end
-        unless @worker_adapter
-          raise Yantra::Errors::ConfigurationError, "Orchestrator requires a valid worker adapter."
-        end
-        unless @notifier&.respond_to?(:publish)
-          log_warn "Notifier is missing or invalid. Events may not be published."
-        end
+        raise Yantra::Errors::ConfigurationError, "Orchestrator requires a valid persistence adapter." unless @repository
+        raise Yantra::Errors::ConfigurationError, "Orchestrator requires a valid worker adapter." unless @worker_adapter
+        log_warn "Notifier is missing or invalid. Events may not be published." unless @notifier&.respond_to?(:publish)
       end
 
-      # Sets the has_failures flag on the workflow containing the step.
       def mark_workflow_as_failed(step_id)
         workflow_id = repository.find_step(step_id)&.workflow_id
         return unless workflow_id
@@ -226,41 +174,28 @@ module Yantra
         log_error "Error setting failure flag for workflow containing step #{step_id}: #{e.message}"
       end
 
-      # Enqueues steps ready to run at workflow start.
       def enqueue_initial_steps(workflow_id)
-        # 1. Get all PENDING steps for the workflow
         pending_steps = repository.list_steps(workflow_id: workflow_id, status: :pending)
         return if pending_steps.empty?
+
         pending_step_ids = pending_steps.map(&:id)
-
-        # 2. Get the dependencies for these pending steps
-        #    (Handle potential nil return from bulk method)
         dependencies_map = repository.get_dependency_ids_bulk(pending_step_ids) || {}
-        pending_step_ids.each { |id| dependencies_map[id] ||= [] } # Ensure entry for all
+        pending_step_ids.each { |id| dependencies_map[id] ||= [] }
 
-        # 3. Filter to find steps with NO dependencies
         initial_step_ids = pending_step_ids.select { |id| dependencies_map[id].empty? }
-
         log_info "Initially enqueueable steps for workflow #{workflow_id}: #{initial_step_ids.inspect}"
         return if initial_step_ids.empty?
 
-        # 4. Call StepEnqueuer
         step_enqueuer.call(workflow_id: workflow_id, step_ids_to_attempt: initial_step_ids)
       rescue Yantra::Errors::EnqueueFailed => e
-        # Let this propagate – the caller needs to know enqueueing failed
         raise e
       rescue StandardError => e
         log_error "Error enqueuing initial steps for #{workflow_id}: #{e.class} - #{e.message}"
       end
 
-      # Checks if workflow is complete and updates state accordingly.
       def check_workflow_completion(workflow_id)
         return unless workflow_id
-
-        if steps_in_progress?(workflow_id)
-          log_debug "Workflow #{workflow_id} not complete yet (steps still in progress)."
-          return
-        end
+        return log_debug "Workflow #{workflow_id} not complete yet (steps still in progress)." if steps_in_progress?(workflow_id)
 
         wf = repository.find_workflow(workflow_id)
         return if workflow_completed?(wf)
@@ -273,13 +208,9 @@ module Yantra
 
       def load_step_for_post_processing!(step_id)
         step = repository.find_step(step_id)
-        unless step
-          log_error "Step #{step_id} not found during handle_post_processing."
-          raise Yantra::Errors::StepNotFound, "Step #{step_id} not found for post-processing"
-        end
+        raise Yantra::Errors::StepNotFound, "Step #{step_id} not found for post-processing" unless step
 
         unless step.state.to_sym == StateMachine::POST_PROCESSING
-          log_warn "Skipping post-processing for step #{step_id}: state is '#{step.state}', expected POST_PROCESSING."
           raise Yantra::Errors::InvalidStepState, "Cannot post-process step in state #{step.state}"
         end
 
@@ -326,21 +257,14 @@ module Yantra
 
       def find_step_for_start!(step_id)
         step = repository.find_step(step_id)
-        unless step
-          log_warn "Step #{step_id} not found when attempting to start."
-          return nil
-        end
+        log_warn "Step #{step_id} not found when attempting to start." unless step
         step
       end
 
       def startable_state?(step)
         state_sym = step.state.to_sym
-        if StateMachine.eligible_for_perform?(state_sym)
-          true
-        else
-          raise Yantra::Errors::OrchestrationError,
-            "Step #{step.id} in invalid state for execution: #{step.state}."
-        end
+        raise Yantra::Errors::OrchestrationError, "Step #{step.id} in invalid state for execution: #{step.state}." unless StateMachine.eligible_for_perform?(state_sym)
+        true
       end
 
       def already_running?(step)
@@ -353,20 +277,13 @@ module Yantra
           StateMachine::RUNNING,
           expected_old_state: step.state.to_sym,
           extra_attrs: { started_at: Time.current }
-        ).tap do |success|
-          publish_step_started_event(step_id) if success
-        end
+        ).tap { |success| publish_step_started_event(step_id) if success }
       end
-
 
       def running_after_retry?(step_id)
         repository.find_step(step_id)&.state.to_s == StateMachine::RUNNING.to_s
       end
 
-
-
-
-      # --- Event Publishing Helpers (Restored Full Format) ---
       def publish_event(name, payload)
         return unless notifier&.respond_to?(:publish)
         notifier.publish(name, payload)
@@ -422,27 +339,12 @@ module Yantra
           step_id: step_id, workflow_id: step.workflow_id, klass: step.klass
         })
       end
-      # --- End Event Publishing Helpers ---
 
-      def validate_dependencies
-        unless @repository
-          raise Yantra::Errors::ConfigurationError, "Orchestrator requires a valid persistence adapter."
-        end
-        unless @worker_adapter
-          raise Yantra::Errors::ConfigurationError, "Orchestrator requires a valid worker adapter."
-        end
-        unless @notifier&.respond_to?(:publish)
-          log_warn "Notifier is missing or invalid. Events may not be published."
-        end
-      end
-
-      # --- Logging Helpers ---
       def log_info(msg);  @logger&.info  { "[Orchestrator] #{msg}" } end
       def log_warn(msg);  @logger&.warn  { "[Orchestrator] #{msg}" } end
       def log_error(msg); @logger&.error { "[Orchestrator] #{msg}" } end
       def log_debug(msg); @logger&.debug { "[Orchestrator] #{msg}" } end
-
-    end # class Orchestrator
-  end # module Core
-end # module Yantra
+    end
+  end
+end
 

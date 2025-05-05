@@ -15,8 +15,9 @@ module Yantra
 
       def test_defines_correct_state_constants
         assert_equal :pending, PENDING
-        assert_equal :awaiting_execution, AWAITING_EXECUTION
-        # ENQUEUED removed
+        assert_equal :scheduling, SCHEDULING # Added
+        assert_equal :enqueued, ENQUEUED     # Added
+        # AWAITING_EXECUTION removed
         assert_equal :running, RUNNING
         assert_equal :post_processing, POST_PROCESSING
         assert_equal :succeeded, SUCCEEDED
@@ -26,9 +27,10 @@ module Yantra
 
       def test_all_states_set_is_correct
         expected_states = Set[
-          PENDING, AWAITING_EXECUTION, RUNNING, POST_PROCESSING, SUCCEEDED, FAILED, CANCELLED
+          PENDING, SCHEDULING, ENQUEUED, RUNNING, POST_PROCESSING, SUCCEEDED, FAILED, CANCELLED
         ]
-        assert_equal expected_states.sort, StateMachine.states.sort # Compare sorted arrays
+        # Use .to_a.sort because Set order isn't guaranteed for comparison
+        assert_equal expected_states.to_a.sort, StateMachine.states.sort, "ALL_STATES set is incorrect"
       end
 
       def test_releasable_from_states_is_correct
@@ -37,26 +39,17 @@ module Yantra
       end
 
       def test_prerequisite_met_states_is_correct
-        # --- UPDATED: Added POST_PROCESSING as potentially met ---
-        # Depending on if downstream steps should run after post-processing starts
-        # or only after full success. Let's assume SUCCEEDED is the only true met state for now.
-        # If post-processing should also unlock, add it here.
         expected_states = Set[POST_PROCESSING, SUCCEEDED]
-        # expected_states = Set[SUCCEEDED, POST_PROCESSING] # Alternative
-        # --- END UPDATED ---
         assert_equal expected_states, StateMachine::PREREQUISITE_MET_STATES
       end
 
-      # Note: CANCELLABLE_STATES constant removed in favor of is_cancellable_state? helper
+      # Note: CANCELLABLE_STATES constant replaced by is_cancellable_state? helper
 
       def test_startable_states_is_correct
-        # RUNNING included for idempotency
-        # AWAITING_EXECUTION included because worker picks up from this state
-        # PENDING included because worker might pick up before state update? (Safer)
-        expected_states = Set[PENDING, AWAITING_EXECUTION, RUNNING]
+        # States from which a worker can pick up a job to run
+        expected_states = Set[SCHEDULING, ENQUEUED, RUNNING] # RUNNING included for idempotency
         assert_equal expected_states, StateMachine::STARTABLE_STATES
       end
-
 
       def test_terminal_states_set_is_correct
         expected_terminal = Set[SUCCEEDED, CANCELLED] # FAILED is not terminal
@@ -64,19 +57,28 @@ module Yantra
       end
 
       def test_non_terminal_states_set_is_correct
-        expected_non_terminal = Set[FAILED, PENDING, AWAITING_EXECUTION, RUNNING, POST_PROCESSING, FAILED]
-        assert_equal expected_non_terminal.sort, StateMachine::NON_TERMINAL_STATES.sort
+        # All states except the strictly terminal ones
+        expected_non_terminal = Set[PENDING, SCHEDULING, ENQUEUED, RUNNING, POST_PROCESSING, FAILED]
+        assert_equal expected_non_terminal.to_a.sort, StateMachine::NON_TERMINAL_STATES.to_a.sort
+      end
+
+      def test_work_in_progress_states_set_is_correct
+        # States indicating work is not finished (used for workflow completion check)
+        expected_wip = Set[PENDING, SCHEDULING, ENQUEUED, RUNNING, POST_PROCESSING]
+        assert_equal expected_wip, StateMachine::WORK_IN_PROGRESS_STATES
       end
 
       def test_terminal_check_method
         assert StateMachine.terminal?(:succeeded)
         assert StateMachine.terminal?(:cancelled)
         refute StateMachine.terminal?(:pending)
-        refute StateMachine.terminal?(:awaiting_execution)
+        refute StateMachine.terminal?(:scheduling) # New
+        refute StateMachine.terminal?(:enqueued)   # New
         refute StateMachine.terminal?(:running)
         refute StateMachine.terminal?(:post_processing)
         refute StateMachine.terminal?(:failed) # Correctly not terminal
         refute StateMachine.terminal?(nil)
+        refute StateMachine.terminal?(:invalid_state)
       end
 
       def test_triggers_downstream_processing_method
@@ -85,49 +87,56 @@ module Yantra
         assert StateMachine.triggers_downstream_processing?(:cancelled)
 
         refute StateMachine.triggers_downstream_processing?(:pending)
-        refute StateMachine.triggers_downstream_processing?(:awaiting_execution)
-        # refute StateMachine.triggers_downstream_processing?(:enqueued) # Removed state
+        refute StateMachine.triggers_downstream_processing?(:scheduling) # New
+        refute StateMachine.triggers_downstream_processing?(:enqueued)   # New
         refute StateMachine.triggers_downstream_processing?(:running)
         refute StateMachine.triggers_downstream_processing?(:succeeded) # Downstream already processed via POST_PROCESSING
         refute StateMachine.triggers_downstream_processing?(nil)
+        refute StateMachine.triggers_downstream_processing?(:invalid_state)
       end
 
       def test_is_cancellable_state_helper
-        now = Time.now
-        assert StateMachine.is_cancellable_state?(:pending, nil), "Pending should be cancellable"
-        assert StateMachine.is_cancellable_state?(:pending, now), "Pending should be cancellable even with timestamp"
-        assert StateMachine.is_cancellable_state?(:awaiting_execution, nil), "Awaiting Execution without timestamp should be cancellable"
+        # Now only depends on the state symbol
+        assert StateMachine.is_cancellable_state?(:pending), "Pending should be cancellable"
+        assert StateMachine.is_cancellable_state?(:scheduling), "Scheduling should be cancellable"
 
-        refute StateMachine.is_cancellable_state?(:awaiting_execution, now), "Awaiting Execution *with* timestamp should NOT be cancellable"
-        # refute StateMachine.is_cancellable_state?(:enqueued, now), "Enqueued removed"
-        refute StateMachine.is_cancellable_state?(:running, nil), "Running should not be cancellable"
-        refute StateMachine.is_cancellable_state?(:succeeded, nil), "Succeeded should not be cancellable"
-        refute StateMachine.is_cancellable_state?(:failed, nil), "Failed should not be cancellable"
-        refute StateMachine.is_cancellable_state?(:cancelled, nil), "Cancelled should not be cancellable"
+        refute StateMachine.is_cancellable_state?(:enqueued), "Enqueued should NOT be cancellable"
+        refute StateMachine.is_cancellable_state?(:running), "Running should not be cancellable"
+        refute StateMachine.is_cancellable_state?(:post_processing), "PostProcessing should not be cancellable"
+        refute StateMachine.is_cancellable_state?(:succeeded), "Succeeded should not be cancellable"
+        refute StateMachine.is_cancellable_state?(:failed), "Failed should not be cancellable"
+        refute StateMachine.is_cancellable_state?(:cancelled), "Cancelled should not be cancellable"
+        refute StateMachine.is_cancellable_state?(nil), "Nil should not be cancellable"
+        refute StateMachine.is_cancellable_state?(:invalid_state), "Invalid state should not be cancellable"
       end
 
       def test_is_enqueue_candidate_state_helper
-        now = Time.now
-        assert StateMachine.is_enqueue_candidate_state?(:pending, nil), "Pending should be candidate"
-        assert StateMachine.is_enqueue_candidate_state?(:pending, now), "Pending should be candidate even with timestamp"
-        assert StateMachine.is_enqueue_candidate_state?(:awaiting_execution, nil), "Awaiting Execution without timestamp should be candidate"
+        # Checks if state is PENDING or SCHEDULING (for retries)
+        assert StateMachine.is_enqueue_candidate_state?(:pending), "Pending should be candidate"
+        assert StateMachine.is_enqueue_candidate_state?(:scheduling), "Scheduling should be candidate (for retry)"
 
-        refute StateMachine.is_enqueue_candidate_state?(:awaiting_execution, now), "Awaiting Execution *with* timestamp should NOT be candidate"
-        # refute StateMachine.is_enqueue_candidate_state?(:enqueued, now), "Enqueued removed"
-        refute StateMachine.is_enqueue_candidate_state?(:running, nil), "Running should not be candidate"
-        # ... other non-candidate states ...
+        refute StateMachine.is_enqueue_candidate_state?(:enqueued), "Enqueued should NOT be candidate"
+        refute StateMachine.is_enqueue_candidate_state?(:running), "Running should not be candidate"
+        refute StateMachine.is_enqueue_candidate_state?(:post_processing), "PostProcessing should not be candidate"
+        refute StateMachine.is_enqueue_candidate_state?(:succeeded), "Succeeded should not be candidate"
+        refute StateMachine.is_enqueue_candidate_state?(:failed), "Failed should not be candidate"
+        refute StateMachine.is_enqueue_candidate_state?(:cancelled), "Cancelled should not be candidate"
+        refute StateMachine.is_enqueue_candidate_state?(nil), "Nil should not be candidate"
+        refute StateMachine.is_enqueue_candidate_state?(:invalid_state), "Invalid state should not be candidate"
       end
 
       def test_valid_transitions_allowed
-        assert StateMachine.valid_transition?(:pending, :awaiting_execution)
+        # Test key allowed transitions based on the updated VALID_TRANSITIONS hash
+        assert StateMachine.valid_transition?(:pending, :scheduling)
         assert StateMachine.valid_transition?(:pending, :cancelled)
 
-        assert StateMachine.valid_transition?(:awaiting_execution, :running) # Worker picks up
-        assert StateMachine.valid_transition?(:awaiting_execution, :cancelled)
-        assert StateMachine.valid_transition?(:awaiting_execution, :failed) # Enqueue critical failure
+        assert StateMachine.valid_transition?(:scheduling, :enqueued) # Normal path
+        assert StateMachine.valid_transition?(:scheduling, :running)  # Immediate pickup
+        assert StateMachine.valid_transition?(:scheduling, :failed)   # Enqueue error
+        assert StateMachine.valid_transition?(:scheduling, :cancelled)
 
-        # assert StateMachine.valid_transition?(:enqueued, :running) # Removed state
-        # assert StateMachine.valid_transition?(:enqueued, :cancelled) # Removed state
+        assert StateMachine.valid_transition?(:enqueued, :running)
+        assert StateMachine.valid_transition?(:enqueued, :failed) # Worker immediate fail
 
         assert StateMachine.valid_transition?(:running, :post_processing) # Success path
         assert StateMachine.valid_transition?(:running, :failed)
@@ -150,19 +159,20 @@ module Yantra
 
         # Invalid transitions based on new rules
         refute StateMachine.valid_transition?(:failed, :running) # Cannot go back to running directly
-        refute StateMachine.valid_transition?(:pending, :running) # Must go via awaiting_execution
-        refute StateMachine.valid_transition?(:pending, :enqueued) # State removed
-        refute StateMachine.valid_transition?(:awaiting_execution, :pending) # Cannot go back
-        refute StateMachine.valid_transition?(:running, :awaiting_execution) # Cannot go back
+        refute StateMachine.valid_transition?(:pending, :running) # Must go via scheduling/enqueued
+        refute StateMachine.valid_transition?(:pending, :enqueued) # Must go via scheduling
+        refute StateMachine.valid_transition?(:scheduling, :pending) # Cannot go back
+        refute StateMachine.valid_transition?(:enqueued, :scheduling) # Cannot go back
+        refute StateMachine.valid_transition?(:running, :scheduling) # Cannot go back
+        refute StateMachine.valid_transition?(:running, :enqueued)   # Cannot go back
         refute StateMachine.valid_transition?(:post_processing, :running) # Cannot go back
 
         # Skipping states
         refute StateMachine.valid_transition?(:pending, :succeeded)
-        refute StateMachine.valid_transition?(:awaiting_execution, :succeeded)
+        refute StateMachine.valid_transition?(:scheduling, :succeeded)
 
         # Invalid target state for source state
         refute StateMachine.valid_transition?(:pending, :pending)
-        refute StateMachine.valid_transition?(:running, :enqueued) # State removed
         refute StateMachine.valid_transition?(:failed, :succeeded)
 
         # Unknown states
@@ -173,8 +183,10 @@ module Yantra
       end
 
       def test_validate_transition_bang_passes_for_valid
-        assert StateMachine.validate_transition!(:pending, :awaiting_execution)
-        assert StateMachine.validate_transition!(:awaiting_execution, :running)
+        assert StateMachine.validate_transition!(:pending, :scheduling)
+        assert StateMachine.validate_transition!(:scheduling, :enqueued)
+        assert StateMachine.validate_transition!(:scheduling, :running)
+        assert StateMachine.validate_transition!(:enqueued, :running)
         assert StateMachine.validate_transition!(:running, :post_processing)
         assert StateMachine.validate_transition!(:post_processing, :succeeded)
         assert StateMachine.validate_transition!(:running, :failed)
@@ -202,9 +214,14 @@ module Yantra
           StateMachine.validate_transition!(:cancelled, :pending)
         end
         assert_match(/Cannot transition from state :cancelled to :pending/, error.message)
+
+        error = assert_raises(Yantra::Errors::InvalidStateTransition) do
+          StateMachine.validate_transition!(:enqueued, :scheduling) # Cannot go back
+        end
+        assert_match(/Cannot transition from state :enqueued to :scheduling/, error.message)
       end
 
-    end
-  end
-end
+    end # class StateMachineTest
+  end # module Core
+end # module Yantra
 
