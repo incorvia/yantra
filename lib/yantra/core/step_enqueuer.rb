@@ -17,8 +17,8 @@ module Yantra
         @notifier       = notifier or raise ArgumentError, "StepEnqueuer requires a notifier"
         @logger         = logger || Logger.new(IO::NULL)
 
-        unless repository.respond_to?(:bulk_transition_steps)
-           raise Yantra::Errors::ConfigurationError, "Configured repository does not implement #bulk_transition_steps"
+        unless repository.respond_to?(:bulk_transition_steps) && repository.respond_to?(:find_steps)
+           raise Yantra::Errors::ConfigurationError, "Configured repository must implement #bulk_transition_steps and #find_steps"
         end
         unless defined?(StateMachine::SCHEDULING) && defined?(StateMachine::ENQUEUED)
           raise Yantra::Errors::ConfigurationError, "StateMachine requires SCHEDULING and ENQUEUED states"
@@ -31,45 +31,65 @@ module Yantra
 
         now = Time.current
 
-        ids_to_process = transition_to_scheduling(step_ids_to_attempt, now)
-        return [] if ids_to_process.empty?
+        # --- Identify initial states ---
+        initial_steps = repository.find_steps(step_ids_to_attempt) || []
+        pending_ids = initial_steps.select { |s| s.state.to_sym == StateMachine::PENDING }.map(&:id)
+        scheduling_ids = initial_steps.select { |s| s.state.to_sym == StateMachine::SCHEDULING }.map(&:id)
+        other_state_ids = step_ids_to_attempt - pending_ids - scheduling_ids
+        log_warn "Skipping steps not in PENDING or SCHEDULING state: #{other_state_ids.inspect}" if other_state_ids.any?
 
+        # --- Phase 1: Transition PENDING -> SCHEDULING (only for pending steps) ---
+        transitioned_pending_ids = []
+        if pending_ids.any?
+          transitioned_pending_ids = transition_to_scheduling(pending_ids, now)
+          # If transition failed for some pending steps, they won't be processed further in this run.
+        end
+
+        # Combine successfully transitioned steps with those already scheduling
+        ids_to_process = (transitioned_pending_ids + scheduling_ids).uniq
+        return [] if ids_to_process.empty? # No steps are ready for enqueue attempt
+
+        # --- Phase 2: Attempt Enqueue for SCHEDULING steps ---
         successfully_enqueued_ids, failed_enqueue_ids = attempt_enqueue_for_scheduled(workflow_id, ids_to_process)
 
         raise_enqueue_error(failed_enqueue_ids) unless failed_enqueue_ids.empty?
 
+        # --- Phase 3: Update State SCHEDULING -> ENQUEUED ---
         update_enqueued_state(successfully_enqueued_ids, now) if successfully_enqueued_ids.any?
 
         publish_success_event(workflow_id, successfully_enqueued_ids, now)
 
+        # Return the array of successfully enqueued IDs
         successfully_enqueued_ids
       end
 
       private
 
-      def transition_to_scheduling(step_ids_to_attempt, time)
+      # Phase 1: Atomically transitions steps from PENDING to SCHEDULING.
+      def transition_to_scheduling(pending_step_ids, time)
         begin
           transition_attrs = {
             state: StateMachine::SCHEDULING.to_s,
             updated_at: time
           }
-          ids_to_process = repository.bulk_transition_steps(
-            step_ids_to_attempt,
+          ids = repository.bulk_transition_steps(
+            pending_step_ids,
             transition_attrs,
             expected_old_state: StateMachine::PENDING
           )
-          log_info "Phase 1: Transitioned #{ids_to_process.size} steps to SCHEDULING: #{ids_to_process.inspect}"
-          ids_to_process
+          log_info "Phase 1: Transitioned #{ids.size} steps from PENDING to SCHEDULING: #{ids.inspect}"
+          ids
         rescue Yantra::Errors::PersistenceError => e
           log_error "Phase 1 Failed: Error transitioning steps to SCHEDULING: #{e.message}"
-          raise
+          raise # Re-raise persistence errors
         end
       end
 
+      # Phase 2: Fetches step details and attempts to enqueue them via worker adapter.
       def attempt_enqueue_for_scheduled(workflow_id, ids_to_process)
-        steps_to_enqueue = repository.find_steps(ids_to_process)
+        steps_to_enqueue = repository.find_steps(ids_to_process) || []
         if steps_to_enqueue.size != ids_to_process.size
-            log_warn "Mismatch between transitioned IDs (#{ids_to_process.size}) and fetched steps (#{steps_to_enqueue.size}) for enqueueing."
+            log_warn "Mismatch between IDs to process (#{ids_to_process.size}) and fetched steps (#{steps_to_enqueue.size}) for enqueueing."
         end
 
         log_info "Phase 2: Attempting to enqueue #{steps_to_enqueue.size} steps..."
@@ -77,14 +97,17 @@ module Yantra
         failed_enqueue_ids = []
 
         steps_to_enqueue.each do |step|
-          begin
-            unless step.state.to_sym == StateMachine::SCHEDULING
-              log_warn "Skipping enqueue for step #{step.id}: Expected SCHEDULING, found #{step.state}."
-              next
-            end
+          # Ensure step is actually SCHEDULING before attempting enqueue
+          unless step.state.to_sym == StateMachine::SCHEDULING
+            log_warn "Skipping enqueue for step #{step.id}: Expected SCHEDULING, found #{step.state}."
+            # Add to failed if it was in the list we intended to process but state changed
+            failed_enqueue_ids << step.id if ids_to_process.include?(step.id)
+            next
+          end
 
-            result = enqueue_step_with_worker(step, workflow_id) # Get result from helper
-            if result # Check the actual result
+          begin
+            result = enqueue_step_with_worker(step, workflow_id)
+            if result
               successfully_enqueued_ids << step.id
             else
               log_warn "Phase 2: Worker adapter failed to enqueue step #{step.id}."
@@ -100,24 +123,24 @@ module Yantra
         [successfully_enqueued_ids, failed_enqueue_ids]
       end
 
-      # --- MODIFIED: Explicitly return result ---
+      # Calls the appropriate worker adapter method based on delay.
       def enqueue_step_with_worker(step, workflow_id)
         delay = step.delay_seconds
         queue = step.queue
-        result = nil # Initialize result
+        adapter_call_result = false
 
         if delay && delay > 0
           log_debug "Enqueuing delayed job: Step=#{step.id}, Delay=#{delay}s, Queue=#{queue}"
-          result = worker_adapter.enqueue_in(delay, step.id, workflow_id, step.klass, queue) # Assign result
+          adapter_call_result = worker_adapter.enqueue_in(delay, step.id, workflow_id, step.klass, queue)
         else
           log_debug "Enqueuing immediate job: Step=#{step.id}, Queue=#{queue}"
-          result = worker_adapter.enqueue(step.id, workflow_id, step.klass, queue) # Assign result
+          adapter_call_result = worker_adapter.enqueue(step.id, workflow_id, step.klass, queue)
         end
 
-        result # Explicitly return the result from the adapter call
+        return adapter_call_result
       end
-      # --- END MODIFICATION ---
 
+      # Phase 3: Updates the state of successfully enqueued steps to ENQUEUED.
       def update_enqueued_state(step_ids, time)
         log_info "Phase 3: Updating #{step_ids.size} steps to ENQUEUED state..."
         attrs = {
@@ -131,12 +154,14 @@ module Yantra
         log_error "Phase 3 Failed: Error updating steps to ENQUEUED: #{e.message}. Steps remain SCHEDULING."
       end
 
+      # Raises a specific error if any enqueue attempts failed.
       def raise_enqueue_error(failed_step_ids)
         msg = "Failed to enqueue #{failed_step_ids.size} steps: #{failed_step_ids.inspect}"
         log_error msg
         raise Yantra::Errors::EnqueueFailed.new(msg, failed_ids: failed_step_ids)
       end
 
+      # Publishes the success event.
       def publish_success_event(workflow_id, step_ids, time)
         return unless notifier.respond_to?(:publish) && step_ids.any?
 
@@ -160,3 +185,4 @@ module Yantra
     end # class StepEnqueuer
   end # module Core
 end # module Yantra
+

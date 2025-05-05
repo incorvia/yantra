@@ -461,7 +461,83 @@ module Yantra
         assert_equal 0, enqueued_jobs.size
         assert_equal 'succeeded', repository.find_workflow(workflow_id).state
       end
-      # --- END MODIFIED ---
+
+      def test_enqueue_failure_is_transient_and_recovered_on_retry
+        # Arrange: Create workflow
+        workflow_id = Client.create_workflow(LinearSuccessWorkflow)
+        step_a = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepA' }
+        step_b = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationStepB' }
+        refute_nil step_a; refute_nil step_b
+
+        # Start workflow, Step A gets enqueued
+        Client.start_workflow(workflow_id)
+        assert_equal 1, enqueued_jobs.size
+        assert_equal 'enqueued', step_a.reload.state
+
+        # Arrange: Stub the worker adapter to fail enqueueing Step B the first time
+        # Store original adapter if needed for teardown
+        @original_worker_adapter = Yantra.worker_adapter
+        worker_adapter_instance = Yantra.worker_adapter
+        refute_nil worker_adapter_instance, "Worker adapter instance should not be nil"
+        worker_adapter_instance.stubs(:enqueue)
+          .with(step_b.id, any_parameters) # Match only Step B
+          .returns(false).then.returns(true) # Fail first, succeed second
+
+        # Act 1: Perform Step A's job.
+        perform_enqueued_jobs(only: Worker::ActiveJob::StepJob)
+
+        # Assert 1: Step A state, Step B state, and Job A re-enqueue
+        step_a.reload
+        step_b.reload
+        assert_equal 'post_processing', step_a.state, "Step A should be post_processing"
+        assert step_a.performed_at, "Step A should have performed_at set"
+        assert_equal 'scheduling', step_b.state, "Step B should be stuck in scheduling"
+        assert_nil step_b.enqueued_at, "Step B should not have enqueued_at due to enqueue failure"
+        assert_equal 1, enqueued_jobs.size, "Job A should be re-enqueued after enqueue failure"
+        assert_enqueued_with(job: Worker::ActiveJob::StepJob, args: [step_a.id, workflow_id, 'IntegrationStepA'])
+
+        # Arrange 2: Clear notifier for next step
+        @test_notifier.clear!
+        # Unstub the specific method on the instance to allow normal behavior on retry
+        worker_adapter_instance.unstub(:enqueue)
+
+        # Act 2: Perform the retried Job A.
+        # This runs the retried Job A (which was the only one in the queue)
+        perform_enqueued_jobs
+
+        # Assert 2: Step B should now be enqueued successfully
+        step_a.reload # Reload Step A again after retry
+        step_b.reload
+        assert_equal 'succeeded', step_a.state, "Step A should be succeeded after retry completes post-processing"
+        assert_equal 'enqueued', step_b.state, "Step B should now be enqueued after retry"
+        refute_nil step_b.enqueued_at, "Step B should now have enqueued_at after retry"
+        # --- CORRECTED ASSERTION ---
+        # After retried Job A runs, Step B's job should be the only one in the queue
+        assert_equal 1, enqueued_jobs.size, "Step B job should be in the queue"
+        assert_enqueued_with(job: Worker::ActiveJob::StepJob, args: [step_b.id, workflow_id, 'IntegrationStepB'])
+        # --- END CORRECTION ---
+
+        # Assert 2: Events for Step B enqueue should be published on retry
+        assert_equal 2, @test_notifier.published_events.count, "Should publish B.enqueued and A.succeeded on retry"
+        assert @test_notifier.find_event('yantra.step.bulk_enqueued') { |ev| ev[:payload][:enqueued_ids] == [step_b.id] }
+        assert @test_notifier.find_event('yantra.step.succeeded') { |ev| ev[:payload][:step_id] == step_a.id }
+
+        # --- ADDED Act 3 and Assert 3 ---
+        # Act 3: Perform the now-enqueued Job B
+        @test_notifier.clear!
+        clear_enqueued_jobs # Clear Job B before performing it
+        Worker::ActiveJob::StepJob.perform_later(step_b.id, workflow_id, 'IntegrationStepB') # Re-enqueue for perform
+        perform_enqueued_jobs
+
+        # Assert 3: Final state check
+        step_b.reload
+        assert_equal 'succeeded', step_b.state
+        assert_equal 0, enqueued_jobs.size
+        assert_equal 'succeeded', repository.find_workflow(workflow_id).state
+        # --- END ADDED ---
+      end
+
+
 
 
       def test_pipelining_workflow
