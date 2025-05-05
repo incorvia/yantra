@@ -155,7 +155,6 @@ module Yantra
               mock_repo.expect(:find_workflow, mock_workflow, [workflow_id])
 
               # 2. Expect FIRST call to update_workflow_attributes (trying with :pending state) -> return false
-              #    *** CORRECTED ARGUMENT EXPECTATION FOR KEYWORD ARG ***
               mock_repo.expect(
                 :update_workflow_attributes,
                 false, # Simulate failure because actual state is 'running'

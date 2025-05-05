@@ -216,7 +216,6 @@ module Yantra
         end
       end
 
-      # --- CORRECTED: test_call_raises_enqueue_failed_if_adapter_returns_false ---
       def test_call_raises_enqueue_failed_if_adapter_returns_false
         step_ids = [@step1_id, @step2_id]
         step1_p = MockStepRecordSET.new(id: @step1_id, state: :pending, klass: 'Step1') # Use symbol
@@ -234,7 +233,6 @@ module Yantra
         @worker_adapter.expects(:enqueue).with(step1_s.id, @workflow_id, step1_s.klass, step1_s.queue).returns(true).in_sequence(sequence)
         @worker_adapter.expects(:enqueue).with(step2_s.id, @workflow_id, step2_s.klass, step2_s.queue).returns(false).in_sequence(sequence) # Step 2 fails
 
-        # --- MODIFIED: Expect update and publish for the successful step (step1) ---
         expected_attrs_phase3 = { state: ENQUEUED.to_s, enqueued_at: @now, updated_at: @now }
         @repository.expects(:bulk_update_steps)
                    .with([@step1_id], expected_attrs_phase3) # Only step 1 updated
@@ -242,7 +240,6 @@ module Yantra
         @notifier.expects(:publish)
                  .with('yantra.step.bulk_enqueued', has_entries(enqueued_ids: [@step1_id], enqueued_at: @now)) # Only step 1 published
                  .in_sequence(sequence)
-        # --- END MODIFICATION ---
 
         error = assert_raises(Yantra::Errors::EnqueueFailed) do
           Time.stub :current, @now do
@@ -252,9 +249,7 @@ module Yantra
         # Assert that ONLY step2 is in the failed list
         assert_equal [@step2_id], error.failed_ids, "Failed IDs should only include step 2"
       end
-      # --- END CORRECTION ---
 
-      # --- CORRECTED: test_call_raises_enqueue_failed_if_adapter_raises_error ---
       def test_call_raises_enqueue_failed_if_adapter_raises_error
         step_ids = [@step1_id]
         step1_p = MockStepRecordSET.new(id: @step1_id, state: :pending, klass: 'Step1') # Use symbol
@@ -267,10 +262,8 @@ module Yantra
         @repository.expects(:find_steps).with([@step1_id]).returns([step1_s]).in_sequence(sequence)
         @worker_adapter.expects(:enqueue).with(step1_s.id, @workflow_id, step1_s.klass, step1_s.queue).raises(enqueue_error).in_sequence(sequence)
 
-        # --- MODIFIED: Expect NO update or publish because enqueue failed ---
         @repository.expects(:bulk_update_steps).never
         @notifier.expects(:publish).never
-        # --- END MODIFICATION ---
 
         error = assert_raises(Yantra::Errors::EnqueueFailed) do
            Time.stub :current, @now do
@@ -279,7 +272,6 @@ module Yantra
         end
         assert_includes error.failed_ids, @step1_id
       end
-      # --- END CORRECTION ---
 
       def test_call_handles_phase3_update_failure_gracefully
         step_ids = [@step1_id]
@@ -296,11 +288,9 @@ module Yantra
         @repository.expects(:bulk_update_steps)
                    .with([@step1_id], expected_attrs_phase3)
                    .raises(update_error).in_sequence(sequence)
-        # --- MODIFIED: Event is still published before error ---
         @notifier.expects(:publish)
                  .with('yantra.step.bulk_enqueued', has_entries(enqueued_ids: [@step1_id], enqueued_at: @now))
                  .in_sequence(sequence)
-        # --- END MODIFICATION ---
         @logger.expects(:error)
 
         processed_ids = nil

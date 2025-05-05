@@ -150,7 +150,6 @@ module Yantra
         )
       end
 
-      # --- RENAMED and MODIFIED Test ---
       def test_process_successors_enqueues_step_stuck_in_scheduling_on_retry
         # Simulate a retry scenario where the dependent failed initial enqueue
         dependents = [@dependent1_id]
@@ -173,7 +172,6 @@ module Yantra
           workflow_id: @workflow_id
         )
       end
-      # --- END RENAMED and MODIFIED Test ---
 
       # === Failure/Cancellation Path (process_failure_cascade) ===
       def test_process_failure_cascade_cancels_eligible_dependents
@@ -297,9 +295,7 @@ module Yantra
                       .with(workflow_id: @workflow_id, step_ids_to_attempt: [@dependent1_id])
                       .raises(enqueue_error)
 
-        # --- MODIFIED: Removed regexp_matches ---
         @logger.expects(:warn) # Expect warning log, but don't match specific message
-        # --- END MODIFICATION ---
 
         # Act & Assert: Ensure EnqueueFailed propagates
         raised_error = assert_raises(Yantra::Errors::EnqueueFailed) do

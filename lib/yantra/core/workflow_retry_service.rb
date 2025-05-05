@@ -35,7 +35,6 @@ module Yantra
         failed_step_ids = failed_steps.map(&:id)
         log_info "Found #{failed_step_ids.size} failed steps: #{failed_step_ids.inspect}"
 
-        # --- MODIFIED: Use GraphUtils helper ---
         # Find descendants of the failed steps that are currently CANCELLED
         cancelled_descendant_ids = GraphUtils.find_descendants_matching_state(
           failed_step_ids,
@@ -46,7 +45,6 @@ module Yantra
           state_symbol == StateMachine::CANCELLED
         end
         log_info "Found #{cancelled_descendant_ids.size} cancelled descendants to reset: #{cancelled_descendant_ids.inspect}"
-        # --- END MODIFICATION ---
 
         # Combine failed steps and their cancelled descendants for reset
         ids_to_reset = (failed_step_ids + cancelled_descendant_ids).uniq

@@ -228,10 +228,8 @@ module Yantra
 
             # Prepare update data
             time_for_update = Time.current # Use a consistent time for updates
-            # --- MODIFIED: Use SCHEDULING state ---
             target_state_symbol = Yantra::Core::StateMachine::SCHEDULING
             target_state_string = target_state_symbol.to_s
-            # --- END MODIFICATION ---
 
             updates_array = [
               { # Update step 1
@@ -563,9 +561,7 @@ module Yantra
 
           def test_update_step_attributes_with_empty_array_fails
             # Arrange: Step exists
-            # --- MODIFIED: Pass workflow_record ---
             step = create_step_record!(state: PENDING.to_s, workflow_record: @workflow)
-            # --- END MODIFICATION ---
             target_state = RUNNING
             allowed_old_states = [] # Empty array
             update_attrs = { state: target_state }

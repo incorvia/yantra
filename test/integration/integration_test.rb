@@ -394,7 +394,6 @@ module Yantra
         assert_equal 'succeeded', repository.find_workflow(workflow_id).state
       end
 
-      # --- MODIFIED: test_workflow_with_retries ---
       def test_workflow_with_retries
         workflow_id = Client.create_workflow(RetryWorkflow)
         step_r_record = repository.list_steps(workflow_id:).find { |s| s.klass == 'IntegrationJobRetry' }
@@ -511,11 +510,9 @@ module Yantra
         assert_equal 'succeeded', step_a.state, "Step A should be succeeded after retry completes post-processing"
         assert_equal 'enqueued', step_b.state, "Step B should now be enqueued after retry"
         refute_nil step_b.enqueued_at, "Step B should now have enqueued_at after retry"
-        # --- CORRECTED ASSERTION ---
         # After retried Job A runs, Step B's job should be the only one in the queue
         assert_equal 1, enqueued_jobs.size, "Step B job should be in the queue"
         assert_enqueued_with(job: Worker::ActiveJob::StepJob, args: [step_b.id, workflow_id, 'IntegrationStepB'])
-        # --- END CORRECTION ---
 
         # Assert 2: Events for Step B enqueue should be published on retry
         assert_equal 2, @test_notifier.published_events.count, "Should publish B.enqueued and A.succeeded on retry"
@@ -692,9 +689,7 @@ module Yantra
         reenqueued_count = Client.retry_failed_steps(workflow_id)
 
         # Assert: State reset, job re-enqueued, events published
-        # --- CORRECTED: Assert count ---
         assert_equal 1, reenqueued_count, "Should report 1 step re-enqueued"
-        # --- END CORRECTION ---
         assert_equal 'running', repository.find_workflow(workflow_id).state
         refute repository.find_workflow(workflow_id).has_failures
         assert_nil repository.find_workflow(workflow_id).finished_at

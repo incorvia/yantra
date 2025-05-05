@@ -139,7 +139,6 @@ module Yantra
         refute result, "Should return false if step not found"
       end
 
-      # --- CORRECTED: Test persistence error with valid states ---
       def test_transition_step_fails_on_persistence_error
         current_step = MockStepTS.new(id: @step_id, state: :enqueued) # Start from ENQUEUED
         new_state = :running
@@ -156,9 +155,7 @@ module Yantra
         result = @service.transition_step(@step_id, new_state)
         refute result, "Should return false on PersistenceError during update"
       end
-      # --- END CORRECTION ---
 
-      # --- CORRECTED: Test unexpected error with valid states ---
       def test_transition_step_reraises_unexpected_error
         current_step = MockStepTS.new(id: @step_id, state: :scheduling) # Start from SCHEDULING
         new_state = :running
@@ -176,7 +173,6 @@ module Yantra
           @service.transition_step(@step_id, new_state)
         end
       end
-      # --- END CORRECTION ---
 
     end # class StateTransitionServiceTest
   end # module Core
