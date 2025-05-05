@@ -310,11 +310,6 @@ module Yantra
 
         assert_equal [@step1_id], processed_ids
       end
-
-      def match_array_in_any_order(expected_array)
-        ->(actual_array) { actual_array.is_a?(Array) && actual_array.sort == expected_array.sort }
-      end
-
     end # class StepEnqueuerTest
   end # module Core
 end # module Yantra
