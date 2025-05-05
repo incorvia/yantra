@@ -207,7 +207,7 @@ module Yantra
 
           # Expect successful transition call via service FROM ENQUEUED
           @transition_service.expects(:transition_step)
-            .with(@step_a_id, RUNNING, expected_old_state: ENQUEUED, extra_attrs: { started_at: @frozen_time })
+            .with(@step_a_id, RUNNING, expected_old_state: [SCHEDULING, ENQUEUED], extra_attrs: { started_at: @frozen_time })
             .returns(true).in_sequence(sequence)
 
           # Expect find_step again for the event payload generation
@@ -237,7 +237,7 @@ module Yantra
           # Expect the call to the transition service, mock it to return false
           # Expect transition FROM SCHEDULING
           @transition_service.expects(:transition_step)
-            .with(@step_a_id, RUNNING, expected_old_state: SCHEDULING, extra_attrs: has_key(:started_at))
+            .with(@step_a_id, RUNNING, expected_old_state: [SCHEDULING, ENQUEUED], extra_attrs: has_key(:started_at))
             .returns(false) # Simulate update failure
 
           # When transition_service returns false, step_starting re-checks state

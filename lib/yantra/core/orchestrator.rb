@@ -97,6 +97,16 @@ module Yantra
 
       private
 
+      def transition_step_to_running(step_id, step)
+        allowed_start_states = [StateMachine::SCHEDULING, StateMachine::ENQUEUED]
+        transition_service.transition_step(
+          step_id,
+          StateMachine::RUNNING,
+          expected_old_state: allowed_start_states, # Pass the array
+          extra_attrs: { started_at: Time.current }
+        ).tap { |success| publish_step_started_event(step_id) if success }
+      end
+
       def transition_step_to_failed(step_id, error_info, expected_old_state, finished_at)
         transition_service.transition_step(
           step_id,
@@ -269,15 +279,6 @@ module Yantra
 
       def already_running?(step)
         step.state.to_sym == StateMachine::RUNNING
-      end
-
-      def transition_step_to_running(step_id, step)
-        transition_service.transition_step(
-          step_id,
-          StateMachine::RUNNING,
-          expected_old_state: step.state.to_sym,
-          extra_attrs: { started_at: Time.current }
-        ).tap { |success| publish_step_started_event(step_id) if success }
       end
 
       def running_after_retry?(step_id)

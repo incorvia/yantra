@@ -39,6 +39,18 @@ module Yantra
       # --- Write ---
       def create_step(step_instance); raise NotImplementedError; end # Renamed from persist_step
       def create_steps_bulk(step_instances_array); raise NotImplementedError; end # Renamed from persist_steps_bulk
+
+        # Updates attributes for a single step record.
+      # Uses optimistic locking based on expected_old_state if provided.
+      #
+      # @param step_id [String] The ID of the step to update.
+      # @param attributes_hash [Hash] Hash of attributes to update.
+      # @param expected_old_state [Symbol, Array<Symbol>, nil]
+      #   If a Symbol, updates only if the current state matches.
+      #   If an Array of Symbols, updates only if the current state is one of the states in the array.
+      #   If nil, updates without checking the current state (use with caution).
+      # @return [Boolean] true if the update was successful (1 row affected), false otherwise.
+      # @raise [Yantra::Errors::PersistenceError] on underlying database errors.
       def update_step_attributes(step_id, attributes_hash, expected_old_state: nil); raise NotImplementedError; end
       # WARNING: This method does NOT guard against race conditions.
 # Do NOT use it for `state` transitions where correctness depends on current state.

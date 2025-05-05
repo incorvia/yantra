@@ -147,12 +147,20 @@ module Yantra
         end
 
         # @see Yantra::Persistence::RepositoryInterface#update_step_attributes
-        def update_step_attributes(step_id, attributes_hash, expected_old_state: nil)
+         def update_step_attributes(step_id, attributes_hash, expected_old_state: nil)
           scope = StepRecord.where(id: step_id)
-          scope = scope.where(state: expected_old_state.to_s) if expected_old_state
+
+          if expected_old_state.is_a?(Array)
+            string_states = expected_old_state.map(&:to_s)
+            scope = scope.where(state: string_states) # Use WHERE state IN (...)
+          elsif expected_old_state
+            scope = scope.where(state: expected_old_state.to_s) # Use WHERE state = ?
+          end
+
           update_attrs = attributes_hash.transform_values { |v| v.is_a?(Symbol) ? v.to_s : v }
-          updated = scope.update_all(update_attrs)
-          updated == 1
+          update_attrs[:updated_at] ||= Time.current
+          updated_count = scope.update_all(update_attrs)
+          updated_count == 1
         rescue ::ActiveRecord::ActiveRecordError => e
           log_error { "Error updating step attributes for #{step_id}: #{e.message}" }
           raise Yantra::Errors::PersistenceError, "Error updating step: #{e.message}"

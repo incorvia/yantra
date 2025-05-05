@@ -9,7 +9,7 @@ if AR_LOADED
   require "yantra/persistence/active_record/workflow_record"
   require "yantra/persistence/active_record/step_record"
   require "yantra/persistence/active_record/step_dependency_record"
-  require "yantra/core/state_machine"
+  require 'yantra/core/state_machine'
   require "yantra/errors"
   require "yantra/step" # Needed for step instance structure
 end
@@ -27,6 +27,7 @@ module Yantra
 
         # Tests for the ActiveRecord persistence adapter
         class AdapterTest < YantraActiveRecordTestCase
+          include Yantra::Core::StateMachine
 
           def setup
             super # Ensure DB cleaning happens via base class setup
@@ -492,6 +493,94 @@ module Yantra
             # or adjusting mocks. This test becomes complex quickly.
           end
           # --- End Tests for bulk_transition_steps ---
+
+
+          def test_update_step_attributes_with_array_success_first_state
+            # Arrange: Step is in the first state of the allowed array
+            step = create_step_record!(state: SCHEDULING.to_s, workflow_record: @workflow) # Use string state for DB
+            target_state = RUNNING
+            allowed_old_states = [SCHEDULING, ENQUEUED]
+            update_attrs = { state: target_state }
+
+            # Act
+            result = @adapter.update_step_attributes(
+              step.id,
+              update_attrs,
+              expected_old_state: allowed_old_states
+            )
+
+            # Assert
+            assert result, "Update should succeed when state is in the allowed array"
+            step.reload
+            assert_equal target_state.to_s, step.state
+            assert_in_delta Time.current, step.updated_at, 1.second # Check updated_at
+          end
+
+          def test_update_step_attributes_with_array_success_second_state
+            # Arrange: Step is in the second state of the allowed array
+            step = create_step_record!(state: ENQUEUED.to_s, workflow_record: @workflow) # Use string state for DB
+            target_state = RUNNING
+            allowed_old_states = [SCHEDULING, ENQUEUED]
+            update_attrs = { state: target_state, started_at: Time.current } # Include other attrs
+
+            # Act
+            result = @adapter.update_step_attributes(
+              step.id,
+              update_attrs,
+              expected_old_state: allowed_old_states
+            )
+
+            # Assert
+            assert result, "Update should succeed when state is in the allowed array"
+            step.reload
+            assert_equal target_state.to_s, step.state
+            refute_nil step.started_at
+            assert_in_delta Time.current, step.updated_at, 1.second
+          end
+
+          def test_update_step_attributes_with_array_failure_state_not_in_array
+            # Arrange: Step is in a state NOT in the allowed array
+            step = create_step_record!(state: PENDING.to_s, workflow_record: @workflow) # Use string state for DB
+            original_updated_at = step.updated_at
+            target_state = RUNNING
+            allowed_old_states = [SCHEDULING, ENQUEUED] # PENDING is not allowed here
+            update_attrs = { state: target_state }
+
+            # Act
+            result = @adapter.update_step_attributes(
+              step.id,
+              update_attrs,
+              expected_old_state: allowed_old_states
+            )
+
+            # Assert
+            refute result, "Update should fail when state is not in the allowed array"
+            step.reload
+            assert_equal PENDING.to_s, step.state # State should remain unchanged
+            # Check updated_at didn't change significantly
+            assert_in_delta original_updated_at.to_f, step.updated_at.to_f, 0.001
+          end
+
+          def test_update_step_attributes_with_empty_array_fails
+            # Arrange: Step exists
+            # --- MODIFIED: Pass workflow_record ---
+            step = create_step_record!(state: PENDING.to_s, workflow_record: @workflow)
+            # --- END MODIFICATION ---
+            target_state = RUNNING
+            allowed_old_states = [] # Empty array
+            update_attrs = { state: target_state }
+
+            # Act
+            result = @adapter.update_step_attributes(
+              step.id,
+              update_attrs,
+              expected_old_state: allowed_old_states
+            )
+
+            # Assert: WHERE state IN (empty list) should match nothing
+            refute result, "Update should fail when expected state array is empty"
+            assert_equal PENDING.to_s, step.reload.state # State should remain unchanged
+          end
 
           # --- Private Helper Methods ---
           private
