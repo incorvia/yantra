@@ -490,7 +490,7 @@ module Yantra
         step_b.reload
         assert_equal 'post_processing', step_a.state, "Step A should be post_processing"
         assert step_a.performed_at, "Step A should have performed_at set"
-        assert_equal 'scheduling', step_b.state, "Step B should be stuck in scheduling"
+        assert_equal 'pending', step_b.state, "Step B should be rolled back to pending"
         assert_nil step_b.enqueued_at, "Step B should not have enqueued_at due to enqueue failure"
         assert_equal 1, enqueued_jobs.size, "Job A should be re-enqueued after enqueue failure"
         assert_enqueued_with(job: Worker::ActiveJob::StepJob, args: [step_a.id, workflow_id, 'IntegrationStepA'])

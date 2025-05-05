@@ -23,25 +23,30 @@ module Yantra
 
       def call(workflow_id:, step_ids_to_attempt:)
         return [] if step_ids_to_attempt.blank?
-        log_info "Enqueueing steps: #{step_ids_to_attempt.inspect} in workflow #{workflow_id}"
+        log_info "Attempting to enqueue steps: #{step_ids_to_attempt.inspect} in workflow #{workflow_id}"
 
         now = Time.current
+
         initial_steps = repository.find_steps(step_ids_to_attempt) || []
+        pending_ids = initial_steps.select { |s| s.state.to_sym == StateMachine::PENDING }.map(&:id)
 
-        pending_ids     = initial_steps.select { |s| s.state.to_sym == StateMachine::PENDING }.map(&:id)
-        scheduling_ids  = initial_steps.select { |s| s.state.to_sym == StateMachine::SCHEDULING }.map(&:id)
-        skipped_ids     = step_ids_to_attempt - pending_ids - scheduling_ids
-        log_warn "Skipping steps not in PENDING or SCHEDULING state: #{skipped_ids.inspect}" if skipped_ids.any?
+        non_pending_ids = step_ids_to_attempt - pending_ids
+        log_warn "Skipping non-PENDING steps: #{non_pending_ids.inspect}" if non_pending_ids.any?
+        return [] if pending_ids.empty?
 
-        transitioned_ids = pending_ids.any? ? transition_to_scheduling(pending_ids, now) : []
-        ids_to_process   = (transitioned_ids + scheduling_ids).uniq
-        return [] if ids_to_process.empty?
+        transitioned_ids = transition_to_scheduling(pending_ids, now)
+        return [] if transitioned_ids.empty?
 
+        ids_to_process = transitioned_ids
         success_ids, failed_ids = attempt_enqueue_for_scheduled(workflow_id, ids_to_process)
+
+        if failed_ids.any?
+          rollback_failed_enqueue_steps(failed_ids, now)
+        end
+
         update_enqueued_state(success_ids, now) if success_ids.any?
         publish_success_event(workflow_id, success_ids, now)
         raise_enqueue_error(failed_ids) unless failed_ids.empty?
-
         success_ids
       end
 
@@ -58,14 +63,14 @@ module Yantra
       end
 
       def attempt_enqueue_for_scheduled(workflow_id, step_ids)
+        # Re-fetch just before enqueue attempt to get the latest state
         steps = repository.find_steps(step_ids) || []
-        log_warn "Mismatch between requested (#{step_ids.size}) and fetched (#{steps.size}) steps." if steps.size != step_ids.size
+        log_warn "Mismatch between requested (#{step_ids.size}) and fetched (#{steps.size}) steps for enqueue." if steps.size != step_ids.size
 
         success, failed = [], []
-
         steps.each do |step|
           unless step.state.to_sym == StateMachine::SCHEDULING
-            log_warn "Skipping enqueue for step #{step.id}: Expected SCHEDULING, found #{step.state}."
+            log_warn "Skipping enqueue for step #{step.id}: Expected SCHEDULING, found #{step.state} just before worker call."
             failed << step.id if step_ids.include?(step.id)
             next
           end
@@ -74,16 +79,15 @@ module Yantra
             if enqueue_step_with_worker(step, workflow_id)
               success << step.id
             else
-              log_warn "Worker failed to enqueue step #{step.id}."
+              log_warn "Worker adapter returned false for enqueue step #{step.id}."
               failed << step.id
             end
           rescue => e
-            log_error "Worker error for step #{step.id}: #{e.class} - #{e.message}"
+            log_error "Worker adapter error during enqueue for step #{step.id}: #{e.class} - #{e.message}"
             failed << step.id
           end
         end
-
-        log_info "Phase 2 Results: Success=#{success.size}, Failed=#{failed.size}"
+        log_info "Enqueue attempt results: Success=#{success.size}, Failed=#{failed.size}"
         [success, failed]
       end
 
@@ -121,11 +125,37 @@ module Yantra
           log_info "Phase 3: Updated #{count} steps to ENQUEUED."
         end
 
-      # Rescue PersistenceError specifically from the transition attempt
+        # Rescue PersistenceError specifically from the transition attempt
       rescue Yantra::Errors::PersistenceError => e
         log_error "Phase 3 Failed (PersistenceError during transition): #{e.message}"
       rescue => e
         log_error "Phase 3 Failed (Unexpected Error): #{e.class} - #{e.message}"
+      end
+
+      def rollback_failed_enqueue_steps(step_ids, time)
+        log_warn "Attempting to roll back #{step_ids.size} steps from SCHEDULING to PENDING due to enqueue failure: #{step_ids.inspect}"
+        attrs = {
+          state: StateMachine::PENDING.to_s,
+          updated_at: time
+        }
+        begin
+          # Use bulk_transition_steps for atomic rollback conditional on state
+          rolled_back_ids = repository.bulk_transition_steps(
+            step_ids,
+            attrs,
+            expected_old_state: StateMachine::SCHEDULING # Only rollback if still SCHEDULING
+          )
+          log_info "Successfully rolled back #{rolled_back_ids.size} steps to PENDING."
+          if rolled_back_ids.size != step_ids.size
+            log_warn "Could not roll back all failed steps. Missed: #{(step_ids - rolled_back_ids).inspect}"
+          end
+        rescue Yantra::Errors::PersistenceError => e
+          log_error "Rollback Failed (PersistenceError during transition SCHEDULING -> PENDING): #{e.message}"
+          # Log error but proceed, raising EnqueueFailed is the main signal
+        rescue => e
+          log_error "Rollback Failed (Unexpected Error): #{e.class} - #{e.message}"
+          # Log error but proceed
+        end
       end
 
       def raise_enqueue_error(failed_ids)
