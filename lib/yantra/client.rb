@@ -117,6 +117,7 @@ module Yantra
       end
 
       finished_at_time = Time.current
+      # Attempt to update from PENDING or RUNNING to CANCELLED atomically
       update_success = [Core::StateMachine::PENDING, Core::StateMachine::RUNNING].any? do |prev_state|
         repo.update_workflow_attributes(
           workflow_id,
@@ -152,8 +153,10 @@ module Yantra
         all_steps = repo.list_steps(workflow_id: workflow_id) || []
 
         steps_to_cancel = all_steps.select do |step|
-          enqueued_at = step.respond_to?(:enqueued_at) ? step.enqueued_at : nil
-          Core::StateMachine.is_cancellable_state?(step.state.to_sym, enqueued_at)
+          # --- CORRECTED CALL ---
+          # Use the updated signature, only passing the state
+          Core::StateMachine.is_cancellable_state?(step.state.to_sym)
+          # --- END CORRECTION ---
         end
 
         step_ids = steps_to_cancel.map(&:id)
@@ -172,6 +175,8 @@ module Yantra
           # Publish step cancelled events
           step_ids.each do |step_id|
             begin
+              # Fetch step details for richer event payload if needed
+              # cancelled_step = repo.find_step(step_id) # Optional
               notifier&.publish('yantra.step.cancelled', { step_id: step_id, workflow_id: workflow_id })
             rescue => e
               log_error "Failed to publish step.cancelled event for step #{step_id}: #{e.message}"
@@ -182,8 +187,10 @@ module Yantra
         end
       rescue Yantra::Errors::PersistenceError => e
         log_error "Persistence error during step cancellation: #{e.message}"
+        # Decide if this should halt the process or just log
       rescue => e
         log_error "Unexpected error during step cancellation processing: #{e.class} - #{e.message}"
+        # Decide if this should halt the process or just log
       end
 
       true # Indicate cancellation process was successfully initiated for the workflow

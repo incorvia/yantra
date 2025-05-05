@@ -806,7 +806,6 @@ module Yantra
         assert_equal 1, @test_notifier.find_events('yantra.workflow.succeeded').count
       end
 
-      focus
       def test_delayed_step_workflow
         workflow_id = Client.create_workflow(DelayedStepWorkflow)
         step_a = repository.list_steps(workflow_id: workflow_id).find { |s| s.klass == 'IntegrationStepA' }
@@ -872,6 +871,7 @@ module Yantra
         assert_equal 'yantra.workflow.succeeded', @test_notifier.published_events[2][:name]
       end
 
+      focus
       def test_enqueue_failure_is_transient_and_recovered_on_retry
         # Arrange: Create workflow
         workflow_id = Client.create_workflow(LinearSuccessWorkflow)
@@ -928,7 +928,6 @@ module Yantra
         assert_equal [step_b.id], @test_notifier.published_events[0][:payload][:enqueued_ids]
       end
 
-      focus
       def test_delayed_step_runs_after_workflow_cancelled
         workflow_id = Client.create_workflow(DelayedStepWorkflow)
         step_a = repository.list_steps(workflow_id: workflow_id).find { |s| s.klass == 'IntegrationStepA' }
