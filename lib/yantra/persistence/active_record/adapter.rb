@@ -432,9 +432,14 @@ module Yantra
           update_attrs[:updated_at] ||= now
           update_attrs[:transition_batch_token] = batch_token
 
-          StepRecord
-            .where(id: step_ids, state: expected_old_state.to_s)
-            .update_all(update_attrs)
+          updated_count = StepRecord
+            .where(
+              id: step_ids,
+              state: expected_old_state.to_s,
+              transition_batch_token: nil # Only claim steps not currently being processed
+            )
+              .update_all(update_attrs)
+
 
           transitioned_ids = StepRecord.where(transition_batch_token: batch_token).pluck(:id)
 

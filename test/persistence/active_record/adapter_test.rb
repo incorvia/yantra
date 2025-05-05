@@ -441,7 +441,7 @@ module Yantra
             step_ids_to_attempt = [step1.id]
 
             # Stub the first update_all call to simulate a DB error
-            StepRecord.expects(:where).with(id: step_ids_to_attempt, state: "pending").returns(
+            StepRecord.expects(:where).with(id: step_ids_to_attempt, state: "pending", transition_batch_token: nil).returns(
               mock_scope = mock('scope')
             )
             mock_scope.expects(:update_all).raises(::ActiveRecord::StatementInvalid, "DB connection lost")
@@ -465,7 +465,7 @@ module Yantra
             SecureRandom.stubs(:uuid).returns(batch_token)
 
             # Mock successful first update
-            StepRecord.expects(:where).with(id: step_ids_to_attempt, state: "pending").returns(mock_scope1 = mock)
+            StepRecord.expects(:where).with(id: step_ids_to_attempt, state: "pending", transition_batch_token: nil).returns(mock_scope1 = mock)
             mock_scope1.expects(:update_all).returns(1) # Simulate 1 row updated
 
             # Mock successful pluck
