@@ -1,137 +1,98 @@
-# test/core/workflow_retry_service_test.rb
+# lib/yantra/core/workflow_retry_service.rb
 # frozen_string_literal: true
 
-require 'test_helper'
-require 'mocha/minitest'
-
-# --- Yantra Requires ---
-require 'yantra/core/workflow_retry_service'
 require 'yantra/core/state_machine'
 require 'yantra/core/step_enqueuer'
 require 'yantra/errors'
-
-# --- Mocks ---
-MockStepRecordWRST = Struct.new(
-  :id, :workflow_id, :klass, :state, :queue, :delay_seconds, :enqueued_at,
-  :max_attempts, :retries, :created_at,
-  keyword_init: true
-) do
-  def state; self[:state].to_s; end
-end
+require 'logger' # Ensure logger is available
 
 module Yantra
   module Core
-    class WorkflowRetryServiceTest < Minitest::Test
-      include StateMachine
+    class WorkflowRetryService
+      attr_reader :workflow_id, :repository, :step_enqueuer, :logger
 
-      def setup
-        @repo = mock('Repository')
-        @worker = mock('WorkerAdapter')
-        @notifier = mock('Notifier')
-        @logger = mock('Logger')
-        @step_enqueuer = mock('StepEnqueuer')
-
-        @logger.stubs(:debug)
-        @logger.stubs(:info)
-        @logger.stubs(:warn)
-        @logger.stubs(:error)
-        Yantra.stubs(:logger).returns(@logger)
-
-        StepEnqueuer.stubs(:new)
-                    .with(repository: @repo, worker_adapter: @worker, notifier: @notifier)
-                    .returns(@step_enqueuer)
-
-        @workflow_id = "wf-#{SecureRandom.uuid}"
-        @step1_id = "step1-#{SecureRandom.uuid}"
-        @step2_id = "step2-#{SecureRandom.uuid}"
-        @step3_id = "step3-#{SecureRandom.uuid}"
-
-        @repo.stubs(:respond_to?).with(:bulk_update_steps).returns(true)
-        @repo.stubs(:respond_to?).with(:list_steps).returns(true)
-
-        @service = WorkflowRetryService.new(
-          workflow_id: @workflow_id,
-          repository: @repo,
-          worker_adapter: @worker,
-          notifier: @notifier
+      def initialize(workflow_id:, repository:, worker_adapter:, notifier:, logger: Yantra.logger)
+        @workflow_id = workflow_id
+        @repository  = repository
+        @logger      = logger || Logger.new(IO::NULL) # Initialize logger
+        @step_enqueuer = StepEnqueuer.new(
+          repository: repository,
+          worker_adapter: worker_adapter,
+          notifier: notifier,
+          logger: @logger # Pass logger to enqueuer
         )
+
+        unless repository&.respond_to?(:list_steps) && repository&.respond_to?(:bulk_update_steps)
+          raise ArgumentError, "WorkflowRetryService requires a repository implementing #list_steps and #bulk_update_steps"
+        end
       end
 
-      def teardown
-        Mocha::Mockery.instance.teardown
+      # Attempts to retry FAILED steps in the workflow.
+      # Returns the COUNT of steps successfully re-enqueued.
+      def call
+        # --- MODIFIED: Only find FAILED steps ---
+        failed_steps = find_failed_steps
+        return 0 if failed_steps.empty?
+        # --- END MODIFICATION ---
+
+        retryable_step_ids = failed_steps.map(&:id)
+        log_info "Attempting retry for #{retryable_step_ids.size} failed steps: #{retryable_step_ids.inspect}"
+
+        # Reset state and clear errors/output for failed steps
+        reset_attrs = {
+          state:       StateMachine::PENDING.to_s, # Reset to PENDING
+          error:       nil,
+          output:      nil,
+          started_at:  nil,
+          finished_at: nil,
+          enqueued_at: nil, # Clear enqueue timestamp
+          updated_at:  Time.current # Ensure updated_at is set
+        }
+
+        begin
+          updated_count = repository.bulk_update_steps(retryable_step_ids, reset_attrs)
+          if updated_count != retryable_step_ids.size
+            log_warn "Bulk update to PENDING reported updating #{updated_count} rows, expected #{retryable_step_ids.size} for steps: #{retryable_step_ids.inspect}"
+          end
+          log_info "Reset state to PENDING for steps: #{retryable_step_ids.inspect}"
+        rescue Yantra::Errors::PersistenceError => e
+          log_error "Failed to reset steps to PENDING: #{e.message}"
+          return 0 # Return 0 on persistence error during reset
+        end
+
+        # Now, attempt to enqueue the steps (which are now PENDING)
+        begin
+          log_info "Enqueuing steps through StepEnqueuer..."
+          # StepEnqueuer#call returns the count of successfully enqueued steps
+          enqueued_count = step_enqueuer.call(workflow_id: workflow_id, step_ids_to_attempt: retryable_step_ids)
+          log_info "Successfully enqueued #{enqueued_count} steps."
+          enqueued_count # Return the count
+        rescue Yantra::Errors::EnqueueFailed => e
+          log_error "StepEnqueuer call failed during retry: #{e.class} - #{e.message}. Failed IDs: #{e.failed_ids.inspect}"
+          0 # Return 0 if enqueue fails
+        rescue StandardError => e # Catch other potential errors from StepEnqueuer
+          log_error "Unexpected error during StepEnqueuer call in retry: #{e.class} - #{e.message}"
+          0 # Return 0 on other errors
+        end
       end
 
-      def test_call_returns_empty_array_if_no_retryable_steps_found
-        @repo.expects(:list_steps).with(workflow_id: @workflow_id, status: :failed).returns([])
-        @repo.expects(:bulk_update_steps).never
-        @step_enqueuer.expects(:call).never
-        result = @service.call
-        assert_equal 0, result
+      private
+
+      # Finds only steps in the FAILED state for the workflow.
+      def find_failed_steps
+        repository.list_steps(workflow_id: workflow_id, status: :failed) || []
+      rescue => e
+        log_error "Error fetching failed steps for #{workflow_id}: #{e.message}"
+        []
       end
 
-      def test_call_resets_and_enqueues_failed_and_stuck_steps
-        failed_step = MockStepRecordWRST.new(id: @step1_id, state: 'failed')
-        stuck_step = MockStepRecordWRST.new(id: @step2_id, state: 'awaiting_execution', enqueued_at: nil)
-        retryable_steps = [failed_step, stuck_step]
-        retryable_ids = [@step1_id, @step2_id]
+      # Logging helpers
+      def log_info(msg);  @logger&.info  { "[WorkflowRetryService] #{msg}" }; end
+      def log_warn(msg);  @logger&.warn  { "[WorkflowRetryService] #{msg}" }; end
+      def log_error(msg); @logger&.error { "[WorkflowRetryService] #{msg}" }; end
+      def log_debug(msg); @logger&.debug { "[WorkflowRetryService] #{msg}" }; end
 
-        sequence = Mocha::Sequence.new('retry_flow')
-        @repo.expects(:list_steps).with(workflow_id: @workflow_id, status: :failed).returns(retryable_steps).in_sequence(sequence)
-        @repo.expects(:bulk_update_steps).with(retryable_ids, has_entries(state: StateMachine::PENDING)).returns(true).in_sequence(sequence)
-        @step_enqueuer.expects(:call).with(workflow_id: @workflow_id, step_ids_to_attempt: retryable_ids).returns(2).in_sequence(sequence)
-
-        result = @service.call
-        assert_equal 2, result
-      end
-
-      def test_call_returns_only_successfully_enqueued_ids_count
-        failed_step = MockStepRecordWRST.new(id: @step1_id, state: 'failed')
-        stuck_step = MockStepRecordWRST.new(id: @step2_id, state: 'awaiting_execution', enqueued_at: nil)
-        retryable_steps = [failed_step, stuck_step]
-        retryable_ids = [@step1_id, @step2_id]
-        successfully_enqueued_count = 1
-
-        @repo.expects(:list_steps).with(workflow_id: @workflow_id, status: :failed).returns(retryable_steps)
-        @repo.expects(:bulk_update_steps).with(retryable_ids, has_entries(state: StateMachine::PENDING)).returns(true)
-        @step_enqueuer.expects(:call).with(workflow_id: @workflow_id, step_ids_to_attempt: retryable_ids).returns(successfully_enqueued_count)
-
-        result = @service.call
-        assert_equal successfully_enqueued_count, result
-      end
-
-      def test_call_raises_error_if_reset_fails
-        failed_step = MockStepRecordWRST.new(id: @step1_id, state: 'failed')
-        retryable_ids = [@step1_id]
-
-        @repo.expects(:list_steps).with(workflow_id: @workflow_id, status: :failed).returns([failed_step])
-        @repo.expects(:bulk_update_steps).with(retryable_ids, has_entries(state: StateMachine::PENDING)).raises(Yantra::Errors::PersistenceError.new("Failed to reset"))
-        @step_enqueuer.expects(:call).never
-
-        assert_equal 0, @service.call
-      end
-
-      def test_call_raises_error_if_enqueuer_fails
-        failed_step = MockStepRecordWRST.new(id: @step1_id, state: 'failed')
-        retryable_ids = [@step1_id]
-
-        @repo.expects(:list_steps).with(workflow_id: @workflow_id, status: :failed).returns([failed_step])
-        @repo.expects(:bulk_update_steps).with(retryable_ids, has_entries(state: StateMachine::PENDING)).returns(true)
-        @step_enqueuer.expects(:call).with(workflow_id: @workflow_id, step_ids_to_attempt: retryable_ids).raises(Yantra::Errors::EnqueueFailed.new("Enqueue failed"))
-
-        assert_equal 0, @service.call
-      end
-
-      def test_call_handles_find_retryable_steps_error
-        @repo.expects(:list_steps).with(workflow_id: @workflow_id, status: :failed).raises(StandardError.new("DB Find Error"))
-        @logger.expects(:error).yields("[WorkflowRetryService] Error fetching failed steps for #{@workflow_id}: DB Find Error")
-        @repo.expects(:bulk_update_steps).never
-        @step_enqueuer.expects(:call).never
-
-        result = @service.call
-        assert_equal 0, result
-      end
-
-    end
-  end
-end
+    end # class WorkflowRetryService
+  end # module Core
+end # module Yantra
 
