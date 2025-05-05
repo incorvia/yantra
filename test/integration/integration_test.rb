@@ -616,7 +616,9 @@ module Yantra
         reenqueued_count = Client.retry_failed_steps(workflow_id)
 
         # Assert: State reset, job re-enqueued, events published
+        # --- CORRECTED: Assert count ---
         assert_equal 1, reenqueued_count, "Should report 1 step re-enqueued"
+        # --- END CORRECTION ---
         assert_equal 'running', repository.find_workflow(workflow_id).state
         refute repository.find_workflow(workflow_id).has_failures
         assert_nil repository.find_workflow(workflow_id).finished_at
@@ -645,6 +647,7 @@ module Yantra
         assert_equal 'cancelled', step_a_record.reload.state
         assert_equal 0, enqueued_jobs.size
       end
+
 
       def test_retry_failed_steps_does_nothing_for_succeeded_workflow
         workflow_id = Client.create_workflow(LinearSuccessWorkflow)

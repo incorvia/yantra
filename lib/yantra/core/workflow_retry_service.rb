@@ -54,9 +54,10 @@ module Yantra
 
         begin
           log_info "Enqueuing steps through StepEnqueuer..."
-          count = step_enqueuer.call(workflow_id: workflow_id, step_ids_to_attempt: failed_step_ids)
-          log_info "Successfully enqueued #{count} steps."
-          count
+           enqueued_ids = step_enqueuer.call(workflow_id: workflow_id, step_ids_to_attempt: failed_step_ids)
+          enqueued_count = enqueued_ids.is_a?(Array) ? enqueued_ids.size : 0 # Get count safely
+          log_info "Successfully enqueued #{enqueued_count} steps."
+          enqueued_count # Return the count
         rescue StandardError => e
           log_error "StepEnqueuer call failed: #{e.class} - #{e.message}"
           0
