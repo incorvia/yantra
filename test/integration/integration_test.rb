@@ -699,7 +699,7 @@ module Yantra
         refute repository.find_workflow(workflow_id).has_failures
         assert_nil repository.find_workflow(workflow_id).finished_at
         assert_equal 'enqueued', step_f_record.reload.state # Expect 'enqueued'
-        assert_equal 'cancelled', step_a_record.reload.state
+        assert_equal 'pending', step_a_record.reload.state
 
         # Assert Events after Retry Call
         assert_equal 1, @test_notifier.published_events.count, 'Should publish 1 step.enqueued event'
@@ -715,7 +715,7 @@ module Yantra
         perform_enqueued_jobs
 
         # Assert Events after Retried Job Fails
-        assert_equal 3, @test_notifier.published_events.count, 'Should publish F.started, F.failed, workflow.failed'
+        assert_equal 4, @test_notifier.published_events.count, 'Should publish F.started, F.failed, A.cancelled, workflow.failed'
 
         # Assert Final State
         assert_equal 'failed', repository.find_workflow(workflow_id).state
