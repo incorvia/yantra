@@ -221,39 +221,32 @@ module Yantra
             step2_id = SecureRandom.uuid
             step3_id = SecureRandom.uuid # Step to remain unchanged
 
-            # Create records, storing them for reference
             step1 = StepRecord.create!(id: step1_id, workflow_record: @workflow, klass: 'Step1', state: 'pending', max_attempts: 3, created_at: now - 1.minute, updated_at: now - 1.minute)
             step2 = StepRecord.create!(id: step2_id, workflow_record: @workflow, klass: 'Step2', state: 'pending', max_attempts: 3, created_at: now - 1.minute, updated_at: now - 1.minute)
             step3_unchanged = StepRecord.create!(id: step3_id, workflow_record: @workflow, klass: 'Step3', state: 'pending', max_attempts: 3, created_at: now - 1.minute, updated_at: now - 1.minute)
 
             # Prepare update data
             time_for_update = Time.current # Use a consistent time for updates
-            delay_time = time_for_update + 300.seconds
+            # --- MODIFIED: Use SCHEDULING state ---
+            target_state_symbol = Yantra::Core::StateMachine::SCHEDULING
+            target_state_string = target_state_symbol.to_s
+            # --- END MODIFICATION ---
+
             updates_array = [
-              { # Update step 1: immediate enqueue
+              { # Update step 1
                 id: step1.id,
-                # --- ADDED required fields for upsert ---
-                workflow_id: step1.workflow_id,
-                klass: step1.klass,
-                max_attempts: step1.max_attempts,
-                retries: step1.retries,
-                created_at: step1.created_at, # Keep original created_at
-                # --- END ADDED ---
-                state: Yantra::Core::StateMachine::AWAITING_EXECUTION.to_s,
+                workflow_id: step1.workflow_id, klass: step1.klass, max_attempts: step1.max_attempts,
+                retries: step1.retries, created_at: step1.created_at, # Keep original created_at
+                state: target_state_string,
                 enqueued_at: time_for_update,
                 updated_at: time_for_update
               },
-              { # Update step 2: delayed enqueue
+              { # Update step 2
                 id: step2.id,
-                # --- ADDED required fields for upsert ---
-                workflow_id: step2.workflow_id,
-                klass: step2.klass,
-                max_attempts: step2.max_attempts,
-                retries: step2.retries,
-                created_at: step2.created_at, # Keep original created_at
-                # --- END ADDED ---
-                state: Yantra::Core::StateMachine::AWAITING_EXECUTION.to_s,
-                enqueued_at: time_for_update, # Also set enqueued_at
+                workflow_id: step2.workflow_id, klass: step2.klass, max_attempts: step2.max_attempts,
+                retries: step2.retries, created_at: step2.created_at, # Keep original created_at
+                state: target_state_string,
+                enqueued_at: time_for_update,
                 updated_at: time_for_update
               }
               # Step 3 is NOT included in the update array
@@ -262,21 +255,18 @@ module Yantra
             # Act: Perform the bulk upsert
             affected_count = @adapter.bulk_upsert_steps(updates_array)
 
-            # Assert: Return value (optional, behavior might vary)
-            # assert_equal 2, affected_count # upsert_all might return different counts
-
             # Assert: Database state
             step1_updated = StepRecord.find(step1_id)
             step2_updated = StepRecord.find(step2_id)
             step3_reloaded = StepRecord.find(step3_id) # Reload step 3
 
-            # Check Step 1 (immediate)
-            assert_equal 'awaiting_execution', step1_updated.state
+            # Check Step 1
+            assert_equal target_state_string, step1_updated.state
             assert_in_delta time_for_update, step1_updated.enqueued_at, 1.second
             assert_in_delta time_for_update, step1_updated.updated_at, 1.second
 
-            # Check Step 2 (delayed)
-            assert_equal 'awaiting_execution', step2_updated.state
+            # Check Step 2
+            assert_equal target_state_string, step2_updated.state
             assert_in_delta time_for_update, step2_updated.enqueued_at, 1.second
             assert_in_delta time_for_update, step2_updated.updated_at, 1.second
 
