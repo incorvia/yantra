@@ -36,12 +36,6 @@ module Yantra
         def perform(step_id, workflow_id, step_klass_name)
           log_job_info "Received job, delegating to StepExecutor", step_id, workflow_id
 
-          # Calculate execution count based on Sidekiq's retry_count (which is 0-based)
-          # Handle potential absence of retry_count on first attempt or if middleware modifies things
-          current_sidekiq_retry_count = jid && respond_to?(:retry_count) ? retry_count.to_i : 0
-          # Yantra's execution count is typically 1-based
-          job_executions = current_sidekiq_retry_count + 1
-
           # Directly execute; let StepExecutor handle internal error logging.
           # Exceptions representing needed retries (original error from RetryHandler)
           # or critical/unexpected errors will propagate upwards.
@@ -49,7 +43,7 @@ module Yantra
             step_id: step_id,
             workflow_id: workflow_id,
             step_klass_name: step_klass_name,
-            job_executions: job_executions
+            job_executions: nil
           )
 
           # This log only executes if StepExecutor completes without raising an error
