@@ -73,14 +73,13 @@ module Yantra
         # Stub repository access for this test (using Mocha style here, adjust if needed)
         Yantra.stub(:repository, @mock_repo) do
           # Arrange
-          executions = 4   # Simulate reaching max attempts
+          @mock_step_record.retries = 4   # Simulate reaching max attempts
           formatted_error = { class: "StandardError", message: "Something went wrong", backtrace: ["line 1", "line 2"] }
 
           handler = RetryHandler.new(
             repository: @mock_repo,
             step_record: @mock_step_record,
             error: @mock_error,
-            executions: executions,
             user_step_klass: RetryStepWithoutOverride,
             orchestrator: @mock_orchestrator # Pass the mock
           )
@@ -110,13 +109,12 @@ module Yantra
       def test_handle_error_prepares_for_retry_and_raises
         Yantra.stub(:repository, @mock_repo) do
           # Arrange
-          executions = 1   # First failure, retries remaining
+          @mock_step_record.retries = 1   # Simulate reaching max attempts
 
           handler = RetryHandler.new(
             repository: @mock_repo,
             step_record: @mock_step_record,
             error: @mock_error,
-            executions: executions,
             user_step_klass: RetryStepWithoutOverride,
             orchestrator: @mock_orchestrator # Pass the mock
           )
@@ -144,7 +142,7 @@ module Yantra
             handler = RetryHandler.new(
                 repository: @mock_repo,
                 step_record: @mock_step_record,
-                error: @mock_error, executions: 1,
+                error: @mock_error,
                 user_step_klass: RetryStepWithOverride,
                 orchestrator: @mock_orchestrator
             )
@@ -162,8 +160,9 @@ module Yantra
               )
             )
             handler = RetryHandler.new(
-                repository: @mock_repo, step_record: @mock_step_record,
-                error: @mock_error, executions: 1,
+                repository: @mock_repo,
+                step_record: @mock_step_record,
+                error: @mock_error,
                 user_step_klass: RetryStepWithoutOverride,
                 orchestrator: @mock_orchestrator
             )
@@ -171,24 +170,24 @@ module Yantra
           end
       end
 
-       def test_get_max_attempts_uses_default_if_no_config
-         Yantra.stub(:repository, @mock_repo) do
-            Yantra.stubs(:configuration).returns(
-              stub(
-                default_step_options: {}, # No retries defined
-                default_max_step_attempts: nil
-              )
+      def test_get_max_attempts_uses_default_if_no_config
+        Yantra.stub(:repository, @mock_repo) do
+          Yantra.stubs(:configuration).returns(
+            stub(
+              default_step_options: {}, # No retries defined
+              default_max_step_attempts: nil
             )
-            handler = RetryHandler.new(
-                repository: @mock_repo, step_record: @mock_step_record,
-                error: @mock_error, executions: 1,
-                user_step_klass: RetryStepWithoutOverride,
-                orchestrator: @mock_orchestrator
-            )
-            assert_equal 1, handler.send(:get_max_attempts) # Default attempts = 1
-          end
-       end
-
+          )
+          handler = RetryHandler.new(
+            repository: @mock_repo,
+            step_record: @mock_step_record,
+            error: @mock_error,
+            user_step_klass: RetryStepWithoutOverride,
+            orchestrator: @mock_orchestrator
+          )
+          assert_equal 1, handler.send(:get_max_attempts) # Default attempts = 1
+        end
+      end
     end # class RetryHandlerTest
   end # module Worker
 end # module Yantra

@@ -22,21 +22,19 @@ module Yantra
         validate_interfaces!
       end
 
-      def execute(step_id:, workflow_id:, step_klass_name:, job_executions:)
-        log_info "Executing step #{step_id}, Attempt: #{job_executions}"
-
+      def execute(step_id:, workflow_id:, step_klass_name:)
         step = load_step_record!(step_id)
         return handle_already_performed_step(step) if step.performed_at.present?
         return unless orchestrator_allows_start?(step_id, step)
 
-        run_user_step!(step, step_klass_name, step_id, workflow_id, job_executions)
+        run_user_step!(step, step_klass_name, step_id, workflow_id)
       rescue Yantra::Errors::StepDefinitionError, Yantra::Errors::StepNotFound => e
         log_error "Critical Yantra error on step #{step_id}: #{e.class} - #{e.message}"
         handle_failure(step_id, e, is_definition_error: true)
         raise
       rescue => e
         log_error "Step execution error #{step_id}: #{e.class} - #{e.message}"
-        handle_failure(step_id, e, job_executions: job_executions)
+        handle_failure(step_id, e)
       end
 
       private
@@ -75,7 +73,7 @@ module Yantra
         true
       end
 
-      def run_user_step!(step, class_name, step_id, workflow_id, executions)
+      def run_user_step!(step, class_name, step_id, workflow_id)
         user_class = load_user_step_class(class_name)
         user_step = instantiate_user_step(user_class, step)
         args = prepare_arguments(step.arguments, step_id, workflow_id)
@@ -136,7 +134,7 @@ module Yantra
         {}
       end
 
-      def handle_failure(step_id, error, job_executions: nil, is_definition_error: false)
+      def handle_failure(step_id, error, is_definition_error: false)
         step = repository.find_step(step_id)
         raise error unless step
 
@@ -160,7 +158,6 @@ module Yantra
           repository: repository,
           step_record: step,
           error: error,
-          executions: job_executions || (step.retries.to_i + 1),
           user_step_klass: user_class,
           orchestrator: orchestrator
         ).handle_error!

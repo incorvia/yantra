@@ -56,8 +56,7 @@ module Yantra
           step_executor.execute(
             step_id: step_id,
             workflow_id: workflow_id,
-            step_klass_name: step_klass_name,
-            job_executions: executions
+            step_klass_name: step_klass_name
           )
 
           # This log only happens if execute completes without raising an error
