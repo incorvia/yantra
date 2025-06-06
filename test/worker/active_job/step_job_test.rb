@@ -82,7 +82,6 @@ module Yantra
             )
 
             @async_job_instance = StepJob.new
-            @async_job_instance.executions = 0
           end
 
           def teardown
@@ -104,7 +103,6 @@ module Yantra
               step_id: @step_id,
               workflow_id: @workflow_id,
               step_klass_name: @step_klass_name,
-              job_executions: 0 # executions (0) + 1
             ).returns(nil) # Or whatever execute returns on success
 
             # Act
@@ -119,7 +117,6 @@ module Yantra
             # Arrange
             failing_step_klass_name = "AsyncFailureJob"
             expected_error_class = StandardError
-            @async_job_instance.executions = 0 # First attempt
 
             # Mock the step_executor helper
             mock_executor = mock('step_executor')
@@ -131,7 +128,6 @@ module Yantra
                 step_id: @step_id,
                 workflow_id: @workflow_id,
                 step_klass_name: failing_step_klass_name,
-                job_executions: 0
               )
               .raises(expected_error_class, "Job failed intentionally")
 
@@ -151,7 +147,6 @@ module Yantra
           def test_perform_user_step_failure_path_reaches_max_attempts
             # Arrange
             failing_step_klass_name = "AsyncFailureJob"
-            @async_job_instance.executions = 3 # Final attempt (0, 1, 2, 3 -> 4th execution)
 
             # Mock the step_executor helper
             mock_executor = mock('step_executor')
@@ -163,7 +158,6 @@ module Yantra
                 step_id: @step_id,
                 workflow_id: @workflow_id,
                 step_klass_name: failing_step_klass_name,
-                job_executions: 3 # executions (3) 
               )
               .raises(StandardError, "Job failed intentionally") # Simulate error on last attempt
 
@@ -224,7 +218,6 @@ module Yantra
                 step_id: @step_id,
                 workflow_id: @workflow_id,
                 step_klass_name: @step_klass_name,
-                job_executions: 0
               )
               .raises(Yantra::Errors::StepNotFound, "Step record #{@step_id} not found after starting.")
 
@@ -251,7 +244,6 @@ module Yantra
                 step_id: @step_id,
                 workflow_id: @workflow_id,
                 step_klass_name: invalid_klass_name,
-                job_executions: 0
               )
               .raises(Yantra::Errors::StepDefinitionError, "Class #{invalid_klass_name} could not be loaded")
 

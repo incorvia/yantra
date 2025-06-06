@@ -43,7 +43,6 @@ module Yantra
             step_id: step_id,
             workflow_id: workflow_id,
             step_klass_name: step_klass_name,
-            job_executions: nil
           )
 
           # This log only executes if StepExecutor completes without raising an error

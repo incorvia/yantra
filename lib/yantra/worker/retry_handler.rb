@@ -8,13 +8,12 @@ require_relative '../errors'
 module Yantra
   module Worker
     class RetryHandler
-      attr_reader :repository, :step_record, :error, :executions, :user_step_klass, :orchestrator
+      attr_reader :repository, :step_record, :error, :user_step_klass, :orchestrator
 
-      def initialize(repository:, step_record:, error:, executions:, user_step_klass:, orchestrator:)
+      def initialize(repository:, step_record:, error:, user_step_klass:, orchestrator:)
         @repository = repository
         @step_record = step_record
         @error = error # Should be the original exception object
-        @executions = executions
         @user_step_klass = user_step_klass
         @orchestrator = orchestrator # Store injected orchestrator
 
@@ -30,8 +29,9 @@ module Yantra
       # @return [:failed, void] Returns :failed or raises error.
       def handle_error!
         max_attempts = get_max_attempts
+        current_executions = @step_record.retries.to_i + 1
 
-        if executions >= max_attempts
+        if current_executions >= max_attempts
           fail_permanently! # Call the updated method below
           return :failed # Signal permanent failure
         else
