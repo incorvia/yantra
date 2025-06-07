@@ -30,6 +30,8 @@ module Yantra
         migration_template "add_delay_to_yantra_steps.rb",        "db/migrate/add_delay_to_yantra_steps.rb"
         migration_template "add_performed_at_to_yantra_steps.rb", "db/migrate/add_performed_at_to_yantra_steps.rb"
         migration_template "update_yantra_steps_for_atomic_transitions.rb", "db/migrate/update_yantra_steps_for_atomic_transitions.rb"
+        migration_template "update_yantra_steps_for_atomic_transitions.rb", "db/migrate/update_yantra_steps_for_atomic_transitions.rb"
+        migration_template "add_total_executions_to_yantra_steps.rb", "db/migrate/add_total_executions_to_yantra_steps.rb"
       end
     end
   end

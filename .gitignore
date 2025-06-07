@@ -14,14 +14,15 @@ test/dummy/.bundle/
 test/dummy/Gemfile.lock
 
 # Ignore generated binstubs in the dummy app
-test/dummy/bin/
+test/dummy/bin/*
+!test/dummy/bin/rails
 
 # Ignore migrations copied into the dummy app (they come from the generator)
-test/dummy/db/migrate/
+# test/dummy/db/migrate/
 
 # Ignore the generated schema file *within* the dummy app
 # The schema file copied to test/support/db/ should be committed.
-test/dummy/db/schema.rb
+# test/dummy/db/schema.rb
 
 # Ignore SQLite database files generated in the dummy app
 test/dummy/db/*.sqlite3

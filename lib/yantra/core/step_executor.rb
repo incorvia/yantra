@@ -27,6 +27,8 @@ module Yantra
         return handle_already_performed_step(step) if step.performed_at.present?
         return unless orchestrator_allows_start?(step_id, step)
 
+        repository.increment_step_executions(step_id)
+
         run_user_step!(step, step_klass_name, step_id, workflow_id)
       rescue Yantra::Errors::StepDefinitionError, Yantra::Errors::StepNotFound => e
         log_error "Critical Yantra error on step #{step_id}: #{e.class} - #{e.message}"

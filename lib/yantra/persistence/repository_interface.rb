@@ -59,6 +59,7 @@ module Yantra
       def bulk_update_steps(step_ids, attributes_hash); raise NotImplementedError; end # Updated param name
       def bulk_upsert_steps(updates_array); raise NotImplementedError; end
       def increment_step_retries(step_id); raise NotImplementedError; end
+      def increment_step_executions(step_id); raise NotImplementedError; end
       def update_step_output(step_id, output); raise NotImplementedError; end # Renamed from record_step_output
       def update_step_error(step_id, error_hash); raise NotImplementedError; end # Renamed from record_step_error, updated param name
     
