@@ -184,6 +184,15 @@ module Yantra
           log_error { "[AR Adapter] Failed increment_step_retries for #{step_id}: #{e.message}" }
           false
         end
+        #
+        # @see Yantra::Persistence::RepositoryInterface#increment_step_retries
+        def increment_step_executions(step_id)
+          updated_count = StepRecord.update_counters(step_id, total_executions: 1)
+          updated_count > 0
+        rescue ::ActiveRecord::ActiveRecordError => e
+          log_error { "[AR Adapter] Failed increment_step_executions for #{step_id}: #{e.message}" }
+          false
+        end
 
         # @see Yantra::Persistence::RepositoryInterface#update_step_output
         def update_step_output(step_id, output)

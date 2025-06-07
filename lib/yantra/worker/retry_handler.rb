@@ -29,9 +29,9 @@ module Yantra
       # @return [:failed, void] Returns :failed or raises error.
       def handle_error!
         max_attempts = get_max_attempts
-        current_executions = @step_record.retries.to_i + 1
+        current_retries = @step_record.retries.to_i + 1
 
-        if current_executions >= max_attempts
+        if current_retries >= max_attempts
           fail_permanently! # Call the updated method below
           return :failed # Signal permanent failure
         else
@@ -44,7 +44,6 @@ module Yantra
 
       # Calculates the maximum attempts allowed for the step.
       def get_max_attempts
-        # ... (logic remains the same) ...
         step_defined_attempts = user_step_klass.try(:yantra_max_attempts)
         return step_defined_attempts if step_defined_attempts.is_a?(Integer) && step_defined_attempts >= 0
         global_retries = Yantra.configuration&.default_step_options&.dig(:retries)
@@ -77,17 +76,12 @@ module Yantra
          else
            warn log_msg # Fallback to standard warning output
          end
-         # Note: Depending on desired behavior, you might want to re-raise 'e' here
-         # or attempt direct repository updates as a fallback (though less ideal).
-         # Currently, it logs the error and the step might remain in 'running'.
          raise e
       end
 
 
       # Increments retry count and records the error for a retry attempt.
       def prepare_for_retry!
-        # ... (logic remains the same) ...
-        # Note: This still interacts directly with repository for retry prep.
         repository.increment_step_retries(step_record.id)
         repository.update_step_error(step_record.id, @error) # Record error for each retry attempt
       end
