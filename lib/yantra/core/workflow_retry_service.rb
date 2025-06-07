@@ -84,6 +84,7 @@ module Yantra
           state:       StateMachine::PENDING.to_s,
           error:       nil,
           output:      nil,
+          retries:     0,
           started_at:  nil,
           finished_at: nil,
           enqueued_at: nil,
