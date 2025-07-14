@@ -25,9 +25,9 @@ The `yantra_workflows` table includes two new columns:
 parent_id = Yantra.create_workflow(ProcessBatchWorkflow, batch_id: 123)
 
 # Create a child workflow
-child_id = Yantra.create_child_workflow(
+child_id = Yantra.create_workflow(
   ProcessIndividualItemWorkflow,
-  parent_id,
+  parent_workflow_id: parent_id,
   idempotency_key: "item-456-ABC123",
   item_id: 456,
   sku: "ABC123"
@@ -41,9 +41,9 @@ child_id = Yantra.create_child_workflow(
 idempotency_key = "meal-short-#{order_id}-#{sku}"
 
 # Create child workflow with idempotency
-child_id = Yantra.create_child_workflow(
+child_id = Yantra.create_workflow(
   ProcessMealShortWorkflow,
-  parent_workflow_id,
+  parent_workflow_id: parent_workflow_id,
   idempotency_key: idempotency_key,
   order_id: order_id,
   sku: sku
@@ -80,9 +80,9 @@ csv_rows.each do |row|
   key = "meal-short-#{row[:order_id]}-#{row[:sku]}"
   
   unless existing_keys_set.include?(key)
-    Yantra.create_child_workflow(
+    Yantra.create_workflow(
       ProcessMealShortWorkflow,
-      parent_workflow_id,
+      parent_workflow_id: parent_workflow_id,
       idempotency_key: key,
       **row
     )
