@@ -20,8 +20,6 @@ module Yantra
 
       # The main method executed by the generator.
       def create_migration_files
-
-
         # Use migration_template to copy each migration file.
         # Rails handles timestamping and conflict checking (by class name).
         migration_template "create_yantra_workflows.rb",          "db/migrate/create_yantra_workflows.rb"
@@ -30,8 +28,8 @@ module Yantra
         migration_template "add_delay_to_yantra_steps.rb",        "db/migrate/add_delay_to_yantra_steps.rb"
         migration_template "add_performed_at_to_yantra_steps.rb", "db/migrate/add_performed_at_to_yantra_steps.rb"
         migration_template "update_yantra_steps_for_atomic_transitions.rb", "db/migrate/update_yantra_steps_for_atomic_transitions.rb"
-        migration_template "update_yantra_steps_for_atomic_transitions.rb", "db/migrate/update_yantra_steps_for_atomic_transitions.rb"
         migration_template "add_total_executions_to_yantra_steps.rb", "db/migrate/add_total_executions_to_yantra_steps.rb"
+        migration_template "add_parent_child_and_idempotency_to_yantra_workflows.rb", "db/migrate/add_parent_child_and_idempotency_to_yantra_workflows.rb"
       end
     end
   end

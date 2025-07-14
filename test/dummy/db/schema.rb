@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.2].define(version: 2025_06_07_071946) do
+ActiveRecord::Schema[7.2].define(version: 2025_07_14_061709) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "plpgsql"
 
@@ -57,9 +57,14 @@ ActiveRecord::Schema[7.2].define(version: 2025_06_07_071946) do
     t.datetime "updated_at", precision: nil, null: false
     t.datetime "started_at", precision: nil
     t.datetime "finished_at", precision: nil
+    t.string "parent_workflow_id", limit: 36
+    t.string "idempotency_key"
     t.index ["finished_at"], name: "index_yantra_workflows_on_finished_at"
     t.index ["has_failures"], name: "index_yantra_workflows_on_has_failures"
+    t.index ["idempotency_key"], name: "index_yantra_workflows_on_idempotency_key", unique: true
     t.index ["klass", "state"], name: "index_yantra_workflows_on_klass_and_state"
+    t.index ["parent_workflow_id", "idempotency_key"], name: "index_yantra_workflows_on_parent_and_idempotency_key"
+    t.index ["parent_workflow_id"], name: "index_yantra_workflows_on_parent_workflow_id"
     t.index ["started_at"], name: "index_yantra_workflows_on_started_at"
     t.index ["state"], name: "index_yantra_workflows_on_state"
   end

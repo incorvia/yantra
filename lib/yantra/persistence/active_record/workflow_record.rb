@@ -23,12 +23,28 @@ module Yantra
                  inverse_of: :workflow_record, # Corresponding belongs_to in StepRecord
                  dependent: :destroy # Deleting a workflow cascades to delete its associated steps
 
+        # Parent-child workflow relationships
+        belongs_to :parent_workflow,
+                   class_name: 'Yantra::Persistence::ActiveRecord::WorkflowRecord',
+                   foreign_key: :parent_workflow_id,
+                   optional: true
+
+        has_many :child_workflows,
+                 class_name: 'Yantra::Persistence::ActiveRecord::WorkflowRecord',
+                 foreign_key: :parent_workflow_id,
+                 dependent: :nullify # Don't delete children when parent is deleted
+
         # Scopes for querying workflows based on their state.
         scope :with_state, ->(state) { where(state: state.to_s) }
         scope :pending, -> { with_state('pending') }
         scope :running, -> { with_state('running') }
         scope :succeeded, -> { with_state('succeeded') }
         scope :failed, -> { with_state('failed') }
+        
+        # Scopes for parent-child relationships
+        scope :with_parent, ->(parent_id) { where(parent_workflow_id: parent_id) }
+        scope :without_parent, -> { where(parent_workflow_id: nil) }
+        scope :with_idempotency_key, ->(key) { where(idempotency_key: key) }
       end
     end
   end
