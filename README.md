@@ -232,6 +232,38 @@ workflow_id = Yantra::Client.create_workflow(OrderProcessingWorkflow, order_id: 
 Yantra::Client.start_workflow(workflow_id)
 ```
 
+### Child Workflows
+
+Yantra supports parent-child workflow relationships with idempotency, enabling hierarchical workflow structures for batch processing scenarios.
+
+```ruby
+# Create a parent workflow
+parent_id = Yantra::Client.create_workflow(ProcessBatchWorkflow, batch_id: 123)
+
+# Create a child workflow with idempotency
+child_id = Yantra::Client.create_workflow(
+  ProcessIndividualItemWorkflow,
+  parent_workflow_id: parent_id,
+  idempotency_key: "item-456-ABC123",
+  item_id: 456,
+  sku: "ABC123"
+)
+
+# Find all child workflows for a parent
+child_workflows = Yantra::Client.find_child_workflows(parent_id)
+
+# Check for existing idempotency keys to avoid duplicates
+existing_keys = Yantra::Client.find_existing_idempotency_keys(parent_id, ["key1", "key2"])
+```
+
+**Key Benefits:**
+- **True Replayability:** Parent workflows can be retried safely without creating duplicate children
+- **Enhanced Observability:** Track relationships between parent and child workflows
+- **Atomic Granularity:** Each child workflow can have its own complex, multi-step process
+- **Efficient Processing:** Check for existing workflows in a single database query
+
+For more details, see the [Child Workflows documentation](docs/child_workflows.md).
+
 ### Data Pipelining
 
 A step can access the output of its direct parent(s) using the `parent_outputs` helper method within its `perform` method.
