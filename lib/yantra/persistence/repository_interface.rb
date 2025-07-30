@@ -22,9 +22,14 @@ module Yantra
 
       # --- Write ---
       def create_workflow(workflow_instance); raise NotImplementedError; end
+      def create_child_workflow(workflow_instance, parent_workflow_id, idempotency_key: nil); raise NotImplementedError; end
       def update_workflow_attributes(workflow_id, attributes_hash, expected_old_state: nil); raise NotImplementedError; end
       def delete_workflow(workflow_id); raise NotImplementedError; end
       def delete_expired_workflows(cutoff_timestamp); raise NotImplementedError; end
+      
+      # --- Parent-Child Workflow Methods ---
+      def find_child_workflows(parent_workflow_id); raise NotImplementedError; end
+      def find_existing_idempotency_keys(parent_workflow_id, potential_keys); raise NotImplementedError; end
 
       # === Step Methods ===
 

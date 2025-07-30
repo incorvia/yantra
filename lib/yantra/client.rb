@@ -18,12 +18,31 @@ module Yantra
         raise ArgumentError, "#{workflow_klass} must be a subclass of Yantra::Workflow"
       end
 
+      # Extract parent_workflow_id and idempotency_key from kwargs if present
+      parent_workflow_id_key_present = kwargs.key?(:parent_workflow_id)
+      parent_workflow_id = kwargs.delete(:parent_workflow_id)
+      idempotency_key = kwargs.delete(:idempotency_key)
+
+      # Validate parent_workflow_id if the key was provided
+      if parent_workflow_id_key_present
+        unless parent_workflow_id.is_a?(String) && !parent_workflow_id.empty?
+          raise ArgumentError, "parent_workflow_id must be a non-empty string"
+        end
+      end
+
       begin
         wf_instance = workflow_klass.new(*args, **kwargs)
         repo = Yantra.repository
 
-        unless repo.create_workflow(wf_instance)
-          raise Yantra::Errors::PersistenceError, "Failed to persist workflow record for ID: #{wf_instance.id}"
+        # Choose the appropriate creation method based on whether this is a child workflow
+        if parent_workflow_id
+          unless repo.create_child_workflow(wf_instance, parent_workflow_id, idempotency_key: idempotency_key)
+            raise Yantra::Errors::PersistenceError, "Failed to persist child workflow record for ID: #{wf_instance.id}"
+          end
+        else
+          unless repo.create_workflow(wf_instance)
+            raise Yantra::Errors::PersistenceError, "Failed to persist workflow record for ID: #{wf_instance.id}"
+          end
         end
 
         if wf_instance.steps.any?
@@ -49,6 +68,9 @@ module Yantra
       rescue Yantra::Errors::PersistenceError => e
         log_error("Persistence error during workflow creation: #{e.message}")
         raise e
+      rescue ArgumentError => e
+        # Re-raise ArgumentError directly without wrapping it
+        raise e
       rescue StandardError => e
         backtrace_str = e.backtrace&.take(5)&.join("\n") || "No backtrace"
         log_error("Unexpected error during workflow creation: #{e.class} - #{e.message}\n#{backtrace_str}")
@@ -70,6 +92,20 @@ module Yantra
     rescue Yantra::Errors::PersistenceError => e
       log_error("Persistence error finding workflow #{workflow_id}: #{e.message}")
       nil
+    end
+
+    def self.find_child_workflows(parent_workflow_id)
+      Yantra.repository.find_child_workflows(parent_workflow_id)
+    rescue Yantra::Errors::PersistenceError => e
+      log_error("Persistence error finding child workflows for parent #{parent_workflow_id}: #{e.message}")
+      []
+    end
+
+    def self.find_existing_idempotency_keys(parent_workflow_id, potential_keys)
+      Yantra.repository.find_existing_idempotency_keys(parent_workflow_id, potential_keys)
+    rescue Yantra::Errors::PersistenceError => e
+      log_error("Persistence error finding existing idempotency keys for parent #{parent_workflow_id}: #{e.message}")
+      []
     end
 
     def self.find_step(step_id)

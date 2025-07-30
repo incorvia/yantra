@@ -48,6 +48,27 @@ module Yantra
           raise Yantra::Errors::PersistenceError, "Database error persisting workflow: #{e.message}"
         end
 
+        # @see Yantra::Persistence::RepositoryInterface#create_child_workflow
+        def create_child_workflow(workflow_instance, parent_workflow_id, idempotency_key: nil)
+          WorkflowRecord.create!(
+            id: workflow_instance.id,
+            klass: workflow_instance.klass.to_s,
+            arguments: workflow_instance.arguments,
+            state: Yantra::Core::StateMachine::PENDING.to_s,
+            globals: workflow_instance.globals,
+            has_failures: false,
+            parent_workflow_id: parent_workflow_id,
+            idempotency_key: idempotency_key
+          )
+          true
+        rescue ::ActiveRecord::RecordInvalid, ::ActiveRecord::RecordNotUnique => e
+          log_error { "Failed to persist child workflow #{workflow_instance.id}: #{e.message}" }
+          raise Yantra::Errors::PersistenceError, "Failed to persist child workflow: #{e.message}"
+        rescue ::ActiveRecord::ActiveRecordError => e
+          log_error { "Database error persisting child workflow #{workflow_instance.id}: #{e.message}" }
+          raise Yantra::Errors::PersistenceError, "Database error persisting child workflow: #{e.message}"
+        end
+
         # @see Yantra::Persistence::RepositoryInterface#update_workflow_attributes
         def update_workflow_attributes(workflow_id, attributes_hash, expected_old_state: nil)
           scope = WorkflowRecord.where(id: workflow_id)
@@ -469,6 +490,30 @@ module Yantra
         rescue => e
           log_error { "[AR Adapter] Failed bulk_transition_steps: #{e.message}" }
           raise Yantra::Errors::PersistenceError, "Bulk transition failed: #{e.message}"
+        end
+
+        # ========================================================
+        # Parent-Child Workflow Methods
+        # ========================================================
+
+        # @see Yantra::Persistence::RepositoryInterface#find_child_workflows
+        def find_child_workflows(parent_workflow_id)
+          WorkflowRecord.with_parent(parent_workflow_id).order(:created_at).to_a
+        rescue ::ActiveRecord::ActiveRecordError => e
+          log_error { "Error finding child workflows for parent #{parent_workflow_id}: #{e.message}" }
+          raise Yantra::Errors::PersistenceError, "Error finding child workflows: #{e.message}"
+        end
+
+        # @see Yantra::Persistence::RepositoryInterface#find_existing_idempotency_keys
+        def find_existing_idempotency_keys(parent_workflow_id, potential_keys)
+          return [] if potential_keys.nil? || potential_keys.empty?
+          
+          WorkflowRecord.with_parent(parent_workflow_id)
+                       .with_idempotency_key(potential_keys)
+                       .pluck(:idempotency_key)
+        rescue ::ActiveRecord::ActiveRecordError => e
+          log_error { "Error finding existing idempotency keys for parent #{parent_workflow_id}: #{e.message}" }
+          raise Yantra::Errors::PersistenceError, "Error finding existing idempotency keys: #{e.message}"
         end
 
         private
