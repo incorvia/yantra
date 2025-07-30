@@ -1,4 +1,367 @@
 module Yantra
   VERSION: String
-  # See the writing guide of rbs: https://github.com/ruby/rbs#guides
+
+  # Main configuration class
+  class Configuration
+    attr_accessor persistence_adapter: Symbol
+    attr_accessor persistence_options: Hash[Symbol, untyped]
+    attr_accessor worker_adapter: Symbol
+    attr_accessor worker_adapter_options: Hash[Symbol, untyped]
+    attr_accessor notification_adapter: Symbol
+    attr_accessor notification_adapter_options: Hash[Symbol, untyped]
+    attr_accessor default_step_options: Hash[Symbol, untyped]
+    attr_accessor logger: Logger
+    attr_accessor retry_handler_class: Class?
+
+    def initialize: () -> void
+    def self.reset!: () -> void
+  end
+
+  # Main client class for workflow operations
+  class Client
+    def self.create_workflow: (Class workflow_klass, *untyped args, **untyped kwargs) -> String
+    def self.start_workflow: (String workflow_id) -> bool
+    def self.find_workflow: (String workflow_id) -> untyped?
+    def self.find_step: (String step_id) -> untyped?
+    def self.list_steps: (workflow_id: String, status: Symbol?) -> Array[untyped]
+    def self.cancel_workflow: (String workflow_id) -> bool
+    def self.retry_failed_steps: (String workflow_id) -> bool
+    def self.logger: () -> Logger
+    def self.log_info: (String msg) -> void
+    def self.log_warn: (String msg) -> void
+    def self.log_error: (String msg) -> void
+    def self.log_debug: (String msg) -> void
+  end
+
+  # Base workflow class
+  class Workflow
+    attr_reader id: String
+    attr_reader klass: Class
+    attr_reader arguments: Array[untyped]
+    attr_reader kwargs: Hash[Symbol, untyped]
+    attr_reader globals: Hash[Symbol, untyped]
+    attr_reader steps: Array[Yantra::Step]
+    attr_reader dependencies: Hash[String, Array[String]]
+    attr_reader state: Symbol
+
+    def initialize: (*untyped args, **untyped kwargs) -> void
+    def perform: (*untyped args, **untyped kwargs) -> void
+    def run: (Class step_klass, ?params: Hash[Symbol, untyped], ?after: Array[Symbol], ?name: String?, ?delay: untyped) -> Symbol
+    def find_step_by_ref: (String ref_name) -> Yantra::Step?
+    def calculate_delay_seconds: (untyped delay_input) -> Integer?
+    def to_hash: () -> Hash[Symbol, untyped]
+  end
+
+  # Base step class
+  class Step
+    attr_reader id: String
+    attr_reader workflow_id: String
+    attr_reader arguments: Hash[Symbol, untyped]
+    attr_reader queue_name: String
+    attr_reader parent_ids: Array[String]
+    attr_reader klass: Class
+    attr_reader dsl_name: String?
+    attr_reader delay_seconds: Integer?
+    attr_reader repository: untyped
+
+    def initialize: (?workflow_id: String, ?klass: Class, ?arguments: Hash[Symbol, untyped], ?step_id: String?, ?queue_name: String?, ?parent_ids: Array[String], ?delay_seconds: Integer?, ?dsl_name: String?, ?repository: untyped, **untyped options) -> void
+    def perform: () -> void
+    def parent_outputs: () -> Hash[String, untyped]
+    def default_queue_name: () -> String
+    def name: () -> String
+    def max_attempts: () -> Integer
+    def to_hash: () -> Hash[Symbol, untyped]
+    def logger: () -> Logger?
+    def repository: () -> untyped
+    def log_debug: (String msg) -> void
+    def log_warn: (String msg) -> void
+    def log_error: (String msg) -> void
+  end
+
+  # Core modules
+  module Core
+    module StateMachine
+      PENDING: Symbol
+      SCHEDULING: Symbol
+      ENQUEUED: Symbol
+      RUNNING: Symbol
+      POST_PROCESSING: Symbol
+      SUCCEEDED: Symbol
+      FAILED: Symbol
+      CANCELLED: Symbol
+      ALL_STATES: Set[Symbol]
+      RELEASABLE_FROM_STATES: Set[Symbol]
+      PREREQUISITE_MET_STATES: Set[Symbol]
+      CANCELLABLE_STATES: Set[Symbol]
+      STARTABLE_STATES: Set[Symbol]
+      TERMINAL_STATES: Set[Symbol]
+      NON_TERMINAL_STATES: Set[Symbol]
+      WORK_IN_PROGRESS_STATES: Set[Symbol]
+      VALID_TRANSITIONS: Hash[Symbol, Set[Symbol]]
+
+      def self.can_begin_scheduling?: (Symbol? state_symbol) -> bool
+      def self.prerequisite_met?: (Symbol? state_symbol) -> bool
+      def self.eligible_for_perform?: (Symbol? state_symbol) -> bool
+      def self.terminal?: (Symbol? state_symbol) -> bool
+      def self.triggers_downstream_processing?: (Symbol? state_symbol) -> bool
+      def self.is_cancellable_state?: (Symbol? state_symbol) -> bool
+      def self.is_enqueue_candidate_state?: (Symbol? state_symbol) -> bool
+      def self.states: () -> Array[Symbol]
+      def self.terminal_states: () -> Set[Symbol]
+      def self.valid_transition?: (untyped from_state, untyped to_state) -> bool
+      def self.validate_transition!: (untyped from_state, untyped to_state) -> bool
+    end
+
+    class Orchestrator
+      attr_reader repository: untyped
+      attr_reader worker_adapter: untyped
+      attr_reader notifier: untyped
+      attr_reader step_enqueuer: Yantra::Core::StepEnqueuer
+      attr_reader dependent_processor: Yantra::Core::DependentProcessor
+      attr_reader transition_service: Yantra::Core::StateTransitionService
+
+      def initialize: (?repository: untyped, ?worker_adapter: untyped, ?notifier: untyped) -> void
+      def start_workflow: (String workflow_id) -> bool
+      def step_starting: (String step_id) -> bool
+      def handle_post_processing: (String step_id) -> void
+      def step_failed: (String step_id, Hash[Symbol, untyped] error_info, ?expected_old_state: Symbol) -> void
+    end
+
+    class StepEnqueuer
+      def initialize: (?repository: untyped, ?worker_adapter: untyped, ?notifier: untyped, ?logger: Logger?) -> void
+      def enqueue_step: (Yantra::Step step) -> bool
+      def enqueue_steps: (Array[Yantra::Step] steps) -> Array[String]
+    end
+
+    class StepExecutor
+      def initialize: (?repository: untyped, ?logger: Logger?) -> void
+      def execute_step: (String step_id) -> void
+    end
+
+    class DependentProcessor
+      def initialize: (?repository: untyped, ?step_enqueuer: Yantra::Core::StepEnqueuer, ?logger: Logger?) -> void
+      def process_dependents: (Yantra::Step step) -> void
+    end
+
+    class StateTransitionService
+      def initialize: (?repository: untyped, ?logger: Logger?) -> void
+      def transition_step: (String step_id, Hash[Symbol, untyped] attributes, ?expected_old_state: Symbol) -> bool
+    end
+
+    class WorkflowRetryService
+      def initialize: (?repository: untyped, ?logger: Logger?) -> void
+      def retry_failed_steps: (String workflow_id) -> bool
+    end
+
+    class GraphUtils
+      def self.topological_sort: (Hash[String, Array[String]] dependencies) -> Array[String]
+      def self.has_cycle?: (Hash[String, Array[String]] dependencies) -> bool
+    end
+  end
+
+  # Persistence module
+  module Persistence
+    module RepositoryInterface
+      # Workflow methods
+      def find_workflow: (String workflow_id) -> untyped
+      def list_workflows: (?status: Symbol?, ?limit: Integer, ?offset: Integer) -> Array[untyped]
+      def workflow_has_failures?: (String workflow_id) -> bool
+      def create_workflow: (Yantra::Workflow workflow_instance) -> bool
+      def update_workflow_attributes: (String workflow_id, Hash[Symbol, untyped] attributes_hash, ?expected_old_state: Symbol?) -> bool
+      def delete_workflow: (String workflow_id) -> bool
+      def delete_expired_workflows: (Time cutoff_timestamp) -> Integer
+
+      # Step methods
+      def find_step: (String step_id) -> untyped
+      def find_steps: (Array[String] step_ids, ?state: Symbol) -> Array[untyped]
+      def list_steps: (workflow_id: String, ?status: Symbol) -> Array[untyped]
+      def get_step_states: (Array[String] step_ids) -> Hash[String, Symbol]
+      def get_step_outputs: (Array[String] step_ids) -> Hash[String, untyped]
+      def has_steps_in_states?: (workflow_id: String, states: Array[Symbol]) -> bool
+      def create_step: (Yantra::Step step_instance) -> bool
+      def create_steps_bulk: (Array[Yantra::Step] step_instances_array) -> bool
+      def update_step_attributes: (String step_id, Hash[Symbol, untyped] attributes_hash, ?expected_old_state: Symbol?) -> bool
+      def bulk_update_steps: (Array[String] step_ids, Hash[Symbol, untyped] attributes_hash) -> bool
+      def bulk_upsert_steps: (Array[Hash[Symbol, untyped]] updates_array) -> Integer
+      def increment_step_retries: (String step_id) -> bool
+      def increment_step_executions: (String step_id) -> bool
+      def update_step_output: (String step_id, untyped output) -> bool
+      def update_step_error: (String step_id, Hash[Symbol, untyped] error_hash) -> bool
+      def bulk_transition_steps: (Array[String] step_ids, Hash[Symbol, untyped] attributes_hash, expected_old_state: Symbol) -> Array[String]
+
+      # Dependency methods
+      def get_dependency_ids: (String step_id) -> Array[String]
+      def get_dependency_ids_bulk: (Array[String] step_ids) -> Hash[String, Array[String]]
+      def get_dependent_ids: (String step_id) -> Array[String]
+      def get_dependent_ids_bulk: (Array[String] step_ids) -> Hash[String, Array[String]]
+      def add_step_dependency: (String step_id, String dependency_step_id) -> bool
+      def add_step_dependencies_bulk: (Array[Hash[Symbol, String]] dependency_links_array) -> bool
+    end
+
+    # ActiveRecord adapters - available when ActiveRecord is configured
+    module ActiveRecord
+      class Adapter
+        include Yantra::Persistence::RepositoryInterface
+
+        def initialize: () -> void
+      end
+
+      class WorkflowRecord < ::ActiveRecord::Base
+        attr_accessor id: String
+        attr_accessor klass: String
+        attr_accessor arguments: Array[untyped]
+        attr_accessor state: String
+        attr_accessor globals: Hash[Symbol, untyped]
+        attr_accessor has_failures: bool
+        attr_accessor created_at: Time
+        attr_accessor updated_at: Time
+        attr_accessor started_at: Time?
+        attr_accessor finished_at: Time?
+      end
+
+      class StepRecord < ::ActiveRecord::Base
+        attr_accessor id: String
+        attr_accessor workflow_id: String
+        attr_accessor klass: String
+        attr_accessor arguments: Hash[Symbol, untyped]
+        attr_accessor state: String
+        attr_accessor queue_name: String
+        attr_accessor retries: Integer
+        attr_accessor total_executions: Integer
+        attr_accessor output: untyped
+        attr_accessor error: Hash[Symbol, untyped]?
+        attr_accessor performed_at: Time?
+        attr_accessor delay_seconds: Integer?
+        attr_accessor dsl_name: String?
+        attr_accessor created_at: Time
+        attr_accessor updated_at: Time
+      end
+
+      class StepDependencyRecord < ::ActiveRecord::Base
+        attr_accessor step_id: String
+        attr_accessor depends_on_step_id: String
+        attr_accessor created_at: Time
+        attr_accessor updated_at: Time
+      end
+    end
+  end
+
+  # Worker module
+  module Worker
+    module EnqueuingInterface
+      def enqueue: (String step_id, String workflow_id, String step_klass_name, String queue_name) -> void
+      def enqueue_in: (Integer delay_seconds, String step_id, String workflow_id, String step_klass_name, String queue_name) -> bool
+    end
+
+    class RetryHandler
+      def initialize: (?max_attempts: Integer, ?logger: Logger?) -> void
+      def should_retry?: (Integer current_attempt, Exception error) -> bool
+      def calculate_delay: (Integer current_attempt) -> Integer
+    end
+
+    # ActiveJob adapters - available when ActiveJob is configured
+    module ActiveJob
+      class Adapter
+        include Yantra::Worker::EnqueuingInterface
+
+        def initialize: () -> void
+      end
+
+      class StepJob < ::ActiveJob::Base
+        def perform: (String step_id, String workflow_id, String step_klass_name) -> void
+      end
+    end
+
+    # Sidekiq adapters - available when Sidekiq is configured
+    module Sidekiq
+      class Adapter
+        include Yantra::Worker::EnqueuingInterface
+
+        def initialize: () -> void
+      end
+
+      class StepJob
+        include ::Sidekiq::Worker
+
+        def perform: (String step_id, String workflow_id, String step_klass_name) -> void
+      end
+    end
+  end
+
+  # Events module
+  module Events
+    module NotifierInterface
+      def publish: (untyped event_name, Hash[Symbol, untyped] payload) -> void
+    end
+
+    # Null adapter - always available
+    module Null
+      class Adapter
+        include Yantra::Events::NotifierInterface
+
+        def initialize: () -> void
+        def publish: (untyped event_name, Hash[Symbol, untyped] payload) -> void
+      end
+    end
+
+    # Logger adapter - always available
+    module Logger
+      class Adapter
+        include Yantra::Events::NotifierInterface
+
+        def initialize: (?logger: Logger?) -> void
+        def publish: (untyped event_name, Hash[Symbol, untyped] payload) -> void
+      end
+    end
+
+    # ActiveSupportNotifications adapter - available when ActiveSupport is configured
+    module ActiveSupportNotifications
+      class Adapter
+        include Yantra::Events::NotifierInterface
+
+        def initialize: () -> void
+        def publish: (untyped event_name, Hash[Symbol, untyped] payload) -> void
+      end
+    end
+  end
+
+  # Error classes
+  class Error < StandardError
+    attr_reader original_exception: Exception?
+    attr_accessor handled: bool
+
+    def initialize: (?String message, ?original_exception: Exception?) -> void
+  end
+
+  module Errors
+    class WorkflowNotFound < Yantra::Error; end
+    class StepNotFound < Yantra::Error; end
+    class DependencyNotFound < Yantra::Error; end
+    class ConfigurationError < Yantra::Error; end
+    class InvalidState < Yantra::Error; end
+    class InvalidStateTransition < Yantra::Error; end
+    class PersistenceError < Yantra::Error; end
+    class WorkerError < Yantra::Error; end
+    class StepDefinitionError < Yantra::Error; end
+    class InvalidWorkflowState < Yantra::Error; end
+    class WorkflowError < Yantra::Error; end
+    class UpdateConflictError < Yantra::PersistenceError; end
+    class WorkflowDefinitionError < StandardError; end
+    class OrchestrationError < StandardError; end
+
+    class EnqueueFailed < StandardError
+      attr_reader failed_ids: Array[String]
+
+      def initialize: (?String message, ?failed_ids: Array[String]) -> void
+    end
+  end
+
+  # Class methods for the main Yantra module
+  def self.configuration: () -> Yantra::Configuration
+  def self.configure: () { (Yantra::Configuration) -> void } -> void
+  def self.logger: () -> Logger
+  def self.logger=: (Logger logger) -> Logger
+  def self.repository: () -> untyped
+  def self.worker_adapter: () -> untyped
+  def self.notifier: () -> untyped
 end

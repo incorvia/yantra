@@ -3,8 +3,24 @@
 require_relative "yantra/version"
 require_relative "yantra/errors"
 require_relative "yantra/configuration"
+require_relative "yantra/client"
+require_relative "yantra/workflow"
+require_relative "yantra/step"
+
+require_relative "yantra/core/state_machine"
+require_relative "yantra/core/orchestrator"
+require_relative "yantra/core/step_enqueuer"
+require_relative "yantra/core/step_executor"
+require_relative "yantra/core/dependent_processor"
+require_relative "yantra/core/state_transition_service"
+require_relative "yantra/core/workflow_retry_service"
+require_relative "yantra/core/graph_utils"
+
 require_relative "yantra/persistence/repository_interface"
+
 require_relative "yantra/worker/enqueuing_interface"
+require_relative "yantra/worker/retry_handler"
+
 require_relative "yantra/events/notifier_interface"
 
 module Yantra
@@ -16,7 +32,8 @@ module Yantra
         active_record: 'yantra/persistence/active_record/adapter'
       }.freeze,
       worker: {
-        active_job: 'yantra/worker/active_job/adapter'
+        active_job: 'yantra/worker/active_job/adapter',
+        sidekiq: 'yantra/worker/sidekiq/adapter'
       }.freeze,
       notifier: {
         null: 'yantra/events/null/adapter',
