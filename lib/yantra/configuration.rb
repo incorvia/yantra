@@ -15,6 +15,9 @@ module Yantra
     # Notifications
     attr_accessor :notification_adapter, :notification_adapter_options
 
+    # Reporting
+    attr_accessor :reporting_adapter
+
     # General
     attr_accessor :default_step_options, :logger
 
@@ -30,6 +33,8 @@ module Yantra
 
       @notification_adapter          = :null
       @notification_adapter_options  = {}
+
+      @reporting_adapter             = nil
 
       @default_step_options          = { retries: 3 }
 
@@ -50,4 +55,3 @@ module Yantra
     end
   end
 end
-

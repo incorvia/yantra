@@ -9,7 +9,7 @@ module Yantra
   # Base class for defining Yantra workflows.
   # Subclasses must implement `#perform` to define steps via the `run` DSL method.
   class Workflow
-    attr_reader :id, :klass, :arguments, :kwargs, :globals, :steps, :dependencies, :state
+    attr_reader :id, :klass, :arguments, :kwargs, :globals, :steps, :dependencies, :state, :reporting_data
 
     def initialize(*args, **kwargs)
       internal_state = kwargs.delete(:internal_state) || {}
@@ -19,6 +19,7 @@ module Yantra
       @arguments     = internal_state.fetch(:arguments, args)
       @kwargs        = internal_state.fetch(:kwargs, kwargs)
       @state         = internal_state.fetch(:state, :pending).to_sym
+      @reporting_data = internal_state.fetch(:reporting_data, {})
 
       @steps             = []
       @step_lookup       = {}
@@ -32,6 +33,11 @@ module Yantra
 
     def perform(*, **)
       raise NotImplementedError, "#{self.class.name} must implement the `perform` method."
+    end
+
+    def report(data)
+      return unless data.is_a?(Hash)
+      @reporting_data.merge!(data)
     end
 
     # Defines a step in the workflow.
@@ -116,9 +122,9 @@ module Yantra
         arguments: @arguments,
         kwargs: @kwargs,
         globals: @globals,
-        state: @state
+        state: @state,
+        reporting_data: @reporting_data
       }
     end
   end
 end
-

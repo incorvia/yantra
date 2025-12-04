@@ -32,3 +32,4 @@ test/dummy/log/
 
 # Ignore temporary files from the dummy app
 test/dummy/tmp/
+.DS_Store
