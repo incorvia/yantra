@@ -36,8 +36,18 @@ module Yantra
 
         # Choose the appropriate creation method based on whether this is a child workflow
         if parent_workflow_id
-          unless repo.create_child_workflow(wf_instance, parent_workflow_id, idempotency_key: idempotency_key)
+          # create_child_workflow returns the workflow ID (either new or existing)
+          returned_workflow_id = repo.create_child_workflow(wf_instance, parent_workflow_id, idempotency_key: idempotency_key)
+          
+          unless returned_workflow_id
             raise Yantra::Errors::PersistenceError, "Failed to persist child workflow record for ID: #{wf_instance.id}"
+          end
+
+          # If returned ID doesn't match our instance ID, an existing workflow was found
+          # Skip creating steps/dependencies as they already exist
+          if returned_workflow_id != wf_instance.id
+            log_info("Returning existing workflow #{returned_workflow_id} for idempotency_key: #{idempotency_key}")
+            return returned_workflow_id
           end
         else
           unless repo.create_workflow(wf_instance)
@@ -106,6 +116,13 @@ module Yantra
     rescue Yantra::Errors::PersistenceError => e
       log_error("Persistence error finding existing idempotency keys for parent #{parent_workflow_id}: #{e.message}")
       []
+    end
+
+    def self.find_workflow_by_idempotency_key(idempotency_key)
+      Yantra.repository.find_workflow_by_idempotency_key(idempotency_key)
+    rescue Yantra::Errors::PersistenceError => e
+      log_error("Persistence error finding workflow by idempotency key #{idempotency_key}: #{e.message}")
+      nil
     end
 
     def self.find_step(step_id)

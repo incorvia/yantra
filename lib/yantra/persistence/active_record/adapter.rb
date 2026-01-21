@@ -49,7 +49,15 @@ module Yantra
         end
 
         # @see Yantra::Persistence::RepositoryInterface#create_child_workflow
+        # Returns the workflow ID (either newly created or existing if idempotency_key matches)
         def create_child_workflow(workflow_instance, parent_workflow_id, idempotency_key: nil)
+          # Check-first: if idempotency_key provided, look for existing workflow
+          if idempotency_key
+            existing = find_workflow_by_idempotency_key(idempotency_key)
+            return existing.id if existing
+          end
+
+          # Create new workflow
           WorkflowRecord.create!(
             id: workflow_instance.id,
             klass: workflow_instance.klass.to_s,
@@ -60,7 +68,7 @@ module Yantra
             parent_workflow_id: parent_workflow_id,
             idempotency_key: idempotency_key
           )
-          true
+          workflow_instance.id
         rescue ::ActiveRecord::RecordInvalid, ::ActiveRecord::RecordNotUnique => e
           log_error { "Failed to persist child workflow #{workflow_instance.id}: #{e.message}" }
           raise Yantra::Errors::PersistenceError, "Failed to persist child workflow: #{e.message}"
@@ -514,6 +522,16 @@ module Yantra
         rescue ::ActiveRecord::ActiveRecordError => e
           log_error { "Error finding existing idempotency keys for parent #{parent_workflow_id}: #{e.message}" }
           raise Yantra::Errors::PersistenceError, "Error finding existing idempotency keys: #{e.message}"
+        end
+
+        # @see Yantra::Persistence::RepositoryInterface#find_workflow_by_idempotency_key
+        def find_workflow_by_idempotency_key(idempotency_key)
+          return nil if idempotency_key.nil? || idempotency_key.empty?
+          
+          WorkflowRecord.with_idempotency_key(idempotency_key).first
+        rescue ::ActiveRecord::ActiveRecordError => e
+          log_error { "Error finding workflow by idempotency key #{idempotency_key}: #{e.message}" }
+          raise Yantra::Errors::PersistenceError, "Error finding workflow by idempotency key: #{e.message}"
         end
 
         private
