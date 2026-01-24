@@ -252,8 +252,8 @@ child_id = Yantra::Client.create_workflow(
 # Find all child workflows for a parent
 child_workflows = Yantra::Client.find_child_workflows(parent_id)
 
-# Check for existing idempotency keys to avoid duplicates
-existing_keys = Yantra::Client.find_existing_idempotency_keys(parent_id, ["key1", "key2"])
+# Check for existing idempotency keys (globally unique)
+existing_keys = Yantra::Client.find_existing_idempotency_keys(["key1", "key2"])
 ```
 
 **Key Benefits:**

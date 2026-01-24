@@ -208,9 +208,9 @@ module Yantra
           sku: "SKU2"
         )
 
-        # Act
+        # Act - queries globally (not scoped to parent)
         potential_keys = ["existing-key-1", "new-key-1", "existing-key-2", "new-key-2"]
-        existing_keys = Client.find_existing_idempotency_keys(parent_workflow_id, potential_keys)
+        existing_keys = Client.find_existing_idempotency_keys(potential_keys)
 
         # Assert
         assert_equal 2, existing_keys.count, "Should find 2 existing keys"
@@ -220,20 +220,17 @@ module Yantra
         refute_includes existing_keys, "new-key-2"
       end
 
-      def test_find_existing_idempotency_keys_returns_empty_array_for_nonexistent_parent
+      def test_find_existing_idempotency_keys_returns_empty_array_for_nonexistent_keys
         # Act
-        existing_keys = Client.find_existing_idempotency_keys("nonexistent-parent-id", ["key1", "key2"])
+        existing_keys = Client.find_existing_idempotency_keys(["nonexistent-key-1", "nonexistent-key-2"])
 
         # Assert
-        assert_equal [], existing_keys, "Should return empty array for nonexistent parent"
+        assert_equal [], existing_keys, "Should return empty array for nonexistent keys"
       end
 
       def test_find_existing_idempotency_keys_returns_empty_array_for_empty_potential_keys
-        # Arrange
-        parent_workflow_id = Client.create_workflow(ChildWorkflowTestWorkflow, user_id: 123)
-
         # Act
-        existing_keys = Client.find_existing_idempotency_keys(parent_workflow_id, [])
+        existing_keys = Client.find_existing_idempotency_keys([])
 
         # Assert
         assert_equal [], existing_keys, "Should return empty array for empty potential keys"

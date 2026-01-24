@@ -111,10 +111,10 @@ module Yantra
       []
     end
 
-    def self.find_existing_idempotency_keys(parent_workflow_id, potential_keys)
-      Yantra.repository.find_existing_idempotency_keys(parent_workflow_id, potential_keys)
+    def self.find_existing_idempotency_keys(potential_keys)
+      Yantra.repository.find_existing_idempotency_keys(potential_keys)
     rescue Yantra::Errors::PersistenceError => e
-      log_error("Persistence error finding existing idempotency keys for parent #{parent_workflow_id}: #{e.message}")
+      log_error("Persistence error finding existing idempotency keys: #{e.message}")
       []
     end
 

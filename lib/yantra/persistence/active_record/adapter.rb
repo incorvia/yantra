@@ -513,14 +513,14 @@ module Yantra
         end
 
         # @see Yantra::Persistence::RepositoryInterface#find_existing_idempotency_keys
-        def find_existing_idempotency_keys(parent_workflow_id, potential_keys)
+        # Queries globally because idempotency_key has a global unique constraint.
+        def find_existing_idempotency_keys(potential_keys)
           return [] if potential_keys.nil? || potential_keys.empty?
           
-          WorkflowRecord.with_parent(parent_workflow_id)
-                       .with_idempotency_key(potential_keys)
+          WorkflowRecord.with_idempotency_key(potential_keys)
                        .pluck(:idempotency_key)
         rescue ::ActiveRecord::ActiveRecordError => e
-          log_error { "Error finding existing idempotency keys for parent #{parent_workflow_id}: #{e.message}" }
+          log_error { "Error finding existing idempotency keys: #{e.message}" }
           raise Yantra::Errors::PersistenceError, "Error finding existing idempotency keys: #{e.message}"
         end
 

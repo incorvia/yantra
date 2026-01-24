@@ -40,7 +40,7 @@ module Yantra
         potential_keys = csv_rows.map { |row| idempotency_key_generator.call(row) }
         
         # Find existing workflows to avoid duplicates
-        existing_keys = Yantra.repository.find_existing_idempotency_keys(parent_workflow_id, potential_keys)
+        existing_keys = Yantra.repository.find_existing_idempotency_keys(potential_keys)
         existing_keys_set = Set.new(existing_keys)
         
         # Create child workflows only for new rows

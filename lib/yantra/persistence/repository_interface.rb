@@ -29,7 +29,8 @@ module Yantra
       
       # --- Parent-Child Workflow Methods ---
       def find_child_workflows(parent_workflow_id); raise NotImplementedError; end
-      def find_existing_idempotency_keys(parent_workflow_id, potential_keys); raise NotImplementedError; end
+      # Finds which of the potential_keys already exist globally (idempotency_key is globally unique).
+      def find_existing_idempotency_keys(potential_keys); raise NotImplementedError; end
       def find_workflow_by_idempotency_key(idempotency_key); raise NotImplementedError; end
 
       # === Step Methods ===

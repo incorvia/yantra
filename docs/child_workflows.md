@@ -69,8 +69,8 @@ end
 # Generate potential keys from your data
 potential_keys = csv_rows.map { |row| "meal-short-#{row[:order_id]}-#{row[:sku]}" }
 
-# Find which keys already exist
-existing_keys = Yantra.find_existing_idempotency_keys(parent_workflow_id, potential_keys)
+# Find which keys already exist (queries globally - idempotency keys are globally unique)
+existing_keys = Yantra.find_existing_idempotency_keys(potential_keys)
 
 # Use a Set for efficient lookups
 existing_keys_set = Set.new(existing_keys)
