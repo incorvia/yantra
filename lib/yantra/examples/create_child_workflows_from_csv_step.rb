@@ -24,7 +24,8 @@ module Yantra
       # @param s3_url [String] URL to the CSV file in S3
       # @param parent_workflow_id [String] ID of the parent workflow
       # @param child_workflow_class [Class] The workflow class to instantiate for each row
-      # @param idempotency_key_generator [Proc] Lambda that generates idempotency keys from row data
+      # @param idempotency_key_generator [Proc] Lambda that generates idempotency keys from row data.
+      #   Must return a non-empty string for every row. Returning nil/blank will raise an error.
       # @param csv_parser [Object] Optional custom CSV parser (must respond to #parse_csv)
       def perform(s3_url:, parent_workflow_id:, child_workflow_class:, 
                   idempotency_key_generator:, csv_parser: nil)
@@ -39,15 +40,21 @@ module Yantra
         potential_keys = csv_rows.map { |row| idempotency_key_generator.call(row) }
         
         # Find existing workflows to avoid duplicates
-        existing_keys = Yantra.repository.find_existing_idempotency_keys(parent_workflow_id, potential_keys)
+        existing_keys = Yantra.repository.find_existing_idempotency_keys(potential_keys)
         existing_keys_set = Set.new(existing_keys)
         
         # Create child workflows only for new rows
         created_count = 0
         skipped_count = 0
         
-        csv_rows.each do |row|
+        csv_rows.each_with_index do |row, index|
           idempotency_key = idempotency_key_generator.call(row)
+          
+          # Validate that the generator returned a usable key
+          if idempotency_key.nil? || (idempotency_key.respond_to?(:empty?) && idempotency_key.empty?)
+            raise ArgumentError, "idempotency_key_generator returned blank for row #{index}: #{row.inspect}. " \
+                                 "Ensure your generator always returns a non-empty string."
+          end
           
           # Skip if we already have a workflow for this key
           if existing_keys_set.include?(idempotency_key)
@@ -98,7 +105,7 @@ module Yantra
           raise ArgumentError, "idempotency_key_generator must be callable"
         end
       end
-      
+
       def download_and_parse_csv(s3_url, csv_parser)
         # Use provided parser or default to a simple implementation
         parser = csv_parser || DefaultCsvParser.new

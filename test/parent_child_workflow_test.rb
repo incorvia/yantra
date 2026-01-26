@@ -208,9 +208,9 @@ module Yantra
           sku: "SKU2"
         )
 
-        # Act
+        # Act - queries globally (not scoped to parent)
         potential_keys = ["existing-key-1", "new-key-1", "existing-key-2", "new-key-2"]
-        existing_keys = Client.find_existing_idempotency_keys(parent_workflow_id, potential_keys)
+        existing_keys = Client.find_existing_idempotency_keys(potential_keys)
 
         # Assert
         assert_equal 2, existing_keys.count, "Should find 2 existing keys"
@@ -220,32 +220,29 @@ module Yantra
         refute_includes existing_keys, "new-key-2"
       end
 
-      def test_find_existing_idempotency_keys_returns_empty_array_for_nonexistent_parent
+      def test_find_existing_idempotency_keys_returns_empty_array_for_nonexistent_keys
         # Act
-        existing_keys = Client.find_existing_idempotency_keys("nonexistent-parent-id", ["key1", "key2"])
+        existing_keys = Client.find_existing_idempotency_keys(["nonexistent-key-1", "nonexistent-key-2"])
 
         # Assert
-        assert_equal [], existing_keys, "Should return empty array for nonexistent parent"
+        assert_equal [], existing_keys, "Should return empty array for nonexistent keys"
       end
 
       def test_find_existing_idempotency_keys_returns_empty_array_for_empty_potential_keys
-        # Arrange
-        parent_workflow_id = Client.create_workflow(ChildWorkflowTestWorkflow, user_id: 123)
-
         # Act
-        existing_keys = Client.find_existing_idempotency_keys(parent_workflow_id, [])
+        existing_keys = Client.find_existing_idempotency_keys([])
 
         # Assert
         assert_equal [], existing_keys, "Should return empty array for empty potential keys"
       end
 
-      def test_idempotency_key_uniqueness_constraint
+      def test_idempotency_key_returns_existing_workflow_on_duplicate
         # Arrange
         parent_workflow_id = Client.create_workflow(ChildWorkflowTestWorkflow, user_id: 123)
         idempotency_key = "unique-key-123"
 
         # Create first child workflow with the key
-        Client.create_workflow(
+        first_child_id = Client.create_workflow(
           ChildWorkflowTestChildWorkflow,
           parent_workflow_id: parent_workflow_id,
           idempotency_key: idempotency_key,
@@ -253,17 +250,21 @@ module Yantra
           sku: "SKU1"
         )
 
-        # Act & Assert: Try to create another child workflow with the same key
-        error = assert_raises(Yantra::Errors::PersistenceError) do
-          Client.create_workflow(
-            ChildWorkflowTestChildWorkflow,
-            parent_workflow_id: parent_workflow_id,
-            idempotency_key: idempotency_key, # Same key
-            order_id: 2,
-            sku: "SKU2"
-          )
-        end
-        assert_match(/Failed to persist/, error.message)
+        # Act: Try to create another child workflow with the same key
+        second_child_id = Client.create_workflow(
+          ChildWorkflowTestChildWorkflow,
+          parent_workflow_id: parent_workflow_id,
+          idempotency_key: idempotency_key, # Same key
+          order_id: 2,
+          sku: "SKU2"
+        )
+
+        # Assert: Should return the same workflow ID (idempotent behavior)
+        assert_equal first_child_id, second_child_id, "Should return existing workflow ID on duplicate idempotency_key"
+        
+        # Assert: Only one workflow should exist with this key
+        workflows_with_key = Persistence::ActiveRecord::WorkflowRecord.where(idempotency_key: idempotency_key)
+        assert_equal 1, workflows_with_key.count, "Only one workflow should exist with this idempotency_key"
       end
 
       def test_parent_child_relationship_through_active_record_associations
@@ -292,6 +293,91 @@ module Yantra
 
         # Assert: Child can access parent's attributes
         assert_equal "ChildWorkflowTestWorkflow", child_record.parent_workflow.klass
+      end
+
+      def test_idempotency_key_skips_steps_when_returning_existing
+        # Arrange
+        parent_workflow_id = Client.create_workflow(ChildWorkflowTestWorkflow, user_id: 123)
+        idempotency_key = "skip-steps-test-key"
+
+        # Create first child workflow with the key
+        first_child_id = Client.create_workflow(
+          ChildWorkflowTestChildWorkflow,
+          parent_workflow_id: parent_workflow_id,
+          idempotency_key: idempotency_key,
+          order_id: 1,
+          sku: "SKU1"
+        )
+
+        # Count steps before second attempt
+        steps_before = Persistence::ActiveRecord::StepRecord.where(workflow_id: first_child_id).count
+        assert_equal 1, steps_before, "First workflow should have 1 step"
+
+        # Act: Try to create another child workflow with the same key
+        second_child_id = Client.create_workflow(
+          ChildWorkflowTestChildWorkflow,
+          parent_workflow_id: parent_workflow_id,
+          idempotency_key: idempotency_key, # Same key
+          order_id: 2,
+          sku: "SKU2"
+        )
+
+        # Assert: Should return existing workflow
+        assert_equal first_child_id, second_child_id
+
+        # Assert: No new steps should have been created
+        steps_after = Persistence::ActiveRecord::StepRecord.where(workflow_id: first_child_id).count
+        assert_equal steps_before, steps_after, "No new steps should be created when returning existing workflow"
+        
+        # Assert: Total step count in DB should not have increased
+        total_steps_for_workflow = Persistence::ActiveRecord::StepRecord.where(workflow_id: second_child_id).count
+        assert_equal 1, total_steps_for_workflow, "Should still have only 1 step total"
+      end
+
+      def test_find_workflow_by_idempotency_key
+        # Arrange
+        parent_workflow_id = Client.create_workflow(ChildWorkflowTestWorkflow, user_id: 123)
+        idempotency_key = "find-by-key-test"
+
+        child_workflow_id = Client.create_workflow(
+          ChildWorkflowTestChildWorkflow,
+          parent_workflow_id: parent_workflow_id,
+          idempotency_key: idempotency_key,
+          order_id: 1,
+          sku: "SKU1"
+        )
+
+        # Act
+        found_workflow = Client.find_workflow_by_idempotency_key(idempotency_key)
+
+        # Assert
+        refute_nil found_workflow, "Should find workflow by idempotency_key"
+        assert_equal child_workflow_id, found_workflow.id
+        assert_equal idempotency_key, found_workflow.idempotency_key
+      end
+
+      def test_find_workflow_by_idempotency_key_returns_nil_for_nonexistent_key
+        # Act
+        found_workflow = Client.find_workflow_by_idempotency_key("nonexistent-key")
+
+        # Assert
+        assert_nil found_workflow, "Should return nil for nonexistent idempotency_key"
+      end
+
+      def test_find_workflow_by_idempotency_key_returns_nil_for_nil_key
+        # Act
+        found_workflow = Client.find_workflow_by_idempotency_key(nil)
+
+        # Assert
+        assert_nil found_workflow, "Should return nil for nil idempotency_key"
+      end
+
+      def test_find_workflow_by_idempotency_key_returns_nil_for_empty_key
+        # Act
+        found_workflow = Client.find_workflow_by_idempotency_key("")
+
+        # Assert
+        assert_nil found_workflow, "Should return nil for empty idempotency_key"
       end
 
       def test_child_workflow_inherits_parent_globals
