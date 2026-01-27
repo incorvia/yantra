@@ -6,7 +6,7 @@ require 'active_support/core_ext/string/inflections'
 module Yantra
   # Base class for defining steps in a workflow.
   class Step
-    attr_reader :id, :workflow_id, :arguments, :queue_name, :parent_ids, :klass, :dsl_name, :delay_seconds
+    attr_reader :id, :workflow_id, :arguments, :queue_name, :parent_ids, :klass, :dsl_name, :delay_seconds, :reporting_data
     attr_reader :repository
 
     def initialize(
@@ -29,12 +29,18 @@ module Yantra
       @parent_ids    = parent_ids || []
       @dsl_name      = dsl_name
       @delay_seconds = delay_seconds&.to_i
+      @reporting_data = {}
       @repository    = repository
       @_parent_outputs_cache = nil
     end
 
     def perform
       raise NotImplementedError, "#{self.class.name} must implement the `perform` method."
+    end
+
+    def report(data)
+      return unless data.is_a?(Hash)
+      @reporting_data.merge!(data)
     end
 
     def parent_outputs
@@ -100,7 +106,8 @@ module Yantra
         arguments: arguments,
         dsl_name: dsl_name,
         queue_name: queue_name,
-        parent_ids: parent_ids
+        parent_ids: parent_ids,
+        reporting_data: reporting_data
       }
     end
 
@@ -131,4 +138,3 @@ module Yantra
     end
   end
 end
-
