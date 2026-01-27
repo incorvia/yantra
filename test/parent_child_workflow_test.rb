@@ -408,6 +408,114 @@ module Yantra
         expected_parent_globals = parent_globals.transform_keys(&:to_s)
         assert_equal expected_parent_globals, parent_record.globals
       end
+
+      # === Tests for Regular Workflow Idempotency ===
+
+      def test_regular_workflow_returns_existing_on_duplicate_idempotency_key
+        # Arrange
+        idempotency_key = "regular-workflow-unique-key"
+
+        # Create first workflow with the key
+        first_workflow_id = Client.create_workflow(
+          ChildWorkflowTestWorkflow,
+          idempotency_key: idempotency_key,
+          user_id: 123,
+          report_type: 'summary'
+        )
+
+        # Act: Try to create another workflow with the same key
+        second_workflow_id = Client.create_workflow(
+          ChildWorkflowTestWorkflow,
+          idempotency_key: idempotency_key,
+          user_id: 456,
+          report_type: 'detailed'
+        )
+
+        # Assert: Should return the same workflow ID (idempotent behavior)
+        assert_equal first_workflow_id, second_workflow_id, "Should return existing workflow ID on duplicate idempotency_key"
+        
+        # Assert: Only one workflow should exist with this key
+        workflows_with_key = Persistence::ActiveRecord::WorkflowRecord.where(idempotency_key: idempotency_key)
+        assert_equal 1, workflows_with_key.count, "Only one workflow should exist with this idempotency_key"
+      end
+
+      def test_regular_workflow_skips_steps_when_returning_existing
+        # Arrange
+        idempotency_key = "skip-steps-regular-workflow"
+
+        # Create first workflow with the key
+        first_workflow_id = Client.create_workflow(
+          ChildWorkflowTestWorkflow,
+          idempotency_key: idempotency_key,
+          user_id: 123
+        )
+
+        # Count steps before second attempt
+        steps_before = Persistence::ActiveRecord::StepRecord.where(workflow_id: first_workflow_id).count
+        assert_equal 2, steps_before, "First workflow should have 2 steps"
+
+        # Act: Try to create another workflow with the same key
+        second_workflow_id = Client.create_workflow(
+          ChildWorkflowTestWorkflow,
+          idempotency_key: idempotency_key,
+          user_id: 456
+        )
+
+        # Assert: Should return existing workflow
+        assert_equal first_workflow_id, second_workflow_id
+
+        # Assert: No new steps should have been created
+        steps_after = Persistence::ActiveRecord::StepRecord.where(workflow_id: first_workflow_id).count
+        assert_equal steps_before, steps_after, "No new steps should be created when returning existing workflow"
+      end
+
+      def test_regular_workflow_without_idempotency_key_creates_multiple
+        # Act: Create multiple workflows without idempotency keys
+        first_id = Client.create_workflow(ChildWorkflowTestWorkflow, user_id: 123)
+        second_id = Client.create_workflow(ChildWorkflowTestWorkflow, user_id: 123)
+        third_id = Client.create_workflow(ChildWorkflowTestWorkflow, user_id: 123)
+
+        # Assert: Each should get a unique ID
+        assert first_id != second_id, "Workflows without idempotency keys should get unique IDs"
+        assert second_id != third_id, "Workflows without idempotency keys should get unique IDs"
+        assert first_id != third_id, "Workflows without idempotency keys should get unique IDs"
+        
+        # Assert: All three should exist in DB
+        assert Persistence::ActiveRecord::WorkflowRecord.exists?(first_id)
+        assert Persistence::ActiveRecord::WorkflowRecord.exists?(second_id)
+        assert Persistence::ActiveRecord::WorkflowRecord.exists?(third_id)
+      end
+
+      def test_regular_and_child_workflows_share_idempotency_namespace
+        # Arrange: Create regular workflow with idempotency key
+        idempotency_key = "shared-namespace-key"
+        regular_workflow_id = Client.create_workflow(
+          ChildWorkflowTestWorkflow,
+          idempotency_key: idempotency_key,
+          user_id: 123
+        )
+
+        # Verify it was created
+        regular_workflow = Persistence::ActiveRecord::WorkflowRecord.find(regular_workflow_id)
+        assert_nil regular_workflow.parent_workflow_id, "Regular workflow should not have parent"
+
+        # Act: Try to create a child workflow with the same key
+        parent_workflow_id = Client.create_workflow(ChildWorkflowTestWorkflow, user_id: 999)
+        returned_id = Client.create_workflow(
+          ChildWorkflowTestChildWorkflow,
+          parent_workflow_id: parent_workflow_id,
+          idempotency_key: idempotency_key,
+          order_id: 456,
+          sku: "ABC123"
+        )
+
+        # Assert: Should return the existing regular workflow ID (global uniqueness)
+        assert_equal regular_workflow_id, returned_id, "Should return existing regular workflow ID"
+        
+        # Assert: Only one workflow should exist with this key
+        workflows_with_key = Persistence::ActiveRecord::WorkflowRecord.where(idempotency_key: idempotency_key)
+        assert_equal 1, workflows_with_key.count, "Only one workflow should exist with this idempotency_key"
+      end
     end
   end
 end 

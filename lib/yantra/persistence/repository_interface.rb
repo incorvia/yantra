@@ -21,7 +21,7 @@ module Yantra
       def workflow_has_failures?(workflow_id); raise NotImplementedError; end
 
       # --- Write ---
-      def create_workflow(workflow_instance); raise NotImplementedError; end
+      def create_workflow(workflow_instance, idempotency_key: nil); raise NotImplementedError; end
       def create_child_workflow(workflow_instance, parent_workflow_id, idempotency_key: nil); raise NotImplementedError; end
       def update_workflow_attributes(workflow_id, attributes_hash, expected_old_state: nil); raise NotImplementedError; end
       def delete_workflow(workflow_id); raise NotImplementedError; end
