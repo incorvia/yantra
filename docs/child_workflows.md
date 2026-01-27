@@ -50,6 +50,49 @@ child_id = Yantra.create_workflow(
 )
 ```
 
+## Idempotency Keys
+
+Idempotency keys work for both regular and child workflows, making workflow creation safe to retry.
+
+### Regular Workflows
+
+```ruby
+# First call - creates workflow
+workflow_id = Yantra::Client.create_workflow(
+  MyWorkflow,
+  idempotency_key: "unique-operation-123",
+  user_id: 456
+)
+
+# Subsequent calls with same key - returns existing workflow ID
+same_id = Yantra::Client.create_workflow(
+  MyWorkflow,
+  idempotency_key: "unique-operation-123",
+  user_id: 789  # Different arguments, but same key
+)
+
+assert_equal workflow_id, same_id  # true
+```
+
+### Child Workflows
+
+```ruby
+# Works the same way with parent_workflow_id
+child_id = Yantra::Client.create_workflow(
+  ProcessItemWorkflow,
+  parent_workflow_id: parent_id,
+  idempotency_key: "item-#{item_id}",
+  item_id: item_id
+)
+```
+
+### Important Notes
+
+- **Global uniqueness**: Idempotency keys are globally unique across all workflows (both regular and child)
+- **Safe retries**: If a workflow creation fails and is retried with the same key, the existing workflow ID is returned
+- **Arguments ignored**: When returning an existing workflow, the new arguments are ignored - the existing workflow keeps its original arguments
+- **Steps not recreated**: When an existing workflow is found, its steps and dependencies are not modified
+
 ## Finding Child Workflows
 
 ### Get All Children of a Parent

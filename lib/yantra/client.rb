@@ -38,8 +38,8 @@ module Yantra
         service = Core::WorkflowCreationService.new(repository: Yantra.repository)
         service.call(
           wf_instance,
-          parent_workflow_id: parent_workflow_id,
-          idempotency_key: idempotency_key
+          parent_workflow_id:,
+          idempotency_key:
         )
       rescue Yantra::Errors::WorkflowDefinitionError, Yantra::Errors::DependencyNotFound => e
         log_error("Workflow definition error: #{e.message}")

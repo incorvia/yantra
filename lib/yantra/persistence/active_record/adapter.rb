@@ -30,16 +30,25 @@ module Yantra
         end
 
         # @see Yantra::Persistence::RepositoryInterface#create_workflow
-        def create_workflow(workflow_instance)
+        # Returns the workflow ID (either newly created or existing if idempotency_key matches)
+        def create_workflow(workflow_instance, idempotency_key: nil)
+          # Check-first: if idempotency_key provided, look for existing workflow
+          if idempotency_key
+            existing = find_workflow_by_idempotency_key(idempotency_key)
+            return existing.id if existing
+          end
+
+          # Create new workflow
           WorkflowRecord.create!(
             id: workflow_instance.id,
             klass: workflow_instance.klass.to_s,
             arguments: workflow_instance.arguments,
             state: Yantra::Core::StateMachine::PENDING.to_s,
             globals: workflow_instance.globals,
-            has_failures: false
+            has_failures: false,
+            idempotency_key:
           )
-          true
+          workflow_instance.id
         rescue ::ActiveRecord::RecordInvalid, ::ActiveRecord::RecordNotUnique => e
           log_error { "Failed to persist workflow #{workflow_instance.id}: #{e.message}" }
           raise Yantra::Errors::PersistenceError, "Failed to persist workflow: #{e.message}"
@@ -65,8 +74,8 @@ module Yantra
             state: Yantra::Core::StateMachine::PENDING.to_s,
             globals: workflow_instance.globals,
             has_failures: false,
-            parent_workflow_id: parent_workflow_id,
-            idempotency_key: idempotency_key
+            parent_workflow_id:,
+            idempotency_key:
           )
           workflow_instance.id
         rescue ::ActiveRecord::RecordInvalid, ::ActiveRecord::RecordNotUnique => e

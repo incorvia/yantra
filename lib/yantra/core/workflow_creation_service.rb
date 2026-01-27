@@ -7,7 +7,7 @@ require 'logger'
 module Yantra
   module Core
     # Service responsible for persisting a workflow instance along with its steps and dependencies.
-    # Handles idempotency for child workflows - returns existing workflow ID if idempotency_key matches.
+    # Handles idempotency for all workflows - returns existing workflow ID if idempotency_key matches.
     class WorkflowCreationService
       attr_reader :repository, :logger
 
@@ -17,7 +17,7 @@ module Yantra
       end
 
       # Creates a workflow with its steps and dependencies.
-      # For child workflows with idempotency_key, returns existing workflow ID if one exists.
+      # When idempotency_key is provided, returns existing workflow ID if one exists.
       #
       # @param workflow_instance [Yantra::Workflow] The workflow instance to persist
       # @param parent_workflow_id [String, nil] Parent workflow ID for child workflows
@@ -26,20 +26,20 @@ module Yantra
       # @raise [Yantra::Errors::PersistenceError] If persistence fails
       def call(workflow_instance, parent_workflow_id: nil, idempotency_key: nil)
         if parent_workflow_id
-          create_child_workflow(workflow_instance, parent_workflow_id, idempotency_key)
+          create_child_workflow(workflow_instance, parent_workflow_id, idempotency_key:)
         else
-          create_workflow(workflow_instance)
+          create_workflow(workflow_instance, idempotency_key:)
         end
       end
 
       private
 
-      def create_child_workflow(workflow_instance, parent_workflow_id, idempotency_key)
+      def create_child_workflow(workflow_instance, parent_workflow_id, idempotency_key: nil)
         # create_child_workflow returns the workflow ID (either new or existing)
         returned_workflow_id = repository.create_child_workflow(
           workflow_instance,
           parent_workflow_id,
-          idempotency_key: idempotency_key
+          idempotency_key:
         )
 
         unless returned_workflow_id
@@ -58,10 +58,23 @@ module Yantra
         workflow_instance.id
       end
 
-      def create_workflow(workflow_instance)
-        unless repository.create_workflow(workflow_instance)
+      def create_workflow(workflow_instance, idempotency_key: nil)
+        # Returns workflow ID (either new or existing)
+        returned_workflow_id = repository.create_workflow(
+          workflow_instance,
+          idempotency_key:
+        )
+
+        unless returned_workflow_id
           raise Yantra::Errors::PersistenceError,
                 "Failed to persist workflow record for ID: #{workflow_instance.id}"
+        end
+
+        # If returned ID doesn't match our instance ID, an existing workflow was found
+        # Skip creating steps/dependencies as they already exist
+        if returned_workflow_id != workflow_instance.id
+          log_info("Returning existing workflow #{returned_workflow_id} for idempotency_key: #{idempotency_key}")
+          return returned_workflow_id
         end
 
         persist_steps_and_dependencies(workflow_instance)
