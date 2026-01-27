@@ -67,7 +67,7 @@ module Yantra
             Yantra.create_child_workflow(
               child_workflow_class,
               parent_workflow_id,
-              idempotency_key: idempotency_key,
+              idempotency_key:,
               **row # Pass row data as keyword arguments to the child workflow
             )
             created_count += 1
